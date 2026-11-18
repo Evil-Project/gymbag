@@ -1,0 +1,1825 @@
+package config
+
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"gymbag/internal/host"
+)
+
+func parsePositiveInt(raw, name string) (int, error) {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	if v <= 0 {
+		return 0, fmt.Errorf("%s must be greater than zero", name)
+	}
+	return v, nil
+}
+
+func parseBool(raw, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on", "enable", "enabled":
+		return true, nil
+	case "0", "false", "no", "off", "disable", "disabled":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+}
+
+func stripComment(line string) string {
+	var inQuote rune
+	escaped := false
+	runes := []rune(line)
+	for i, ch := range runes {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if inQuote != 0 {
+			if ch == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			inQuote = ch
+			continue
+		}
+		if ch == '#' && (i == 0 || unicode.IsSpace(runes[i-1])) {
+			return string(runes[:i])
+		}
+	}
+	return line
+}
+
+func shlexSplit(s string) ([]string, error) {
+	var tokens []string
+	var cur strings.Builder
+	inToken := false
+	var quote rune
+	escaped := false
+
+	for _, ch := range s {
+		if escaped {
+			cur.WriteRune(ch)
+			inToken = true
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			inToken = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(ch)
+			}
+			inToken = true
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			quote = ch
+			inToken = true
+			continue
+		}
+		if ch == '{' || ch == '}' || ch == ';' {
+			if inToken {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				inToken = false
+			}
+			tokens = append(tokens, string(ch))
+			continue
+		}
+		if unicode.IsSpace(ch) {
+			if inToken {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				inToken = false
+			}
+			continue
+		}
+		cur.WriteRune(ch)
+		inToken = true
+	}
+	if escaped || quote != 0 {
+		return nil, fmt.Errorf("invalid config syntax: unclosed quote or trailing escape")
+	}
+	if inToken {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens, nil
+}
+
+func tokenizeCaddyfile(text string) ([]string, error) {
+	var out []string
+	for _, rawLine := range strings.Split(text, "\n") {
+		cleaned := strings.TrimSpace(stripComment(rawLine))
+		if cleaned == "" {
+			continue
+		}
+		lineTokens, err := shlexSplit(cleaned)
+		if err != nil {
+			return nil, err
+		}
+		if len(lineTokens) > 0 {
+			out = append(out, lineTokens...)
+			out = append(out, "\n")
+		}
+	}
+	return out, nil
+}
+
+type parsedBlock struct {
+	header []string
+	body   []statementItem
+}
+
+type statementItem struct {
+	words []string
+	sub   *parsedBlock
+}
+
+// parseItems parses a sequence of tokens into statements and nested blocks.
+func parseItems(tokens []string) ([]statementItem, error) {
+	var items []statementItem
+	i := 0
+	n := len(tokens)
+	for i < n {
+		for i < n && (tokens[i] == "\n" || tokens[i] == ";") {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		if tokens[i] == "}" {
+			return nil, fmt.Errorf("unexpected '}' in config file")
+		}
+		var words []string
+		for i < n && tokens[i] != "\n" && tokens[i] != ";" && tokens[i] != "{" && tokens[i] != "}" {
+			words = append(words, tokens[i])
+			i++
+		}
+		if i < n && tokens[i] == "{" {
+			i++ // consume '{'
+			depth := 1
+			var subTokens []string
+			for i < n && depth > 0 {
+				tok := tokens[i]
+				if tok == "{" {
+					depth++
+				} else if tok == "}" {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+				subTokens = append(subTokens, tok)
+				i++
+			}
+			if depth != 0 {
+				return nil, fmt.Errorf("unclosed '{' in config file")
+			}
+			subItems, err := parseItems(subTokens)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, statementItem{
+				words: words,
+				sub:   &parsedBlock{header: words, body: subItems},
+			})
+			continue
+		}
+		if len(words) > 0 {
+			items = append(items, statementItem{words: words})
+		}
+	}
+	return items, nil
+}
+
+var knownDirectiveNames = map[string]struct{}{
+	"reverse_proxy":      {},
+	"upstream":           {},
+	"proxy":              {},
+	"domain":             {},
+	"domains":            {},
+	"host":               {},
+	"hosts":              {},
+	"protect":            {},
+	"protected":          {},
+	"protect_sites":      {},
+	"protect_domains":    {},
+	"waf":                {},
+	"intel":              {},
+	"rule":               {},
+	"block":              {},
+	"deny":               {},
+	"drop":               {},
+	"reject":             {},
+	"allow":              {},
+	"pass":               {},
+	"bypass":             {},
+	"whitelist":          {},
+	"challenge":          {},
+	"pow":                {},
+	"verify":             {},
+	"verify_level":       {},
+	"verification":       {},
+	"verify_mode":        {},
+	"level":              {},
+	"trigger":            {},
+	"mode":               {},
+	"ip_security":        {},
+	"ip_security_action": {},
+	"ip_reputation":      {},
+	"live_reputation":    {},
+	"ai_ip_list":         {},
+	"intel_refresh":      {},
+	"threat_feed":        {},
+	"threat_feeds":       {},
+	"ai_ip_feed":         {},
+	"ai_ip_feeds":        {},
+	"email":              {},
+	"acme_email":         {},
+	"acme_directory":     {},
+	"ssl_provider":       {},
+	"acme_provider":      {},
+	"ca":                 {},
+	"cert_issuer":        {},
+	"tls":                {},
+	"eab":                {},
+	"eab_kid":            {},
+	"eab_hmac_key":       {},
+	"account_key":        {},
+	"account_key_file":   {},
+	"ssl_key":            {},
+	"cert_key":           {},
+	"auto_hosts":         {},
+	"key_password":       {},
+	"bind":               {},
+	"bind_host":          {},
+	"http_port":          {},
+	"https_port":         {},
+	"admin":              {},
+	"difficulty":         {},
+	"rate_limit":         {},
+	"rate_window":        {},
+	"challenge_ttl":      {},
+	"clearance_ttl":      {},
+	"cookie_name":        {},
+	"cookie_secure":      {},
+	"default_rules":      {},
+	"redis":              {},
+	"redis_url":          {},
+	"secret":             {},
+	"cert_dir":           {},
+	"hsts":               {},
+	"renew_interval":     {},
+	"renew_within_days":  {},
+	"trusted_proxies":    {},
+	"ai_bots":            {},
+	"suspicious_uas":     {},
+	"suspicious_paths":   {},
+}
+
+var ruleFieldKeywords = map[string]struct{}{
+	"ip":         {},
+	"ips":        {},
+	"cidr":       {},
+	"cidrs":      {},
+	"user_agent": {},
+	"user-agent": {},
+	"ua":         {},
+	"path":       {},
+	"paths":      {},
+	"query":      {},
+	"queries":    {},
+	"method":     {},
+	"methods":    {},
+	"header":     {},
+	"cookie":     {},
+}
+
+type parseState struct {
+	tls             TLSConfig
+	intel           IntelConfig
+	bindHost        string
+	httpPort        int
+	httpsPort       int
+	httpsPortSet    bool
+	adminAddr       string
+	redisURL        string
+	secret          string
+	trustedProxies  []string
+	defaultWAF      SiteWAFConfig
+	defaultProtect  bool
+	protectedFilter map[string]struct{}
+	flatDomains     []string
+	flatUpstreams   []string
+}
+
+func applyRuleConditionField(field string, args []string, rule *CustomRule) error {
+	switch strings.ToLower(field) {
+	case "ip", "ips", "cidr", "cidrs":
+		if len(args) == 0 {
+			return fmt.Errorf("%s requires at least one IP address or CIDR", field)
+		}
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					rule.IPs = append(rule.IPs, trimmed)
+				}
+			}
+		}
+		return nil
+
+	case "user_agent", "user-agent", "ua":
+		if len(args) == 0 {
+			return fmt.Errorf("%s requires at least one pattern", field)
+		}
+		rule.UserAgents = append(rule.UserAgents, args...)
+		return nil
+
+	case "path", "paths":
+		if len(args) == 0 {
+			return fmt.Errorf("%s requires at least one path pattern", field)
+		}
+		rule.Paths = append(rule.Paths, args...)
+		return nil
+
+	case "query", "queries":
+		if len(args) == 0 {
+			return fmt.Errorf("%s requires at least one query pattern", field)
+		}
+		rule.Queries = append(rule.Queries, args...)
+		return nil
+
+	case "method", "methods":
+		if len(args) == 0 {
+			return fmt.Errorf("%s requires at least one HTTP method", field)
+		}
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					rule.Methods = append(rule.Methods, strings.ToUpper(trimmed))
+				}
+			}
+		}
+		return nil
+
+	case "header":
+		if len(args) < 1 || len(args) > 2 {
+			return fmt.Errorf("header rule requires <name> [pattern]")
+		}
+		pat := "*"
+		if len(args) == 2 {
+			pat = args[1]
+		}
+		rule.Headers = append(rule.Headers, KeyValueMatch{Name: args[0], Pattern: pat})
+		return nil
+
+	case "cookie":
+		if len(args) < 1 || len(args) > 2 {
+			return fmt.Errorf("cookie rule requires <name> [pattern]")
+		}
+		pat := "*"
+		if len(args) == 2 {
+			pat = args[1]
+		}
+		rule.Cookies = append(rule.Cookies, KeyValueMatch{Name: args[0], Pattern: pat})
+		return nil
+
+	default:
+		return fmt.Errorf("unknown rule matcher field %q (expected ip, user_agent, path, query, method, header, or cookie)", field)
+	}
+}
+
+func parseRuleBlock(block *parsedBlock) (CustomRule, error) {
+	var rule CustomRule
+	if len(block.header) > 2 {
+		return rule, fmt.Errorf("rule block header accepts at most an optional name: rule [name] { ... }")
+	}
+	if len(block.header) == 2 {
+		rule.Name = block.header[1]
+	}
+	for _, stmt := range block.body {
+		if stmt.sub != nil {
+			return rule, fmt.Errorf("unexpected nested block inside rule")
+		}
+		if len(stmt.words) == 0 {
+			continue
+		}
+		directive := strings.ToLower(stmt.words[0])
+		args := stmt.words[1:]
+		if directive == "action" {
+			if len(args) != 1 {
+				return rule, fmt.Errorf("rule action requires block, verify, or allow")
+			}
+			act, err := ParseRuleAction(args[0])
+			if err != nil {
+				return rule, err
+			}
+			rule.Action = act
+			continue
+		}
+		if directive == "name" {
+			if len(args) != 1 {
+				return rule, fmt.Errorf("rule name requires a single value")
+			}
+			rule.Name = args[0]
+			continue
+		}
+		if err := applyRuleConditionField(directive, args, &rule); err != nil {
+			return rule, err
+		}
+	}
+	if rule.Action == "" {
+		return rule, fmt.Errorf("rule block %q requires 'action <block|verify|allow>'", rule.Name)
+	}
+	if err := rule.Validate(); err != nil {
+		return rule, err
+	}
+	return rule, nil
+}
+
+func parseShorthandRule(actionWord string, args []string) (CustomRule, error) {
+	act, err := ParseRuleAction(actionWord)
+	if err != nil {
+		return CustomRule{}, err
+	}
+	if len(args) < 2 {
+		return CustomRule{}, fmt.Errorf("%s rule requires <ip|user_agent|path|query|method|header|cookie> <pattern...>", actionWord)
+	}
+	r := CustomRule{Action: act}
+	if err := applyRuleConditionField(args[0], args[1:], &r); err != nil {
+		return CustomRule{}, err
+	}
+	if err := r.Validate(); err != nil {
+		return CustomRule{}, err
+	}
+	return r, nil
+}
+
+func applyIntelDirective(name string, args []string, ic *IntelConfig) (bool, error) {
+	switch name {
+	case "ip_security":
+		if len(args) != 1 {
+			return true, fmt.Errorf("ip_security requires on/off or true/false")
+		}
+		b, err := parseBool(args[0], "ip_security")
+		if err != nil {
+			return true, err
+		}
+		ic.IPSecurity = b
+		return true, nil
+
+	case "ip_security_action", "security_action":
+		if len(args) != 1 {
+			return true, fmt.Errorf("ip_security_action requires verify or block")
+		}
+		val := strings.ToLower(strings.TrimSpace(args[0]))
+		if val != "verify" && val != "block" && val != "challenge" && val != "deny" {
+			return true, fmt.Errorf("ip_security_action must be verify or block")
+		}
+		if val == "block" || val == "deny" {
+			ic.IPSecurityAction = "block"
+		} else {
+			ic.IPSecurityAction = "verify"
+		}
+		return true, nil
+
+	case "ip_reputation", "live_reputation":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires on/off or true/false", name)
+		}
+		b, err := parseBool(args[0], name)
+		if err != nil {
+			return true, err
+		}
+		ic.LiveReputation = b
+		return true, nil
+
+	case "ai_ip_list":
+		if len(args) != 1 {
+			return true, fmt.Errorf("ai_ip_list requires on/off or true/false")
+		}
+		b, err := parseBool(args[0], "ai_ip_list")
+		if err != nil {
+			return true, err
+		}
+		ic.AIIPList = b
+		return true, nil
+
+	case "intel_refresh", "refresh_interval":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires seconds", name)
+		}
+		sec, err := parsePositiveInt(args[0], name)
+		if err != nil {
+			return true, err
+		}
+		ic.RefreshInterval = sec
+		return true, nil
+
+	case "threat_feed", "threat_feeds":
+		if len(args) == 0 {
+			return true, fmt.Errorf("%s requires at least one feed URL", name)
+		}
+		for _, u := range args {
+			if err := RequireHTTPURL(u, name); err != nil {
+				return true, err
+			}
+			ic.ThreatFeeds = append(ic.ThreatFeeds, strings.TrimSpace(u))
+		}
+		return true, nil
+
+	case "ai_ip_feed", "ai_ip_feeds":
+		if len(args) == 0 {
+			return true, fmt.Errorf("%s requires at least one feed URL", name)
+		}
+		for _, u := range args {
+			if err := RequireHTTPURL(u, name); err != nil {
+				return true, err
+			}
+			ic.AIIPFeeds = append(ic.AIIPFeeds, strings.TrimSpace(u))
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *IntelConfig, protect *bool, protectExplicit *bool) (bool, error) {
+	// Open-box bare 'block' or 'block on': enable strict protection, threat-IP blocking, and default security rules.
+	if name == "block" {
+		if len(args) == 0 {
+			*protect = true
+			if protectExplicit != nil {
+				*protectExplicit = true
+			}
+			if intel != nil {
+				intel.IPSecurity = true
+				intel.IPSecurityAction = "block"
+			}
+			defOn := true
+			waf.DefaultRules = &defOn
+			return true, nil
+		}
+		if len(args) == 1 {
+			if b, bErr := parseBool(args[0], "block"); bErr == nil {
+				if b {
+					*protect = true
+					if protectExplicit != nil {
+						*protectExplicit = true
+					}
+					if intel != nil {
+						intel.IPSecurity = true
+						intel.IPSecurityAction = "block"
+					}
+					defOn := true
+					waf.DefaultRules = &defOn
+				} else if intel != nil {
+					intel.IPSecurityAction = "verify"
+				}
+				return true, nil
+			}
+		}
+	}
+
+	// Shorthand custom rules: block/deny/drop/reject, allow/pass/bypass/whitelist, challenge/pow <field> <pattern...>
+	switch name {
+	case "block", "deny", "drop", "reject", "allow", "pass", "bypass", "whitelist", "challenge", "pow":
+		rule, err := parseShorthandRule(name, args)
+		if err != nil {
+			return true, err
+		}
+		waf.Rules = append(waf.Rules, rule)
+		return true, nil
+	}
+
+	// 'verify' can be bare 'verify' / 'verify on', 'verify <0-3>', OR 'verify <ip|user_agent|path|...> <pattern...>' (custom rule)!
+	if name == "verify" && len(args) >= 2 {
+		if _, isRuleField := ruleFieldKeywords[strings.ToLower(args[0])]; isRuleField {
+			rule, err := parseShorthandRule("verify", args)
+			if err != nil {
+				return true, err
+			}
+			waf.Rules = append(waf.Rules, rule)
+			return true, nil
+		}
+	}
+
+	switch name {
+	case "enable", "enabled":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires true or false", name)
+		}
+		b, err := parseBool(args[0], name)
+		if err != nil {
+			return true, err
+		}
+		*protect = b
+		if protectExplicit != nil {
+			*protectExplicit = true
+		}
+		return true, nil
+
+	case "verify", "verify_level", "verification", "verify_mode", "level", "trigger", "mode":
+		if name == "verify" && len(args) == 0 {
+			*protect = true
+			if protectExplicit != nil {
+				*protectExplicit = true
+			}
+			waf.VerifyLevel = VerifyLevelSuspiciousAndAI
+			defOn := true
+			waf.DefaultRules = &defOn
+			return true, nil
+		}
+		if name == "verify" && len(args) == 1 {
+			switch strings.ToLower(strings.TrimSpace(args[0])) {
+			case "on", "true", "yes", "enable", "enabled":
+				*protect = true
+				if protectExplicit != nil {
+					*protectExplicit = true
+				}
+				waf.VerifyLevel = VerifyLevelSuspiciousAndAI
+				defOn := true
+				waf.DefaultRules = &defOn
+				return true, nil
+			}
+		}
+		if len(args) == 0 {
+			return true, fmt.Errorf("%s requires a verify level from 0 to 3 (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)", name)
+		}
+		joined := strings.Join(args, " ")
+		lvl, enabled, err := ParseVerifyLevel(joined)
+		if err != nil {
+			return true, err
+		}
+		waf.VerifyLevel = lvl
+		if !enabled {
+			*protect = false
+			if protectExplicit != nil {
+				*protectExplicit = true
+			}
+		}
+		return true, nil
+
+	case "default_rules":
+		if len(args) != 1 {
+			return true, fmt.Errorf("default_rules requires on/off or true/false")
+		}
+		b, err := parseBool(args[0], "default_rules")
+		if err != nil {
+			return true, err
+		}
+		waf.DefaultRules = &b
+		return true, nil
+
+	case "difficulty":
+		if len(args) != 1 {
+			return true, fmt.Errorf("difficulty requires an integer from 1 to 5")
+		}
+		diff, err := parsePositiveInt(args[0], "difficulty")
+		if err != nil {
+			return true, err
+		}
+		if diff < 1 || diff > 5 {
+			return true, fmt.Errorf("difficulty must be from 1 to 5")
+		}
+		waf.Difficulty = diff
+		return true, nil
+
+	case "rate_limit":
+		if len(args) != 1 && len(args) != 2 {
+			return true, fmt.Errorf("rate_limit requires a limit and optional window in seconds")
+		}
+		limit, err := parsePositiveInt(args[0], "rate_limit")
+		if err != nil {
+			return true, err
+		}
+		waf.RateLimit = limit
+		if len(args) == 2 {
+			win, err := parsePositiveInt(args[1], "rate_window")
+			if err != nil {
+				return true, err
+			}
+			waf.RateWindow = win
+		}
+		return true, nil
+
+	case "rate_window":
+		if len(args) != 1 {
+			return true, fmt.Errorf("rate_window requires seconds")
+		}
+		win, err := parsePositiveInt(args[0], "rate_window")
+		if err != nil {
+			return true, err
+		}
+		waf.RateWindow = win
+		return true, nil
+
+	case "challenge_ttl":
+		if len(args) != 1 {
+			return true, fmt.Errorf("challenge_ttl requires seconds")
+		}
+		ttl, err := parsePositiveInt(args[0], "challenge_ttl")
+		if err != nil {
+			return true, err
+		}
+		waf.ChallengeTTL = ttl
+		return true, nil
+
+	case "clearance_ttl":
+		if len(args) != 1 {
+			return true, fmt.Errorf("clearance_ttl requires seconds")
+		}
+		ttl, err := parsePositiveInt(args[0], "clearance_ttl")
+		if err != nil {
+			return true, err
+		}
+		waf.ClearanceTTL = ttl
+		return true, nil
+
+	case "cookie_name":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("cookie_name requires a value")
+		}
+		waf.CookieName = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "cookie_secure":
+		if len(args) != 1 {
+			return true, fmt.Errorf("cookie_secure requires true or false")
+		}
+		b, err := parseBool(args[0], "cookie_secure")
+		if err != nil {
+			return true, err
+		}
+		waf.CookieSecure = b
+		return true, nil
+
+	case "ai_bots":
+		if len(args) == 0 {
+			return true, fmt.Errorf("ai_bots requires at least one user-agent pattern")
+		}
+		for _, a := range args {
+			if p := strings.TrimSpace(a); p != "" {
+				waf.CustomAIBots = append(waf.CustomAIBots, strings.ToLower(p))
+			}
+		}
+		return true, nil
+
+	case "suspicious_uas":
+		if len(args) == 0 {
+			return true, fmt.Errorf("suspicious_uas requires at least one user-agent pattern")
+		}
+		for _, a := range args {
+			if p := strings.TrimSpace(a); p != "" {
+				waf.CustomSuspiciousUAs = append(waf.CustomSuspiciousUAs, strings.ToLower(p))
+			}
+		}
+		return true, nil
+
+	case "suspicious_paths":
+		if len(args) == 0 {
+			return true, fmt.Errorf("suspicious_paths requires at least one path prefix")
+		}
+		for _, a := range args {
+			if p := strings.TrimSpace(a); p != "" {
+				waf.CustomSuspiciousPaths = append(waf.CustomSuspiciousPaths, strings.ToLower(p))
+			}
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func applyTLSDirective(
+	name string,
+	args []string,
+	tlsCfg *TLSConfig,
+	siteCert *string,
+	siteKey *string,
+	isGlobalScope bool,
+) (bool, error) {
+	switch name {
+	case "email", "acme_email":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires an email address", name)
+		}
+		tlsCfg.ACMEEmail = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "acme_directory":
+		if len(args) != 1 {
+			return true, fmt.Errorf("acme_directory requires a URL")
+		}
+		if err := RequireHTTPURL(args[0], "acme_directory"); err != nil {
+			return true, err
+		}
+		tlsCfg.ACMEDirectory = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "ssl_provider", "acme_provider", "ca", "cert_issuer":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires a provider name or ACME directory URL", name)
+		}
+		if err := applySSLProvider(args[0], tlsCfg); err != nil {
+			return true, err
+		}
+		return true, nil
+
+	case "tls":
+		if len(args) == 0 {
+			return true, fmt.Errorf("tls requires arguments")
+		}
+		if len(args) == 1 {
+			val := strings.TrimSpace(args[0])
+			lower := strings.ToLower(val)
+			switch {
+			case lower == "selfsigned" || lower == "self_signed":
+				tlsCfg.Mode = "selfsigned"
+				tlsCfg.Provider = ""
+			case lower == "local" || lower == "internal":
+				tlsCfg.Mode = "local"
+			case lower == "auto" || lower == "acme" || lower == "file":
+				tlsCfg.Mode = lower
+			case strings.Contains(val, "@") && !strings.Contains(val, "://"):
+				tlsCfg.ACMEEmail = val
+			default:
+				if err := applySSLProvider(val, tlsCfg); err != nil {
+					return true, fmt.Errorf("unsupported tls option: %s", val)
+				}
+			}
+			return true, nil
+		}
+		if len(args) == 2 {
+			if !isGlobalScope && siteCert != nil && siteKey != nil {
+				*siteCert = args[0]
+				*siteKey = args[1]
+				if tlsCfg.CertFile == "cert.pem" && tlsCfg.KeyFile == "key.pem" {
+					tlsCfg.Mode = "file"
+					tlsCfg.CertFile = args[0]
+					tlsCfg.KeyFile = args[1]
+				}
+			} else {
+				tlsCfg.Mode = "file"
+				tlsCfg.CertFile = args[0]
+				tlsCfg.KeyFile = args[1]
+			}
+			return true, nil
+		}
+		return true, fmt.Errorf("tls accepts a mode, provider, email, or cert and key file paths")
+
+	case "eab":
+		if len(args) != 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
+			return true, fmt.Errorf("eab requires <kid> <hmac_key>")
+		}
+		tlsCfg.EABKID = strings.TrimSpace(args[0])
+		tlsCfg.EABHMACKey = strings.TrimSpace(args[1])
+		return true, nil
+
+	case "eab_kid":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("eab_kid requires a value")
+		}
+		tlsCfg.EABKID = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "eab_hmac_key":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("eab_hmac_key requires a value")
+		}
+		tlsCfg.EABHMACKey = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "account_key", "account_key_file":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("%s requires a file path", name)
+		}
+		tlsCfg.AccountKeyFile = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "ssl_key", "cert_key":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("%s requires a file path", name)
+		}
+		tlsCfg.KeyFile = strings.TrimSpace(args[0])
+		return true, nil
+
+	case "key_password":
+		if len(args) != 1 {
+			return true, fmt.Errorf("key_password requires a value")
+		}
+		tlsCfg.KeyPassword = args[0]
+		return true, nil
+
+	case "auto_hosts":
+		if len(args) != 1 {
+			return true, fmt.Errorf("auto_hosts requires on/off or true/false")
+		}
+		b, err := parseBool(args[0], "auto_hosts")
+		if err != nil {
+			return true, err
+		}
+		tlsCfg.AutoHosts = &b
+		return true, nil
+
+	case "cert_dir":
+		if len(args) != 1 {
+			return true, fmt.Errorf("cert_dir requires a directory path")
+		}
+		tlsCfg.CertDir = args[0]
+		return true, nil
+
+	case "hsts":
+		if len(args) != 1 {
+			return true, fmt.Errorf("hsts requires true or false")
+		}
+		b, err := parseBool(args[0], "hsts")
+		if err != nil {
+			return true, err
+		}
+		tlsCfg.HSTS = &b
+		return true, nil
+
+	case "renew_interval":
+		if len(args) != 1 {
+			return true, fmt.Errorf("renew_interval requires seconds")
+		}
+		v, err := parsePositiveInt(args[0], "renew_interval")
+		if err != nil {
+			return true, err
+		}
+		tlsCfg.RenewInterval = v
+		return true, nil
+
+	case "renew_within_days":
+		if len(args) != 1 {
+			return true, fmt.Errorf("renew_within_days requires days")
+		}
+		v, err := parsePositiveInt(args[0], "renew_within_days")
+		if err != nil {
+			return true, err
+		}
+		tlsCfg.RenewWithinDays = v
+		return true, nil
+	}
+	return false, nil
+}
+
+func applyGlobalDirective(
+	item statementItem,
+	st *parseState,
+	waf *SiteWAFConfig,
+	protect *bool,
+	protectExplicit *bool,
+	siteCert *string,
+	siteKey *string,
+	isGlobalScope bool,
+) ([]string, error) {
+	words := item.words
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	if item.sub != nil {
+		subName := strings.ToLower(words[0])
+		switch subName {
+		case "rule":
+			rule, err := parseRuleBlock(item.sub)
+			if err != nil {
+				return nil, err
+			}
+			waf.Rules = append(waf.Rules, rule)
+			return nil, nil
+
+		case "intel":
+			if len(words) > 1 {
+				return nil, fmt.Errorf("intel block does not take header arguments")
+			}
+			for _, subItem := range item.sub.body {
+				if subItem.sub != nil {
+					return nil, fmt.Errorf("unexpected nested block inside intel")
+				}
+				if len(subItem.words) == 0 {
+					continue
+				}
+				handled, err := applyIntelDirective(strings.ToLower(subItem.words[0]), subItem.words[1:], &st.intel)
+				if err != nil {
+					return nil, err
+				}
+				if !handled {
+					return nil, fmt.Errorf("unknown intel directive: %s", subItem.words[0])
+				}
+			}
+			return nil, nil
+
+		case "tls":
+			if len(words) > 1 {
+				if _, err := applyTLSDirective("tls", words[1:], &st.tls, siteCert, siteKey, isGlobalScope); err != nil {
+					return nil, err
+				}
+			}
+			for _, subItem := range item.sub.body {
+				if subItem.sub != nil {
+					return nil, fmt.Errorf("unexpected nested block inside tls")
+				}
+				if len(subItem.words) == 0 {
+					continue
+				}
+				tname := strings.ToLower(subItem.words[0])
+				if tname == "provider" || tname == "issuer" {
+					tname = "ssl_provider"
+				}
+				handled, err := applyTLSDirective(tname, subItem.words[1:], &st.tls, siteCert, siteKey, isGlobalScope)
+				if err != nil {
+					return nil, err
+				}
+				if !handled {
+					return nil, fmt.Errorf("unknown tls directive: %s", subItem.words[0])
+				}
+			}
+			return nil, nil
+
+		case "waf":
+			if len(words) > 1 {
+				joined := strings.Join(words[1:], " ")
+				if lvl, enabled, modeErr := ParseVerifyLevel(joined); modeErr == nil {
+					waf.VerifyLevel = lvl
+					*protect = enabled
+					if protectExplicit != nil {
+						*protectExplicit = true
+					}
+				} else if b, err := parseBool(joined, "waf"); err == nil {
+					*protect = b
+					if protectExplicit != nil {
+						*protectExplicit = true
+					}
+				} else {
+					return nil, modeErr
+				}
+			}
+			for _, subItem := range item.sub.body {
+				if subItem.sub != nil {
+					if strings.EqualFold(subItem.words[0], "rule") {
+						rule, err := parseRuleBlock(subItem.sub)
+						if err != nil {
+							return nil, err
+						}
+						waf.Rules = append(waf.Rules, rule)
+						continue
+					}
+					return nil, fmt.Errorf("unexpected nested block inside waf: %s", subItem.words[0])
+				}
+				if len(subItem.words) == 0 {
+					continue
+				}
+				sname := strings.ToLower(subItem.words[0])
+				sargs := subItem.words[1:]
+				if sname == "protect" || sname == "protected" {
+					if len(sargs) != 1 {
+						return nil, fmt.Errorf("protect requires true or false")
+					}
+					b, err := parseBool(sargs[0], "protect")
+					if err != nil {
+						return nil, err
+					}
+					*protect = b
+					if protectExplicit != nil {
+						*protectExplicit = true
+					}
+					continue
+				}
+				handled, err := applyWAFDirective(sname, sargs, waf, &st.intel, protect, protectExplicit)
+				if err != nil {
+					return nil, err
+				}
+				if !handled {
+					return nil, fmt.Errorf("unknown waf directive: %s", subItem.words[0])
+				}
+			}
+			return nil, nil
+
+		default:
+			return nil, fmt.Errorf("unsupported nested block: %s", words[0])
+		}
+	}
+
+	if len(words) == 3 && words[1] == "->" {
+		st.flatDomains = append(st.flatDomains, words[0])
+		u, err := NormalizeUpstream(words[2], "reverse_proxy")
+		if err != nil {
+			return nil, err
+		}
+		return []string{u}, nil
+	}
+
+	name := strings.ToLower(words[0])
+	args := words[1:]
+
+	if name == "reverse_proxy" || name == "upstream" || name == "proxy" {
+		var targets []string
+		for _, a := range args {
+			if strings.EqualFold(a, "to") {
+				continue
+			}
+			u, err := NormalizeUpstream(a, name)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, u)
+		}
+		if len(targets) == 0 {
+			return nil, fmt.Errorf("%s requires an upstream URL", name)
+		}
+		return targets, nil
+	}
+
+	if len(words) == 1 && (strings.Contains(words[0], "://") || strings.HasPrefix(words[0], ":")) {
+		u, err := NormalizeUpstream(words[0], "reverse_proxy")
+		if err != nil {
+			return nil, err
+		}
+		return []string{u}, nil
+	}
+
+	if handled, err := applyIntelDirective(name, args, &st.intel); handled {
+		return nil, err
+	}
+
+	if handled, err := applyWAFDirective(name, args, waf, &st.intel, protect, protectExplicit); handled {
+		return nil, err
+	}
+
+	if handled, err := applyTLSDirective(name, args, &st.tls, siteCert, siteKey, isGlobalScope); handled {
+		return nil, err
+	}
+
+	switch name {
+	case "protect", "protected":
+		if len(args) == 0 {
+			return nil, fmt.Errorf("%s requires true/false or domain names", name)
+		}
+		if len(args) == 1 {
+			if b, err := parseBool(args[0], name); err == nil {
+				*protect = b
+				if protectExplicit != nil {
+					*protectExplicit = true
+				}
+				return nil, nil
+			}
+		}
+		if !isGlobalScope {
+			return nil, fmt.Errorf("%s inside a site block must be on/off or true/false", name)
+		}
+		if st.protectedFilter == nil {
+			st.protectedFilter = make(map[string]struct{})
+		}
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				if strings.TrimSpace(part) == "" {
+					continue
+				}
+				h, _, _, err := host.ParseSiteAddress(part)
+				if err != nil {
+					return nil, err
+				}
+				st.protectedFilter[h] = struct{}{}
+			}
+		}
+		return nil, nil
+
+	case "protect_sites", "protect_domains":
+		if len(args) == 0 {
+			return nil, fmt.Errorf("%s requires at least one domain", name)
+		}
+		if st.protectedFilter == nil {
+			st.protectedFilter = make(map[string]struct{})
+		}
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				if strings.TrimSpace(part) == "" {
+					continue
+				}
+				h, _, _, err := host.ParseSiteAddress(part)
+				if err != nil {
+					return nil, err
+				}
+				st.protectedFilter[h] = struct{}{}
+			}
+		}
+		return nil, nil
+
+	case "waf":
+		if len(args) == 0 {
+			return nil, fmt.Errorf("waf requires on/off, a verify level (0-3), or a { ... } block")
+		}
+		if len(args) == 1 {
+			if _, convErr := strconv.Atoi(strings.TrimSpace(args[0])); convErr != nil {
+				if b, err := parseBool(args[0], "waf"); err == nil {
+					*protect = b
+					if protectExplicit != nil {
+						*protectExplicit = true
+					}
+					return nil, nil
+				}
+			}
+		}
+		joined := strings.Join(args, " ")
+		lvl, enabled, err := ParseVerifyLevel(joined)
+		if err != nil {
+			return nil, err
+		}
+		waf.VerifyLevel = lvl
+		*protect = enabled
+		if protectExplicit != nil {
+			*protectExplicit = true
+		}
+		return nil, nil
+
+	case "domain", "domains", "host", "hosts":
+		if len(args) == 0 {
+			return nil, fmt.Errorf("%s requires at least one domain", name)
+		}
+		var added int
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				if strings.TrimSpace(part) == "" {
+					continue
+				}
+				h, _, _, err := host.ParseSiteAddress(part)
+				if err != nil {
+					return nil, err
+				}
+				st.flatDomains = append(st.flatDomains, h)
+				added++
+			}
+		}
+		if added == 0 {
+			return nil, fmt.Errorf("%s requires at least one domain", name)
+		}
+		return nil, nil
+
+	case "bind", "bind_host":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("bind requires a host address")
+		}
+		st.bindHost = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "http_port":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("http_port requires a port number")
+		}
+		p, err := host.ParsePort(args[0], "http_port")
+		if err != nil {
+			return nil, err
+		}
+		st.httpPort = p
+		return nil, nil
+
+	case "https_port":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("https_port requires a port number")
+		}
+		p, err := host.ParsePort(args[0], "https_port")
+		if err != nil {
+			return nil, err
+		}
+		st.httpsPort = p
+		st.httpsPortSet = true
+		return nil, nil
+
+	case "admin":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("admin requires a listen address or 'off'")
+		}
+		val := strings.TrimSpace(args[0])
+		if strings.EqualFold(val, "off") || strings.EqualFold(val, "false") || strings.EqualFold(val, "none") {
+			st.adminAddr = ""
+		} else {
+			st.adminAddr = val
+		}
+		return nil, nil
+
+	case "redis", "redis_url":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("redis requires a Redis URL")
+		}
+		st.redisURL = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "secret":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("secret requires a value")
+		}
+		st.secret = args[0]
+		return nil, nil
+
+	case "trusted_proxies":
+		if len(args) == 0 {
+			return nil, fmt.Errorf("trusted_proxies requires at least one IP or CIDR")
+		}
+		st.trustedProxies = append(st.trustedProxies, args...)
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("unknown directive: %s", words[0])
+}
+
+// ParseCaddyfile parses a Gymbagfile/Caddyfile document into a validated Config.
+func ParseCaddyfile(text string) (Config, error) {
+	tokens, err := tokenizeCaddyfile(text)
+	if err != nil {
+		return Config{}, err
+	}
+	st := &parseState{
+		tls:            DefaultTLSConfig(),
+		intel:          DefaultIntelConfig(),
+		httpPort:       80,
+		httpsPort:      443,
+		defaultWAF:     DefaultSiteWAFConfig(),
+		defaultProtect: true,
+	}
+
+	hasBraces := false
+	for _, tok := range tokens {
+		if tok == "{" || tok == "}" {
+			hasBraces = true
+			break
+		}
+	}
+
+	var sites []SiteConfig
+
+	if hasBraces {
+		items, err := parseItems(tokens)
+		if err != nil {
+			return Config{}, err
+		}
+		for _, item := range items {
+			if item.sub == nil {
+				return Config{}, fmt.Errorf("unexpected token or missing '{' in config file near %q", strings.Join(item.words, " "))
+			}
+			block := item.sub
+			if len(block.header) == 0 {
+				for _, stmt := range block.body {
+					upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, nil, nil, nil, true)
+					if err != nil {
+						return Config{}, err
+					}
+					if len(upstreams) > 0 {
+						st.flatUpstreams = upstreams
+					}
+				}
+				continue
+			}
+
+			var siteHosts []string
+			for _, rawAddr := range block.header {
+				for _, part := range strings.Split(rawAddr, ",") {
+					if strings.TrimSpace(part) == "" {
+						continue
+					}
+					h, port, hasPort, err := host.ParseSiteAddress(part)
+					if err != nil {
+						return Config{}, err
+					}
+					siteHosts = append(siteHosts, h)
+					if hasPort && !st.httpsPortSet {
+						st.httpsPort = port
+						st.httpsPortSet = true
+					}
+				}
+			}
+			if len(siteHosts) == 0 {
+				return Config{}, fmt.Errorf("site block requires at least one domain")
+			}
+
+			siteWAF := cloneSiteWAF(st.defaultWAF)
+			siteProtect := st.defaultProtect
+			protectExplicit := false
+			var siteUpstreams []string
+			var siteCert, siteKey string
+
+			for _, stmt := range block.body {
+				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, false)
+				if err != nil {
+					return Config{}, err
+				}
+				if len(upstreams) > 0 {
+					siteUpstreams = append(siteUpstreams, upstreams...)
+				}
+			}
+			if len(siteUpstreams) == 0 && len(st.flatUpstreams) > 0 {
+				siteUpstreams = append(siteUpstreams, st.flatUpstreams...)
+			}
+			if len(siteUpstreams) == 0 {
+				return Config{}, fmt.Errorf("site block for %s requires reverse_proxy <upstream>", strings.Join(siteHosts, ", "))
+			}
+
+			for _, h := range siteHosts {
+				effectiveProtect := siteProtect
+				if !protectExplicit && st.protectedFilter != nil {
+					_, effectiveProtect = st.protectedFilter[h]
+				}
+				sites = append(sites, SiteConfig{
+					Domain:    h,
+					Upstreams: append([]string(nil), siteUpstreams...),
+					Protect:   effectiveProtect,
+					WAF:       cloneSiteWAF(siteWAF),
+					CertFile:  siteCert,
+					KeyFile:   siteKey,
+				})
+			}
+		}
+	} else {
+		items, err := parseItems(tokens)
+		if err != nil {
+			return Config{}, err
+		}
+		protectExplicit := false
+		for idx, stmt := range items {
+			words := stmt.words
+			if len(words) == 0 {
+				continue
+			}
+			_, known := knownDirectiveNames[strings.ToLower(words[0])]
+			isArrow := len(words) == 3 && words[1] == "->"
+			isBareUpstream := len(words) == 1 && (strings.Contains(words[0], "://") || strings.HasPrefix(words[0], ":"))
+			if idx == 0 && !known && !isArrow && !isBareUpstream {
+				for _, tok := range words {
+					for _, part := range strings.Split(tok, ",") {
+						if strings.TrimSpace(part) == "" {
+							continue
+						}
+						h, port, hasPort, err := host.ParseSiteAddress(part)
+						if err != nil {
+							return Config{}, err
+						}
+						st.flatDomains = append(st.flatDomains, h)
+						if hasPort && !st.httpsPortSet {
+							st.httpsPort = port
+							st.httpsPortSet = true
+						}
+					}
+				}
+				continue
+			}
+			upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, &protectExplicit, nil, nil, true)
+			if err != nil {
+				return Config{}, err
+			}
+			if len(upstreams) > 0 {
+				st.flatUpstreams = upstreams
+			}
+		}
+
+		if len(st.flatDomains) == 0 || len(st.flatUpstreams) == 0 {
+			return Config{}, fmt.Errorf("config file must specify both a domain and an upstream URL")
+		}
+		for _, h := range st.flatDomains {
+			effectiveProtect := st.defaultProtect
+			if !protectExplicit && st.protectedFilter != nil {
+				_, effectiveProtect = st.protectedFilter[h]
+			}
+			sites = append(sites, SiteConfig{
+				Domain:    h,
+				Upstreams: append([]string(nil), st.flatUpstreams...),
+				Protect:   effectiveProtect,
+				WAF:       cloneSiteWAF(st.defaultWAF),
+			})
+		}
+	}
+
+	if len(sites) == 0 {
+		return Config{}, fmt.Errorf("config file must define at least one site with a domain and upstream URL")
+	}
+
+	cfg := Config{
+		Sites:          sites,
+		BindHost:       st.bindHost,
+		HTTPPort:       st.httpPort,
+		HTTPSPort:      st.httpsPort,
+		AdminAddr:      st.adminAddr,
+		TLS:            st.tls,
+		Intel:          st.intel,
+		RedisURL:       st.redisURL,
+		Secret:         st.secret,
+		TrustedProxies: st.trustedProxies,
+		Defaults:       st.defaultWAF,
+	}
+	if cfg.BindHost == "" {
+		cfg.BindHost = DefaultBindHost(cfg.Domains())
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func cloneSiteWAF(in SiteWAFConfig) SiteWAFConfig {
+	out := in
+	if in.DefaultRules != nil {
+		v := *in.DefaultRules
+		out.DefaultRules = &v
+	}
+	if len(in.Rules) > 0 {
+		out.Rules = make([]CustomRule, len(in.Rules))
+		for i, r := range in.Rules {
+			out.Rules[i] = r.Clone()
+		}
+	}
+	out.CustomAIBots = slices.Clone(in.CustomAIBots)
+	out.CustomSuspiciousUAs = slices.Clone(in.CustomSuspiciousUAs)
+	out.CustomSuspiciousPaths = slices.Clone(in.CustomSuspiciousPaths)
+	return out
+}
+
+func quoteIfNeeded(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if strings.ContainsAny(s, " \t\n\"'{};#") {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
+func formatCustomRule(b *strings.Builder, r CustomRule) {
+	// Count distinct matcher groups to choose shorthand one-liner vs compound rule block.
+	groups := 0
+	if len(r.IPs) > 0 {
+		groups++
+	}
+	if len(r.UserAgents) > 0 {
+		groups++
+	}
+	if len(r.Paths) > 0 {
+		groups++
+	}
+	if len(r.Queries) > 0 {
+		groups++
+	}
+	if len(r.Methods) > 0 {
+		groups++
+	}
+	groups += len(r.Headers)
+	groups += len(r.Cookies)
+
+	if groups == 1 && r.Name == "" {
+		switch {
+		case len(r.IPs) > 0:
+			b.WriteString(fmt.Sprintf("    %s ip %s\n", r.Action, strings.Join(r.IPs, " ")))
+		case len(r.UserAgents) > 0:
+			vals := make([]string, len(r.UserAgents))
+			for i, v := range r.UserAgents {
+				vals[i] = quoteIfNeeded(v)
+			}
+			b.WriteString(fmt.Sprintf("    %s user_agent %s\n", r.Action, strings.Join(vals, " ")))
+		case len(r.Paths) > 0:
+			vals := make([]string, len(r.Paths))
+			for i, v := range r.Paths {
+				vals[i] = quoteIfNeeded(v)
+			}
+			b.WriteString(fmt.Sprintf("    %s path %s\n", r.Action, strings.Join(vals, " ")))
+		case len(r.Queries) > 0:
+			vals := make([]string, len(r.Queries))
+			for i, v := range r.Queries {
+				vals[i] = quoteIfNeeded(v)
+			}
+			b.WriteString(fmt.Sprintf("    %s query %s\n", r.Action, strings.Join(vals, " ")))
+		case len(r.Methods) > 0:
+			b.WriteString(fmt.Sprintf("    %s method %s\n", r.Action, strings.Join(r.Methods, " ")))
+		case len(r.Headers) == 1:
+			b.WriteString(fmt.Sprintf("    %s header %s %s\n", r.Action, quoteIfNeeded(r.Headers[0].Name), quoteIfNeeded(r.Headers[0].Pattern)))
+		case len(r.Cookies) == 1:
+			b.WriteString(fmt.Sprintf("    %s cookie %s %s\n", r.Action, quoteIfNeeded(r.Cookies[0].Name), quoteIfNeeded(r.Cookies[0].Pattern)))
+		}
+		return
+	}
+
+	if r.Name != "" {
+		b.WriteString(fmt.Sprintf("    rule %s {\n", quoteIfNeeded(r.Name)))
+	} else {
+		b.WriteString("    rule {\n")
+	}
+	b.WriteString(fmt.Sprintf("        action %s\n", r.Action))
+	if len(r.IPs) > 0 {
+		b.WriteString(fmt.Sprintf("        ip %s\n", strings.Join(r.IPs, " ")))
+	}
+	if len(r.UserAgents) > 0 {
+		vals := make([]string, len(r.UserAgents))
+		for i, v := range r.UserAgents {
+			vals[i] = quoteIfNeeded(v)
+		}
+		b.WriteString(fmt.Sprintf("        user_agent %s\n", strings.Join(vals, " ")))
+	}
+	if len(r.Paths) > 0 {
+		vals := make([]string, len(r.Paths))
+		for i, v := range r.Paths {
+			vals[i] = quoteIfNeeded(v)
+		}
+		b.WriteString(fmt.Sprintf("        path %s\n", strings.Join(vals, " ")))
+	}
+	if len(r.Queries) > 0 {
+		vals := make([]string, len(r.Queries))
+		for i, v := range r.Queries {
+			vals[i] = quoteIfNeeded(v)
+		}
+		b.WriteString(fmt.Sprintf("        query %s\n", strings.Join(vals, " ")))
+	}
+	if len(r.Methods) > 0 {
+		b.WriteString(fmt.Sprintf("        method %s\n", strings.Join(r.Methods, " ")))
+	}
+	for _, h := range r.Headers {
+		b.WriteString(fmt.Sprintf("        header %s %s\n", quoteIfNeeded(h.Name), quoteIfNeeded(h.Pattern)))
+	}
+	for _, c := range r.Cookies {
+		b.WriteString(fmt.Sprintf("        cookie %s %s\n", quoteIfNeeded(c.Name), quoteIfNeeded(c.CookiePatternOrDefault())))
+	}
+	b.WriteString("    }\n")
+}
+
+func (kv KeyValueMatch) CookiePatternOrDefault() string {
+	return kv.Pattern
+}
+
+// FormatCaddyfile formats a Gymbagfile/Caddyfile into canonical 4-space indented layout.
+func FormatCaddyfile(text string) (string, error) {
+	cfg, err := ParseCaddyfile(text)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	defTLS := DefaultTLSConfig()
+	defWAF := DefaultSiteWAFConfig()
+	defIntel := DefaultIntelConfig()
+
+	var globalLines []string
+	if cfg.TLS.ACMEEmail != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    email %s", cfg.TLS.ACMEEmail))
+	}
+	if cfg.TLS.Provider == "custom" {
+		globalLines = append(globalLines, fmt.Sprintf("    ssl_provider %s", quoteIfNeeded(cfg.TLS.ACMEDirectory)))
+	} else if cfg.TLS.Provider != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    ssl_provider %s", cfg.TLS.Provider))
+	}
+	if cfg.TLS.ACMEDirectory != defTLS.ACMEDirectory && cfg.TLS.Provider != "custom" {
+		globalLines = append(globalLines, fmt.Sprintf("    acme_directory %s", cfg.TLS.ACMEDirectory))
+	}
+	if cfg.TLS.Mode != defTLS.Mode && cfg.TLS.Mode != "file" {
+		impliedMode := ""
+		if cfg.TLS.Provider == "local" {
+			impliedMode = "local"
+		} else if cfg.TLS.Provider != "" {
+			impliedMode = "acme"
+		}
+		if cfg.TLS.Mode != impliedMode {
+			globalLines = append(globalLines, fmt.Sprintf("    tls %s", cfg.TLS.Mode))
+		}
+	} else if cfg.TLS.Mode == "file" && (cfg.TLS.CertFile != defTLS.CertFile || cfg.TLS.KeyFile != defTLS.KeyFile) {
+		globalLines = append(globalLines, fmt.Sprintf("    tls %s %s", quoteIfNeeded(cfg.TLS.CertFile), quoteIfNeeded(cfg.TLS.KeyFile)))
+	}
+	if cfg.TLS.Mode != "file" && cfg.TLS.KeyFile != defTLS.KeyFile {
+		globalLines = append(globalLines, fmt.Sprintf("    ssl_key %s", quoteIfNeeded(cfg.TLS.KeyFile)))
+	}
+	if cfg.TLS.KeyPassword != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    key_password %s", quoteIfNeeded(cfg.TLS.KeyPassword)))
+	}
+	if cfg.TLS.AccountKeyFile != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    account_key %s", quoteIfNeeded(cfg.TLS.AccountKeyFile)))
+	}
+	if cfg.TLS.EABKID != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    eab_kid %s", quoteIfNeeded(cfg.TLS.EABKID)))
+	}
+	if cfg.TLS.EABHMACKey != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    eab_hmac_key %s", quoteIfNeeded(cfg.TLS.EABHMACKey)))
+	}
+	if cfg.TLS.AutoHosts != nil {
+		autoHostsVal := "off"
+		if *cfg.TLS.AutoHosts {
+			autoHostsVal = "on"
+		}
+		globalLines = append(globalLines, fmt.Sprintf("    auto_hosts %s", autoHostsVal))
+	}
+	if cfg.TLS.CertDir != defTLS.CertDir {
+		globalLines = append(globalLines, fmt.Sprintf("    cert_dir %s", cfg.TLS.CertDir))
+	}
+	if cfg.TLS.RenewInterval != defTLS.RenewInterval {
+		globalLines = append(globalLines, fmt.Sprintf("    renew_interval %d", cfg.TLS.RenewInterval))
+	}
+	if cfg.TLS.RenewWithinDays != defTLS.RenewWithinDays {
+		globalLines = append(globalLines, fmt.Sprintf("    renew_within_days %d", cfg.TLS.RenewWithinDays))
+	}
+	if cfg.HTTPPort != 80 {
+		globalLines = append(globalLines, fmt.Sprintf("    http_port %d", cfg.HTTPPort))
+	}
+	if cfg.HTTPSPort != 443 {
+		globalLines = append(globalLines, fmt.Sprintf("    https_port %d", cfg.HTTPSPort))
+	}
+	if cfg.BindHost != DefaultBindHost(cfg.Domains()) {
+		globalLines = append(globalLines, fmt.Sprintf("    bind %s", cfg.BindHost))
+	}
+	if cfg.AdminAddr != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    admin %s", cfg.AdminAddr))
+	}
+	if cfg.RedisURL != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    redis %s", cfg.RedisURL))
+	}
+	if cfg.TLS.HSTS != nil {
+		globalLines = append(globalLines, fmt.Sprintf("    hsts %t", *cfg.TLS.HSTS))
+	}
+	if cfg.Intel.IPSecurity != defIntel.IPSecurity {
+		globalLines = append(globalLines, fmt.Sprintf("    ip_security %t", cfg.Intel.IPSecurity))
+	}
+	if cfg.Intel.IPSecurityAction != defIntel.IPSecurityAction {
+		globalLines = append(globalLines, fmt.Sprintf("    ip_security_action %s", cfg.Intel.IPSecurityAction))
+	}
+	if cfg.Intel.LiveReputation != defIntel.LiveReputation {
+		globalLines = append(globalLines, fmt.Sprintf("    ip_reputation %t", cfg.Intel.LiveReputation))
+	}
+	if cfg.Intel.AIIPList != defIntel.AIIPList {
+		globalLines = append(globalLines, fmt.Sprintf("    ai_ip_list %t", cfg.Intel.AIIPList))
+	}
+	if cfg.Intel.RefreshInterval != defIntel.RefreshInterval {
+		globalLines = append(globalLines, fmt.Sprintf("    intel_refresh %d", cfg.Intel.RefreshInterval))
+	}
+	for _, u := range cfg.Intel.ThreatFeeds {
+		globalLines = append(globalLines, fmt.Sprintf("    threat_feed %s", quoteIfNeeded(u)))
+	}
+	for _, u := range cfg.Intel.AIIPFeeds {
+		globalLines = append(globalLines, fmt.Sprintf("    ai_ip_feed %s", quoteIfNeeded(u)))
+	}
+
+	if len(globalLines) > 0 {
+		b.WriteString("{\n")
+		for _, line := range globalLines {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteString("}\n\n")
+	}
+
+	for idx, site := range cfg.Sites {
+		if idx > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(site.Domain)
+		b.WriteString(" {\n")
+		b.WriteString("    reverse_proxy ")
+		b.WriteString(strings.Join(site.Upstreams, " "))
+		b.WriteByte('\n')
+		if !site.Protect {
+			b.WriteString("    protect off\n")
+		} else {
+			if site.WAF.VerifyLevel != defWAF.VerifyLevel {
+				b.WriteString(fmt.Sprintf("    verify %d\n", int(site.WAF.VerifyLevel)))
+			}
+			if site.WAF.Difficulty != defWAF.Difficulty {
+				b.WriteString(fmt.Sprintf("    difficulty %d\n", site.WAF.Difficulty))
+			}
+			if site.WAF.RateLimit != defWAF.RateLimit || site.WAF.RateWindow != defWAF.RateWindow {
+				b.WriteString(fmt.Sprintf("    rate_limit %d %d\n", site.WAF.RateLimit, site.WAF.RateWindow))
+			}
+			if site.WAF.ChallengeTTL != defWAF.ChallengeTTL {
+				b.WriteString(fmt.Sprintf("    challenge_ttl %d\n", site.WAF.ChallengeTTL))
+			}
+			if site.WAF.ClearanceTTL != defWAF.ClearanceTTL {
+				b.WriteString(fmt.Sprintf("    clearance_ttl %d\n", site.WAF.ClearanceTTL))
+			}
+			if site.WAF.CookieName != defWAF.CookieName {
+				b.WriteString(fmt.Sprintf("    cookie_name %s\n", site.WAF.CookieName))
+			}
+			if site.WAF.CookieSecure != defWAF.CookieSecure {
+				b.WriteString(fmt.Sprintf("    cookie_secure %t\n", site.WAF.CookieSecure))
+			}
+		}
+		if !site.WAF.DefaultRulesEnabled() {
+			b.WriteString("    default_rules off\n")
+		}
+		for _, r := range site.WAF.Rules {
+			formatCustomRule(&b, r)
+		}
+		if site.CertFile != "" && site.KeyFile != "" {
+			b.WriteString(fmt.Sprintf("    tls %s %s\n", site.CertFile, site.KeyFile))
+		}
+		b.WriteString("}\n")
+	}
+	return b.String(), nil
+}

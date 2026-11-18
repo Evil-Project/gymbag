@@ -1,0 +1,178 @@
+package intel
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestIPSetAndMultiFormatFeedParser(t *testing.T) {
+	// 1. OpenAI / Anthropic / Google style JSON
+	aiJSON := []byte(`{
+		"creationTime": "2026-11-18T00:00:00Z",
+		"prefixes": [
+			{"ipv4Prefix": "20.15.240.64/28"},
+			{"ipv6Prefix": "2603:1030::/32"}
+		]
+	}`)
+	aiPrefs := ParseFeedPayload(aiJSON)
+	aiSet := NewIPSet(aiPrefs)
+	if !aiSet.ContainsString("20.15.240.70") || !aiSet.ContainsString("2603:1030::abcd") {
+		t.Fatal("expected AI CIDR match")
+	}
+	if aiSet.ContainsString("20.15.240.90") || aiSet.ContainsString("1.1.1.1") {
+		t.Fatal("unexpected AI CIDR false positive")
+	}
+
+	// 2. Spamhaus DROP JSONL
+	dropJSONL := []byte("{\"cidr\":\"1.10.16.0/20\",\"sblid\":\"SBL256894\"}\n{\"type\":\"metadata\",\"records\":1}\n")
+	dropSet := NewIPSet(ParseFeedPayload(dropJSONL))
+	if !dropSet.ContainsString("1.10.20.5") || dropSet.ContainsString("1.11.0.1") {
+		t.Fatal("Spamhaus DROP JSONL parsing mismatch")
+	}
+
+	// 3. IPsum + Spamhaus text comments
+	textFeed := []byte("# IPsum feed\n45.33.32.156\t6\n185.220.101.0/24 ; SBL999\n")
+	txtSet := NewIPSet(ParseFeedPayload(textFeed))
+	if !txtSet.ContainsString("45.33.32.156") || !txtSet.ContainsString("185.220.101.42") {
+		t.Fatal("plain-text feed parsing mismatch")
+	}
+}
+
+func TestManagerAutoUpdateDiskCacheAndLiveReputation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var generation atomic.Int32
+	generation.Store(1)
+
+	mockTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Host == "feeds.test" && req.URL.Path == "/ai.json":
+			body := `{"prefixes":[{"ipv4Prefix":"20.15.240.64/28"}]}`
+			if generation.Load() >= 2 {
+				body = `{"prefixes":[{"ipv4Prefix":"20.15.240.64/28"},{"ipv4Prefix":"34.100.10.0/24"}]}`
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{"ETag": []string{`"v` + string(rune('0'+generation.Load())) + `"`}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+
+		case req.URL.Host == "feeds.test" && req.URL.Path == "/threat.txt":
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader("91.240.118.172\t8\n185.220.101.0/24 ; tor\n")),
+			}, nil
+
+		case req.URL.Host == "internetdb.test":
+			if strings.HasSuffix(req.URL.Path, "/8.8.4.4") {
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(bytes.NewReader([]byte(`{"ip":"8.8.4.4","tags":["dns"]}`))),
+				}, nil
+			}
+			if strings.HasSuffix(req.URL.Path, "/45.155.205.233") {
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(bytes.NewReader([]byte(`{"ip":"45.155.205.233","tags":["scanner","compromised"]}`))),
+				}, nil
+			}
+			return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(""))}, nil
+
+		case req.URL.Host == "sfs.test":
+			if strings.Contains(req.URL.RawQuery, "194.26.29.10") {
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(strings.NewReader(`{"success":1,"ip":{"appears":1,"frequency":12,"confidence":98.5}}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"success":1,"ip":{"appears":0,"frequency":0,"confidence":0}}`)),
+			}, nil
+		}
+		return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+
+	httpClient := &http.Client{Transport: mockTransport}
+	rep := NewReputationChecker(httpClient, time.Hour)
+	rep.internetDBBaseURL = "https://internetdb.test"
+	rep.stopForumSpamBaseURL = "https://sfs.test/api"
+
+	cacheDir := t.TempDir()
+	mgr := NewManager(ManagerOptions{
+		CacheDir:              cacheDir,
+		IPSecurityEnabled:     true,
+		LiveReputationEnabled: true,
+		AIIPListEnabled:       true,
+		RefreshInterval:       40 * time.Millisecond,
+		ReplaceThreatFeeds:    []FeedSource{{Name: "test-threat", URL: "https://feeds.test/threat.txt"}},
+		ReplaceAIFeeds:        []FeedSource{{Name: "test-ai", URL: "https://feeds.test/ai.json"}},
+		HTTPClient:            httpClient,
+		Reputation:            rep,
+	})
+
+	// Initial refresh
+	st := mgr.RefreshNow(ctx)
+	if st.ThreatEntries != 2 || st.AIEntries != 1 {
+		t.Fatalf("unexpected counts: %+v", st)
+	}
+	if !mgr.IsAIIP("20.15.240.66") {
+		t.Fatal("expected 20.15.240.66 to match AI IP list")
+	}
+	if !mgr.IsThreatIP(ctx, "91.240.118.172") || !mgr.IsThreatIP(ctx, "185.220.101.9") {
+		t.Fatal("expected feed threat IP match")
+	}
+	// Live Shodan InternetDB & StopForumSpam checks
+	if !mgr.IsThreatIP(ctx, "45.155.205.233") {
+		t.Fatal("expected InternetDB scanner IP to be flagged")
+	}
+	if !mgr.IsThreatIP(ctx, "194.26.29.10") {
+		t.Fatal("expected StopForumSpam IP to be flagged")
+	}
+	if mgr.IsThreatIP(ctx, "8.8.4.4") {
+		t.Fatal("expected 8.8.4.4 to be clean")
+	}
+
+	// Verify automatic background periodic update picks up generation 2 AI CIDR!
+	generation.Store(2)
+	mgr.Start(ctx)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if mgr.IsAIIP("34.100.10.55") {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !mgr.IsAIIP("34.100.10.55") {
+		t.Fatal("expected background auto-updater to load new 34.100.10.0/24 AI range")
+	}
+
+	// Verify warm start from disk cache even when network is offline
+	offlineClient := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("down"))}, nil
+		}),
+	}
+	mgrWarm := NewManager(ManagerOptions{
+		CacheDir:           cacheDir,
+		IPSecurityEnabled:  true,
+		AIIPListEnabled:    true,
+		ReplaceThreatFeeds: []FeedSource{{Name: "test-threat", URL: "https://feeds.test/threat.txt"}},
+		ReplaceAIFeeds:     []FeedSource{{Name: "test-ai", URL: "https://feeds.test/ai.json"}},
+		HTTPClient:         offlineClient,
+	})
+	if !mgrWarm.IsAIIP("34.100.10.55") || !mgrWarm.IsThreatFeedIP("91.240.118.172") {
+		t.Fatal("expected warm disk cache to populate IPSets immediately")
+	}
+}

@@ -1,0 +1,439 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"gymbag/internal/config"
+	"gymbag/internal/localpki"
+	"gymbag/internal/server"
+)
+
+// Version is the build version of the gymbag binary (overridable via -ldflags).
+var Version = "0.1.0"
+
+// Execute parses argv and runs the requested Gymbag command, returning a process exit code.
+func Execute(argv []string, stdout, stderr io.Writer) int {
+	LoadDotEnv(".env")
+
+	if len(argv) > 0 {
+		switch argv[0] {
+		case "version", "-v", "--version":
+			_, _ = fmt.Fprintf(stdout, "gymbag v%s\n", Version)
+			return 0
+		case "help", "-h", "--help":
+			printUsage(stdout)
+			return 0
+		case "validate":
+			return runValidate(argv[1:], stdout, stderr)
+		case "fmt":
+			return runFmt(argv[1:], stdout, stderr)
+		case "reverse-proxy":
+			return runReverseProxyCmd(argv[1:], stdout, stderr)
+		case "run":
+			return runServerCmd(argv[1:], stdout, stderr)
+		}
+	}
+	return runServerCmd(argv, stdout, stderr)
+}
+
+func runServerCmd(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gymbag run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		cfgFile     string
+		domain      string
+		upstream    string
+		verifyLevel string
+		sslProvider string
+		noProtect   bool
+		adminAddr   string
+		httpPort    int
+		httpsPort   int
+		watch       bool
+	)
+
+	fs.StringVar(&cfgFile, "c", "", "Path to a Gymbagfile, Caddyfile, or JSON config file")
+	fs.StringVar(&cfgFile, "config", "", "Path to a Gymbagfile, Caddyfile, or JSON config file")
+	fs.StringVar(&domain, "d", "", "Downstream domain(s), comma-separated")
+	fs.StringVar(&domain, "domain", "", "Downstream domain(s), comma-separated")
+	fs.StringVar(&upstream, "u", "", "Upstream URL to reverse proxy to")
+	fs.StringVar(&upstream, "upstream", "", "Upstream URL to reverse proxy to")
+	fs.StringVar(&verifyLevel, "l", "", "Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)")
+	fs.StringVar(&verifyLevel, "verify-level", "", "Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)")
+	fs.StringVar(&verifyLevel, "verify", "", "Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)")
+	fs.StringVar(&verifyLevel, "m", "", "Alias for --verify")
+	fs.StringVar(&verifyLevel, "mode", "", "Alias for --verify")
+	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
+	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification for CLI-configured sites")
+	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address (e.g. 127.0.0.1:2019 or off)")
+	fs.IntVar(&httpPort, "http-port", 0, "HTTP redirect/ACME port (default 80)")
+	fs.IntVar(&httpsPort, "https-port", 0, "HTTPS gateway port (default 443)")
+	fs.BoolVar(&watch, "watch", false, "Watch config file for changes and hot-reload site policies")
+
+	if err := parseInterspersedFlags(fs, args); err != nil {
+		if err == flag.ErrHelp {
+			printUsage(stdout)
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() > 1 {
+		_, _ = fmt.Fprintln(stderr, "error: at most one positional config_file argument is accepted")
+		return 2
+	}
+	if cfgFile == "" && fs.NArg() == 1 {
+		cfgFile = fs.Arg(0)
+	}
+
+	var protectOpt *bool
+	if noProtect {
+		f := false
+		protectOpt = &f
+	}
+
+	loadOpts := config.LoadOptions{
+		ConfigPath:  cfgFile,
+		Domain:      domain,
+		Upstream:    upstream,
+		VerifyLevel: verifyLevel,
+		Protect:     protectOpt,
+		AdminAddr:   adminAddr,
+		HTTPPort:    httpPort,
+		HTTPSPort:   httpsPort,
+	}
+
+	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "ERROR gymbag: %v\n", err)
+		return 1
+	}
+
+	return serveWithSignals(cfg, resolveWatchedPath(cfgFile), watch, loadOpts, sslProvider, stderr)
+}
+
+func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gymbag reverse-proxy", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		from        string
+		to          string
+		verifyLevel string
+		sslProvider string
+		noProtect   bool
+		adminAddr   string
+		httpPort    int
+		httpsPort   int
+	)
+	fs.StringVar(&from, "from", "localhost", "Downstream domain(s), comma-separated")
+	fs.StringVar(&to, "to", "", "Upstream address or URL (required, e.g. :5173 or http://localhost:3000)")
+	fs.StringVar(&verifyLevel, "verify", "0", "Verify level: 0 (always), 1 (only suspicious), 2 (only ai), 3 (suspicious & ai)")
+	fs.StringVar(&verifyLevel, "verify-level", "", "Alias for --verify")
+	fs.StringVar(&verifyLevel, "l", "", "Alias for --verify")
+	fs.StringVar(&verifyLevel, "mode", "", "Alias for --verify")
+	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
+	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification")
+	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address")
+	fs.IntVar(&httpPort, "http-port", 0, "HTTP port (default 80)")
+	fs.IntVar(&httpsPort, "https-port", 0, "HTTPS port (default 443)")
+
+	if err := parseInterspersedFlags(fs, args); err != nil {
+		if err == flag.ErrHelp {
+			printUsage(stdout)
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(to) == "" {
+		_, _ = fmt.Fprintln(stderr, "ERROR gymbag: reverse-proxy requires --to <upstream>")
+		return 2
+	}
+	var protectOpt *bool
+	if noProtect {
+		f := false
+		protectOpt = &f
+	}
+	loadOpts := config.LoadOptions{
+		Domain:      from,
+		Upstream:    to,
+		VerifyLevel: verifyLevel,
+		Protect:     protectOpt,
+		AdminAddr:   adminAddr,
+		HTTPPort:    httpPort,
+		HTTPSPort:   httpsPort,
+	}
+	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "ERROR gymbag: %v\n", err)
+		return 1
+	}
+	return serveWithSignals(cfg, "", false, loadOpts, sslProvider, stderr)
+}
+
+func runValidate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gymbag validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		cfgFile     string
+		sslProvider string
+	)
+	fs.StringVar(&cfgFile, "c", "", "Path to config file")
+	fs.StringVar(&cfgFile, "config", "", "Path to config file")
+	fs.StringVar(&sslProvider, "ssl-provider", "", "Override SSL/ACME provider")
+	if err := parseInterspersedFlags(fs, args); err != nil {
+		return 2
+	}
+	if cfgFile == "" && fs.NArg() > 0 {
+		cfgFile = fs.Arg(0)
+	}
+	cfg, err := loadConfigWithCLIFlags(config.LoadOptions{ConfigPath: cfgFile}, sslProvider)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "invalid configuration: %v\n", err)
+		return 1
+	}
+	globalDefRules := "on"
+	if !cfg.Defaults.DefaultRulesEnabled() {
+		globalDefRules = "off"
+	}
+	_, _ = fmt.Fprintf(stdout, "Valid configuration (%d site(s), bind %s, HTTP :%d -> HTTPS :%d, TLS %s, SSL provider: %s, default_rules: %s, IP security: %t [%s], AI IP list: %t)\n",
+		len(cfg.Sites), cfg.BindHost, cfg.HTTPPort, cfg.HTTPSPort, cfg.TLS.Mode,
+		effectiveSSLProviderLabel(cfg), globalDefRules,
+		cfg.Intel.IPSecurity, cfg.Intel.IPSecurityAction, cfg.Intel.AIIPList)
+	for _, s := range cfg.Sites {
+		defRulesLabel := "on"
+		if !s.WAF.DefaultRulesEnabled() {
+			defRulesLabel = "off"
+		}
+		state := fmt.Sprintf("protected (verify: %d [%s], difficulty: %d, default_rules: %s, custom rules: %d)",
+			int(s.WAF.VerifyLevel), s.WAF.VerifyLevel.Label(), s.WAF.Difficulty, defRulesLabel, len(s.WAF.Rules))
+		if !s.Protect {
+			state = fmt.Sprintf("unprotected (WAF verification off, custom rules: %d)", len(s.WAF.Rules))
+		}
+		_, _ = fmt.Fprintf(stdout, "  - %s -> %s [%s]\n", s.Domain, strings.Join(s.Upstreams, ", "), state)
+	}
+	return 0
+}
+
+func loadConfigWithCLIFlags(opts config.LoadOptions, sslProvider string) (config.Config, error) {
+	cfg, err := config.LoadWithEnv(opts, os.Getenv)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if trimmed := strings.TrimSpace(sslProvider); trimmed != "" {
+		wasCustom := strings.EqualFold(strings.TrimSpace(cfg.TLS.Provider), "custom")
+		prov, mode, customURL, err := config.NormalizeSSLProvider(trimmed)
+		if err != nil {
+			return config.Config{}, err
+		}
+		cfg.TLS.Provider = prov
+		cfg.TLS.Mode = mode
+		if customURL != "" {
+			cfg.TLS.ACMEDirectory = customURL
+		} else if wasCustom {
+			cfg.TLS.ACMEDirectory = config.DefaultTLSConfig().ACMEDirectory
+		}
+		if err := cfg.Validate(); err != nil {
+			return config.Config{}, err
+		}
+	}
+	return cfg, nil
+}
+
+func effectiveSSLProviderLabel(cfg config.Config) string {
+	if prov := strings.TrimSpace(cfg.TLS.Provider); prov != "" {
+		return prov
+	}
+	switch cfg.TLS.Mode {
+	case "local":
+		return "local"
+	case "selfsigned":
+		return "selfsigned"
+	case "file":
+		return "file"
+	case "acme":
+		return "letsencrypt"
+	default:
+		if localpki.AllLocalDomains(cfg.Domains()) {
+			return "local"
+		}
+		return "letsencrypt"
+	}
+}
+
+func runFmt(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gymbag fmt", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var overwrite bool
+	fs.BoolVar(&overwrite, "w", false, "Overwrite config file in place")
+	fs.BoolVar(&overwrite, "overwrite", false, "Overwrite config file in place")
+	if err := parseInterspersedFlags(fs, args); err != nil {
+		return 2
+	}
+	path := "Gymbagfile"
+	if fs.NArg() > 0 {
+		path = fs.Arg(0)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "ERROR gymbag fmt: %v\n", err)
+		return 1
+	}
+	formatted, err := config.FormatCaddyfile(string(raw))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "ERROR gymbag fmt: %v\n", err)
+		return 1
+	}
+	if overwrite {
+		if !bytes.Equal(raw, []byte(formatted)) {
+			if err := os.WriteFile(path, []byte(formatted), 0o644); err != nil {
+				_, _ = fmt.Fprintf(stderr, "ERROR gymbag fmt: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
+	_, _ = io.WriteString(stdout, formatted)
+	return 0
+}
+
+func serveWithSignals(cfg config.Config, watchPath string, watch bool, opts config.LoadOptions, sslProvider string, stderr io.Writer) int {
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	rt, err := server.BuildRuntime(ctx, cfg, server.RuntimeOptions{Logger: logger})
+	if err != nil {
+		logger.Error("startup failed", "error", err)
+		return 1
+	}
+
+	if watch && watchPath != "" {
+		go watchConfigFile(ctx, watchPath, opts, sslProvider, rt, logger)
+	}
+
+	if err := rt.Serve(ctx); err != nil {
+		logger.Error("server exited with error", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func resolveWatchedPath(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := strings.TrimSpace(os.Getenv("GYMBAG_CONFIG")); env != "" {
+		return env
+	}
+	for _, candidate := range config.DefaultConfigFiles {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func watchConfigFile(ctx context.Context, path string, opts config.LoadOptions, sslProvider string, rt *server.Runtime, logger *slog.Logger) {
+	lastRaw, _ := os.ReadFile(path)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	opts.ConfigPath = path
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			curRaw, err := os.ReadFile(path)
+			if err != nil || bytes.Equal(curRaw, lastRaw) {
+				continue
+			}
+			lastRaw = curRaw
+			nextCfg, err := loadConfigWithCLIFlags(opts, sslProvider)
+			if err != nil {
+				logger.Warn("config reload rejected", "file", path, "error", err)
+				continue
+			}
+			if err := rt.ReplaceConfig(nextCfg); err != nil {
+				logger.Warn("config apply failed", "file", path, "error", err)
+				continue
+			}
+			logger.Info("hot-reloaded configuration", "file", path, "sites", len(nextCfg.Sites))
+		}
+	}
+}
+
+// parseInterspersedFlags allows flags before or after positional arguments (GNU/Python argparse style).
+func parseInterspersedFlags(fs *flag.FlagSet, args []string) error {
+	var flagsPart []string
+	var posPart []string
+
+	// Identify boolean flags on fs so we don't consume the next token as their argument.
+	boolFlags := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) {
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			boolFlags[f.Name] = true
+		}
+	})
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			posPart = append(posPart, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			flagsPart = append(flagsPart, arg)
+			trimmed := strings.TrimLeft(arg, "-")
+			if !strings.Contains(trimmed, "=") && !boolFlags[trimmed] && i+1 < len(args) {
+				i++
+				flagsPart = append(flagsPart, args[i])
+			}
+		} else {
+			posPart = append(posPart, arg)
+		}
+	}
+	return fs.Parse(append(flagsPart, posPart...))
+}
+
+func printUsage(w io.Writer) {
+	_, _ = fmt.Fprintf(w, `Gymbag v%s — Caddy-like HTTPS Reverse Proxy & Proof-of-Work WAF
+
+Usage:
+  gymbag [config_file] [flags]
+  gymbag run [--config Gymbagfile] [--watch] [flags]
+  gymbag reverse-proxy --from <domains> --to <upstream> [--verify <0-3>]
+  gymbag validate [--config Gymbagfile]
+  gymbag fmt [--overwrite] [Gymbagfile]
+  gymbag version
+
+Verify Levels (--verify / Gymbagfile 'verify' directive):
+  0   always          — Require PoW verification for all visitors (default)
+  1   only suspicious — Trigger verification only on suspicious/scraper/spoofed requests
+  2   only ai         — Trigger verification only on AI crawlers & LLM agents
+  3   suspicious & ai — Trigger verification on both suspicious traffic and AI crawlers
+
+Flags:
+  -c, --config <path>        Path to Gymbagfile, Caddyfile, or JSON config
+  -d, --domain <domains>     Downstream domain(s), comma-separated
+  -u, --upstream <url>       Upstream URL to reverse proxy to
+  -l, --verify <0-3>         Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)
+      --ssl-provider <name>  SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)
+      --no-protect           Disable WAF verification for CLI-configured websites
+      --admin <addr>         Enable local REST Admin API (e.g. 127.0.0.1:2019)
+      --http-port <port>     HTTP redirect & ACME HTTP-01 port (default 80)
+      --https-port <port>    HTTPS gateway port (default 443)
+      --watch                Hot-reload config file changes automatically
+`, Version)
+}

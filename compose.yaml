@@ -1,0 +1,62 @@
+services:
+  gymbag:
+    build: .
+    image: ${GYMBAG_IMAGE:-gymbag:local}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GYMBAG_BIND: 0.0.0.0
+      GYMBAG_CONFIG: ${GYMBAG_CONFIG:-/app/Gymbagfile}
+      GYMBAG_DOMAIN: ${GYMBAG_DOMAIN:-}
+      GYMBAG_DOMAINS: ${GYMBAG_DOMAINS:-}
+      GYMBAG_UPSTREAM: ${GYMBAG_UPSTREAM:-}
+      GYMBAG_UPSTREAMS: ${GYMBAG_UPSTREAMS:-}
+      GYMBAG_PROTECT: ${GYMBAG_PROTECT:-}
+      GYMBAG_PROTECT_DOMAINS: ${GYMBAG_PROTECT_DOMAINS:-}
+      GYMBAG_VERIFY_LEVEL: ${GYMBAG_VERIFY_LEVEL:-}
+      GYMBAG_DEFAULT_RULES: ${GYMBAG_DEFAULT_RULES:-}
+      GYMBAG_IP_SECURITY: ${GYMBAG_IP_SECURITY:-}
+      GYMBAG_IP_SECURITY_ACTION: ${GYMBAG_IP_SECURITY_ACTION:-}
+      GYMBAG_IP_REPUTATION: ${GYMBAG_IP_REPUTATION:-}
+      GYMBAG_AI_IP_LIST: ${GYMBAG_AI_IP_LIST:-}
+      GYMBAG_INTEL_REFRESH: ${GYMBAG_INTEL_REFRESH:-}
+      GYMBAG_TLS_MODE: ${GYMBAG_TLS_MODE:-}
+      GYMBAG_SSL_PROVIDER: ${GYMBAG_SSL_PROVIDER:-}
+      GYMBAG_ACME_EMAIL: ${GYMBAG_ACME_EMAIL:-}
+      GYMBAG_ACME_DIRECTORY: ${GYMBAG_ACME_DIRECTORY:-}
+      GYMBAG_EAB_KID: ${GYMBAG_EAB_KID:-}
+      GYMBAG_EAB_HMAC_KEY: ${GYMBAG_EAB_HMAC_KEY:-}
+      GYMBAG_ACCOUNT_KEY_FILE: ${GYMBAG_ACCOUNT_KEY_FILE:-}
+      GYMBAG_AUTO_HOSTS: ${GYMBAG_AUTO_HOSTS:-}
+      GYMBAG_REDIS_URL: redis://redis:6379/0
+      GYMBAG_DIFFICULTY: ${GYMBAG_DIFFICULTY:-}
+      GYMBAG_SECRET: ${GYMBAG_SECRET:-}
+      GYMBAG_ADMIN: ${GYMBAG_ADMIN:-}
+    volumes:
+      - ./Gymbagfile:/app/Gymbagfile:ro
+      - gymbag-certs:/app/certs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_add:
+      - NET_BIND_SERVICE
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - gymbag-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  gymbag-certs:
+  gymbag-redis:

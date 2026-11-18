@@ -1,0 +1,10 @@
+.git
+.github
+certs
+*.pem
+*_test.go
+README.md
+compose.yaml
+Dockerfile
+.dockerignore
+/gymbag
