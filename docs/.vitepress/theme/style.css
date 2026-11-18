@@ -1,0 +1,245 @@
+:root {
+  --vp-c-bg: #fdfbf7;
+  --vp-c-bg-alt: #f4efe6;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f4efe6;
+
+  --vp-c-border: #e2d9c8;
+  --vp-c-divider: #e2d9c8;
+  --vp-c-gutter: #e8e0d2;
+
+  --vp-c-text-1: #1e1b18;
+  --vp-c-text-2: #575049;
+  --vp-c-text-3: #837a70;
+
+  --vp-c-brand-1: #b81d33;
+  --vp-c-brand-2: #9e172a;
+  --vp-c-brand-3: #d7263d;
+  --vp-c-brand-soft: rgba(184, 29, 51, 0.12);
+
+  --vp-c-tip-1: #2a7f4f;
+  --vp-c-tip-soft: rgba(42, 127, 79, 0.12);
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #b81d33 10%, #e04d5e 55%, #1e1b18 100%);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(184, 29, 51, 0.22) 0%, rgba(184, 29, 51, 0.04) 55%, transparent 75%);
+  --vp-home-hero-image-filter: blur(42px);
+
+  --vp-button-brand-bg: #b81d33;
+  --vp-button-brand-hover-bg: #9e172a;
+  --vp-button-brand-active-bg: #861223;
+  --vp-button-brand-text: #ffffff;
+  --vp-button-brand-border: transparent;
+
+  --vp-button-alt-bg: #f4efe6;
+  --vp-button-alt-hover-bg: #ebe2d3;
+  --vp-button-alt-text: #1e1b18;
+  --vp-button-alt-border: #e2d9c8;
+
+  --vp-code-block-bg: #f4efe6;
+  --vp-code-tab-bg: #ebe3d5;
+  --vp-code-tab-active-bar-color: #b81d33;
+}
+
+.dark {
+  --vp-c-bg: #070708;
+  --vp-c-bg-alt: #0e0e11;
+  --vp-c-bg-elv: #121216;
+  --vp-c-bg-soft: #121216;
+
+  --vp-c-border: #26262e;
+  --vp-c-divider: #22222a;
+  --vp-c-gutter: #18181f;
+
+  --vp-c-text-1: #f6f3ee;
+  --vp-c-text-2: #b9b1a6;
+  --vp-c-text-3: #837c73;
+
+  --vp-c-brand-1: #e63950;
+  --vp-c-brand-2: #d7263d;
+  --vp-c-brand-3: #ff5268;
+  --vp-c-brand-soft: rgba(215, 38, 61, 0.16);
+
+  --vp-c-tip-1: #3ca668;
+  --vp-c-tip-soft: rgba(60, 166, 104, 0.15);
+
+  --vp-home-hero-name-background: linear-gradient(120deg, #ff5268 10%, #d7263d 55%, #f6f3ee 100%);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(215, 38, 61, 0.34) 0%, rgba(215, 38, 61, 0.08) 55%, transparent 75%);
+
+  --vp-button-brand-bg: #d7263d;
+  --vp-button-brand-hover-bg: #e63950;
+  --vp-button-brand-active-bg: #b81d33;
+
+  --vp-button-alt-bg: #15151a;
+  --vp-button-alt-hover-bg: #1e1e26;
+  --vp-button-alt-text: #f6f3ee;
+  --vp-button-alt-border: #2b2b35;
+
+  --vp-code-block-bg: #101014;
+  --vp-code-tab-bg: #17171d;
+}
+
+/* Subtle architectural dot grid on Home */
+.VPHome {
+  background-image: radial-gradient(var(--vp-c-border) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+.VPHero .image-src {
+  max-width: 280px;
+  max-height: 280px;
+  filter: drop-shadow(0 18px 34px rgba(184, 29, 51, 0.18));
+  transition: transform 0.35s ease;
+}
+
+.VPHero .image-src:hover {
+  transform: translateY(-4px) scale(1.02);
+}
+
+.VPHero .tagline {
+  max-width: 580px;
+}
+
+/* Feature cards */
+.VPFeature {
+  border: 1px solid var(--vp-c-border) !important;
+  background: var(--vp-c-bg-elv) !important;
+  border-radius: 16px !important;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.VPFeature:hover {
+  transform: translateY(-2px);
+  border-color: var(--vp-c-brand-1) !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+}
+
+.dark .VPFeature:hover {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.VPFeature .icon {
+  background-color: var(--vp-c-brand-soft) !important;
+  border: 1px solid var(--vp-c-border);
+  border-radius: 10px;
+}
+
+/* Refined doc typography & code blocks */
+.vp-doc h1 {
+  letter-spacing: -0.025em;
+}
+
+.vp-doc h2 {
+  border-top-color: var(--vp-c-divider);
+  letter-spacing: -0.015em;
+}
+
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-c-border);
+  border-radius: 12px;
+}
+
+.vp-doc table {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Shared widget shell for interactive docs components */
+.gb-card {
+  background: var(--vp-c-bg-elv);
+  border: 1px solid var(--vp-c-border);
+  border-radius: 16px;
+  padding: 1.25rem;
+  margin: 1.25rem 0;
+  box-shadow: 0 8px 24px rgba(20, 16, 12, 0.05);
+}
+
+.dark .gb-card {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+}
+
+.gb-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.gb-pill {
+  appearance: none;
+  border: 1px solid var(--vp-c-border);
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-2);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.gb-pill:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+}
+
+.gb-pill.active {
+  background: var(--vp-c-brand-1);
+  border-color: var(--vp-c-brand-1);
+  color: #ffffff;
+}
+
+.gb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.gb-badge.pass {
+  background: var(--vp-c-tip-soft);
+  color: var(--vp-c-tip-1);
+}
+
+.gb-badge.challenge {
+  background: rgba(217, 119, 6, 0.14);
+  color: #d97706;
+}
+
+.dark .gb-badge.challenge {
+  color: #fbbf24;
+}
+
+.gb-badge.block {
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}
+
+.gb-mascot-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+.gb-mascot-tile {
+  background: var(--vp-c-bg-elv);
+  border: 1px solid var(--vp-c-border);
+  border-radius: 14px;
+  padding: 1rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.gb-mascot-tile img {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+}
