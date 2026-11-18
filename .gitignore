@@ -9,6 +9,3 @@ certs/
 cert.pem
 key.pem
 .env
-
-# Local site configuration
-Gymbagfile

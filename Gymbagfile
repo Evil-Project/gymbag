@@ -1,0 +1,121 @@
+# Gymbag configuration (Caddyfile-style)
+#
+# Out of the box, protected sites get:
+#   - Built-in security rules (/.env, /.git, /wp-admin, sqlmap/nuclei, SQLi/XSS query probes)
+#   - Auto-updating IP threat feeds (IPsum, Spamhaus DROP v4/v6, Feodo Tracker, Shodan InternetDB, StopForumSpam)
+#   - Official AI crawler IP ranges (OpenAI, Anthropic, Perplexity, Google, Apple)
+#
+# Verify levels (0-3):
+#   0 = always           (challenge every visitor without a clearance cookie)
+#   1 = only suspicious  (challenge threat IPs, scrapers, CLI HTTP clients, spoofed headers, & probes)
+#   2 = only ai          (challenge AI crawlers matched by official AI IP ranges or User-Agent)
+#   3 = suspicious & ai  (challenge both suspicious traffic and AI crawlers; let normal browsers through)
+
+localhost {
+    reverse_proxy http://localhost:5173
+    verify 3
+}
+
+# -----------------------------------------------------------------------------
+# Example 1: Local development with *.internal domains & Local PKI
+# -----------------------------------------------------------------------------
+# Gymbag automatically adds 127.0.0.1 / ::1 entries to /etc/hosts on startup,
+# removes them cleanly on shutdown, and signs leaf certs using its local CA chain:
+#   "Neuro-sama Headquarters Root CA" -> "Gymbag & Swarm SSL Local CA" -> leaf
+#
+# Trust certs/ca/neuro-sama-root-ca.pem once in your OS keychain for a green lock.
+#
+# app.internal {
+#     reverse_proxy http://localhost:3000
+#     verify
+# }
+#
+# api.internal {
+#     reverse_proxy http://localhost:8080
+#     protect off
+# }
+
+# -----------------------------------------------------------------------------
+# Example 2: Production multi-site setup, SSL providers, & custom firewall rules
+# -----------------------------------------------------------------------------
+# {
+#     email ops@example.com
+#     admin 127.0.0.1:2019
+#
+#     # SSL provider: letsencrypt (default), zerossl, google, ssl.com, litessl, buypass, local, or custom URL
+#     ssl_provider letsencrypt
+#
+#     # External Account Binding (required for google & ssl.com; optional for zerossl when email is set)
+#     # eab YOUR_EAB_KID YOUR_EAB_HMAC_KEY
+#     # account_key certs/acme-account.pem
+#
+#     # Toggle automatic /etc/hosts management for localhost & *.internal (default: on)
+#     # auto_hosts on
+#
+#     # IP threat intelligence & official AI crawler lists (all enabled by default)
+#     ip_security on
+#     ip_security_action verify   # "verify" (PoW challenge) or "block" (403 reject)
+#     ip_reputation on            # Shodan InternetDB + StopForumSpam live lookups
+#     ai_ip_list on               # OpenAI, Anthropic, Perplexity, Google, Apple CIDRs
+#     intel_refresh 21600         # Refresh feeds every 6 hours (in seconds)
+#
+#     # Global custom rules inherited by every site:
+#     block ip 198.51.100.99 192.0.2.0/24
+# }
+#
+# # Bare open-box shorthand: "verify" sets verify level 3 + built-in security rules;
+# # "block" switches threat-intel hits to immediate 403 rejections.
+# blog.example.com {
+#     reverse_proxy http://localhost:4321
+#     verify
+# }
+#
+# # Level 3 (suspicious & ai) + custom one-liner and compound rules
+# app.example.com, www.example.com {
+#     reverse_proxy http://localhost:3000
+#     verify 3
+#     difficulty 4
+#     # default_rules on          # Built-in baseline rules stay active unless set to off
+#
+#     # One-liner rules: <allow|verify|block> <ip|user_agent|path|query|method|header|cookie> <pattern...>
+#     allow  ip         127.0.0.1 10.0.0.0/8
+#     verify ip         203.0.113.0/24
+#     block  user_agent BadScraper ~^Scrapy/
+#     verify path       /api/export*
+#     block  query      "union select" ~(?i)<script
+#     verify header     Accept-Language ""
+#     allow  cookie     deploy_preview *
+#
+#     # Multi-condition rule block (fields combine with AND; values in one field combine with OR)
+#     rule "challenge-auth-posts" {
+#         action verify
+#         method POST
+#         path /login* /api/auth/*
+#     }
+# }
+#
+# # Level 2 (only ai): human visitors and normal tooling pass freely; AI crawlers solve PoW
+# docs.example.com {
+#     reverse_proxy http://localhost:4000
+#     verify 2
+# }
+#
+# # Level 1 (only suspicious): challenge scanners, spoofed headers, and bad IPs
+# api.example.com {
+#     reverse_proxy http://localhost:8080 http://localhost:8081
+#     verify 1
+# }
+#
+# # Level 0 (always): every visitor must solve PoW once per clearance window
+# staging.example.com {
+#     reverse_proxy http://localhost:3001
+#     verify 0
+#     # Bring your own certificate & key for a specific site (SNI)
+#     # tls /etc/ssl/staging.crt /etc/ssl/staging.key
+# }
+#
+# # Reverse proxy & HTTPS only (WAF challenges disabled)
+# static.example.com {
+#     reverse_proxy http://localhost:9000
+#     protect off
+# }
