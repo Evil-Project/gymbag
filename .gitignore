@@ -1,11 +1,21 @@
-# Compiled binaries
-/gymbag
-*.exe
-*.test
-*.out
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tool caches
+.ruff_cache/
+
+# macOS
+.DS_Store
 
 # Local TLS material and clearance secret
 certs/
 cert.pem
 key.pem
-.env
