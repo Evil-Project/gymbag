@@ -23,6 +23,11 @@ var Version = "0.1.0"
 
 // Execute parses argv and runs the requested Gymbag command, returning a process exit code.
 func Execute(argv []string, stdout, stderr io.Writer) int {
+	return ExecuteWithIO(argv, os.Stdin, stdout, stderr)
+}
+
+// ExecuteWithIO parses argv and runs the requested Gymbag command with custom I/O streams.
+func ExecuteWithIO(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	LoadDotEnv(".env")
 
 	if len(argv) > 0 {
@@ -33,6 +38,8 @@ func Execute(argv []string, stdout, stderr io.Writer) int {
 		case "help", "-h", "--help":
 			printUsage(stdout)
 			return 0
+		case "init", "generate", "gen-config":
+			return runInitCmd(argv[1:], stdin, stdout, stderr)
 		case "service":
 			return runServiceCmd(argv[1:], stdout, stderr)
 		case "validate":
@@ -414,12 +421,21 @@ func printUsage(w io.Writer) {
 
 Usage:
   gymbag [config_file] [flags]
+  gymbag init [flags]
   gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
   gymbag run [--config Gymbagfile] [--watch] [flags]
   gymbag reverse-proxy --from <domains> --to <upstream> [--verify <0-3>]
   gymbag validate [--config Gymbagfile]
   gymbag fmt [--overwrite] [Gymbagfile]
   gymbag version
+
+Quick Start (Two Commands):
+  1. gymbag init -d app.example.com -u http://localhost:3000
+  2. gymbag
+
+System Service (systemd / launchd / openrc / supervisor):
+  1. gymbag service install --config Gymbagfile
+  2. gymbag service start
 
 Verify Levels (--verify / Gymbagfile 'verify' directive):
   0   always          — Require PoW verification for all visitors (default)
