@@ -1666,6 +1666,11 @@ func FormatCaddyfile(text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return FormatConfig(cfg), nil
+}
+
+// FormatConfig renders a Config into canonical 4-space indented Gymbagfile format.
+func FormatConfig(cfg Config) string {
 	var b strings.Builder
 	defTLS := DefaultTLSConfig()
 	defWAF := DefaultSiteWAFConfig()
@@ -1821,5 +1826,5 @@ func FormatCaddyfile(text string) (string, error) {
 		}
 		b.WriteString("}\n")
 	}
-	return b.String(), nil
+	return b.String()
 }
