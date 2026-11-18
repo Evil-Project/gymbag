@@ -14,19 +14,21 @@ Build the binary with a standard Go toolchain:
 go build -o gymbag ./cmd/gymbag
 ```
 
-Drop a three-line `Gymbagfile` next to it:
-
-```caddyfile
-app.example.com {
-    reverse_proxy http://localhost:3000
-    verify
-}
-```
-
-Then start the server:
+Get started in **two commands** — generate `Gymbagfile` and start the server:
 
 ```bash
+# 1. Generate a config (interactive wizard, or pass flags for one-liner setup)
+./gymbag init -d app.example.com -u http://localhost:3000
+
+# 2. Start the server
 ./gymbag
+```
+
+Or register it as a system service (`systemd`, `launchd`, `openrc`, or `supervisor`) and start it:
+
+```bash
+./gymbag init -d app.example.com -u :3000 --service auto
+./gymbag service start
 ```
 
 Or skip the config file altogether for quick ad-hoc proxying:
@@ -312,11 +314,21 @@ app.example.com {
 Gymbag automatically loads `.env` from the working directory if present, then resolves `./Gymbagfile` or `./Caddyfile` unless overridden by flags:
 
 ```bash
+# Generate Gymbagfile via interactive wizard or flags
+./gymbag init
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+
 # Start server using ./Gymbagfile or ./Caddyfile
 ./gymbag
 
 # Start with an explicit config file and hot-reload on file save (polls every 2s)
 ./gymbag run --config Gymbagfile --watch
+
+# Register & manage a system service (systemd, launchd, openrc, supervisor)
+./gymbag service install --config Gymbagfile
+./gymbag service start
+./gymbag service status
+./gymbag service render --type systemd   # Preview a systemd unit on any OS
 
 # Ad-hoc reverse proxy without a config file
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
@@ -461,13 +473,14 @@ curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
 .
 ├── cmd/gymbag/          # Standalone CLI entrypoint
 ├── internal/
-│   ├── cli/             # Subcommands (run, reverse-proxy, validate, fmt, version), .env & file watcher
-│   ├── config/          # Config models, Gymbagfile/Caddyfile parser & formatter, GYMBAG_* env loader
+│   ├── cli/             # Subcommands (init, service, run, reverse-proxy, validate, fmt, version), .env & watcher
+│   ├── config/          # Config models, Gymbagfile/Caddyfile parser, formatter & generator, GYMBAG_* env loader
 │   ├── host/            # Domain normalization, IPv6 bracket handling, wildcard matching
 │   ├── intel/           # O(1) prefix set, auto-updating threat & AI crawler feeds, live IP reputation
 │   ├── localpki/        # Two-tier local CA ("Neuro-sama Headquarters Root CA") & /etc/hosts manager
 │   ├── proxy/           # Lock-free multi-site router, streaming HTTP & RFC 6455 WebSocket proxies
 │   ├── server/          # HTTPS gateway, HTTP->HTTPS/ACME redirector, middleware, REST Admin API
+│   ├── service/         # System service renderer & manager (systemd, launchd, openrc, supervisor)
 │   ├── store/           # StateStore interfaces, in-memory store, pure-Go RESP2 Redis client
 │   ├── tlsmanager/      # Multi-CA ACME v2 (EAB & ZeroSSL auto-EAB), local PKI, file & SNI cert manager
 │   └── waf/             # PoW verifier, HMAC clearance, open-box default rules, AI/suspicion detectors, UI
