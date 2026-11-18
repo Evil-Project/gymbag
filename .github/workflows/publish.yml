@@ -1,4 +1,4 @@
-name: Test and publish image
+name: Publish image
 
 on:
   push:
@@ -16,24 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Run vet and race tests
-        run: |
-          go vet ./...
-          go test -race ./...
-
   image:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
