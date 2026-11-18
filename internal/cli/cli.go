@@ -33,6 +33,8 @@ func Execute(argv []string, stdout, stderr io.Writer) int {
 		case "help", "-h", "--help":
 			printUsage(stdout)
 			return 0
+		case "service":
+			return runServiceCmd(argv[1:], stdout, stderr)
 		case "validate":
 			return runValidate(argv[1:], stdout, stderr)
 		case "fmt":
@@ -412,6 +414,7 @@ func printUsage(w io.Writer) {
 
 Usage:
   gymbag [config_file] [flags]
+  gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
   gymbag run [--config Gymbagfile] [--watch] [flags]
   gymbag reverse-proxy --from <domains> --to <upstream> [--verify <0-3>]
   gymbag validate [--config Gymbagfile]
