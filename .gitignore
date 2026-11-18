@@ -9,3 +9,7 @@ certs/
 cert.pem
 key.pem
 .env
+
+# macOS metadata
+.DS_Store
+._*
