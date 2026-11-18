@@ -1,33 +1,34 @@
-FROM golang:1.27-alpine AS builder
+FROM python:3.14-slim-bookworm
 
-WORKDIR /src
-COPY go.mod ./
-COPY cmd ./cmd
-COPY internal ./internal
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gymbag ./cmd/gymbag
-
-FROM alpine:3.21
-
-RUN apk add --no-cache ca-certificates libcap \
-    && adduser -D -u 10001 -h /app gymbag \
-    && mkdir -p /app/certs \
-    && chown -R gymbag:gymbag /app
-
-COPY --from=builder /out/gymbag /usr/local/bin/gymbag
-RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/gymbag
+RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin gymbag
 
 WORKDIR /app
-COPY --chown=gymbag:gymbag Gymbagfile /app/Gymbagfile
 
-ENV GYMBAG_BIND=0.0.0.0 \
-    GYMBAG_CONFIG=/app/Gymbagfile
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_DEV=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    GYMBAG_BIND=0.0.0.0
 
-USER gymbag
+COPY pyproject.toml uv.lock README.md LICENSE Gymbagfile ./
+COPY frontend ./frontend
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/gymbag-entrypoint
+
+RUN mkdir -p /app/certs \
+    && chown -R gymbag:gymbag /app
+
 EXPOSE 80 443
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["nc", "-z", "127.0.0.1", "80"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 80), 3); s.close()"]
 
-ENTRYPOINT ["gymbag"]
-CMD ["run", "--config", "/app/Gymbagfile"]
+ENTRYPOINT ["gymbag-entrypoint"]
+CMD ["python", "-m", "gymbag"]
