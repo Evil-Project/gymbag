@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -12,10 +11,21 @@ import (
 	"gymbag/internal/intel"
 )
 
+type textMatchKind uint8
+
+const (
+	textMatchExact textMatchKind = iota
+	textMatchSubstring
+	textMatchPrefixLower
+	textMatchSuffixLower
+	textMatchContainsLower
+	textMatchRegex
+)
+
 type textMatcher struct {
-	re        *regexp.Regexp
-	substring string
-	exact     string
+	kind  textMatchKind
+	re    *regexp.Regexp
+	token string
 }
 
 func compileTextMatcher(pattern string, defaultSubstring bool) textMatcher {
@@ -25,88 +35,152 @@ func compileTextMatcher(pattern string, defaultSubstring bool) textMatcher {
 			expr = "(?i)" + expr
 		}
 		if re, err := regexp.Compile(expr); err == nil {
-			return textMatcher{re: re}
+			return textMatcher{kind: textMatchRegex, re: re}
 		}
 	}
 	if strings.Contains(pattern, "*") {
+		lower := strings.ToLower(pattern)
+		starCount := strings.Count(lower, "*")
+		if starCount == 1 {
+			if strings.HasSuffix(lower, "*") {
+				return textMatcher{kind: textMatchPrefixLower, token: lower[:len(lower)-1]}
+			}
+			if strings.HasPrefix(lower, "*") {
+				return textMatcher{kind: textMatchSuffixLower, token: lower[1:]}
+			}
+		} else if starCount == 2 && strings.HasPrefix(lower, "*") && strings.HasSuffix(lower, "*") {
+			return textMatcher{kind: textMatchContainsLower, token: lower[1 : len(lower)-1]}
+		}
 		re := wildcardToRegexp(pattern, true)
-		return textMatcher{re: re}
+		return textMatcher{kind: textMatchRegex, re: re}
 	}
 	if defaultSubstring {
-		return textMatcher{substring: strings.ToLower(pattern)}
+		return textMatcher{kind: textMatchSubstring, token: strings.ToLower(pattern)}
 	}
-	return textMatcher{exact: pattern}
+	return textMatcher{kind: textMatchExact, token: pattern}
 }
 
-func (m textMatcher) match(val string) bool {
-	if m.re != nil {
-		return m.re.MatchString(val)
+func (m textMatcher) match(val, lowerVal string) bool {
+	switch m.kind {
+	case textMatchSubstring, textMatchContainsLower:
+		return strings.Contains(lowerVal, m.token)
+	case textMatchPrefixLower:
+		return strings.HasPrefix(lowerVal, m.token)
+	case textMatchSuffixLower:
+		return strings.HasSuffix(lowerVal, m.token)
+	case textMatchExact:
+		return val == m.token
+	case textMatchRegex:
+		return m.re != nil && m.re.MatchString(val)
+	default:
+		return false
 	}
-	if m.substring != "" {
-		return strings.Contains(strings.ToLower(val), m.substring)
-	}
-	return val == m.exact
 }
+
+func (m textMatcher) matchesEmpty() bool {
+	return m.match("", "")
+}
+
+type pathMatchKind uint8
+
+const (
+	pathMatchExact pathMatchKind = iota
+	pathMatchDirPrefix
+	pathMatchPrefix
+	pathMatchSuffix
+	pathMatchContains
+	pathMatchRegex
+)
 
 type pathMatcher struct {
-	re     *regexp.Regexp
-	prefix string
-	exact  string
+	kind    pathMatchKind
+	re      *regexp.Regexp
+	token   string
+	trimmed string // for pathMatchDirPrefix: token without trailing "/"
 }
 
 func compilePathMatcher(pattern string) pathMatcher {
 	if strings.HasPrefix(pattern, "~") {
 		expr := strings.TrimPrefix(pattern, "~")
 		if re, err := regexp.Compile(expr); err == nil {
-			return pathMatcher{re: re}
+			return pathMatcher{kind: pathMatchRegex, re: re}
 		}
 	}
 	if strings.Contains(pattern, "*") {
-		return pathMatcher{re: wildcardToRegexp(pattern, false)}
+		starCount := strings.Count(pattern, "*")
+		if starCount == 1 {
+			if strings.HasSuffix(pattern, "*") {
+				return pathMatcher{kind: pathMatchPrefix, token: pattern[:len(pattern)-1]}
+			}
+			if strings.HasPrefix(pattern, "*") {
+				return pathMatcher{kind: pathMatchSuffix, token: pattern[1:]}
+			}
+		} else if starCount == 2 && strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+			return pathMatcher{kind: pathMatchContains, token: pattern[1 : len(pattern)-1]}
+		}
+		return pathMatcher{kind: pathMatchRegex, re: wildcardToRegexp(pattern, false)}
 	}
 	if len(pattern) > 1 && strings.HasSuffix(pattern, "/") {
-		return pathMatcher{prefix: pattern}
+		return pathMatcher{
+			kind:    pathMatchDirPrefix,
+			token:   pattern,
+			trimmed: strings.TrimSuffix(pattern, "/"),
+		}
 	}
-	return pathMatcher{exact: pattern}
+	return pathMatcher{kind: pathMatchExact, token: pattern}
 }
 
 func (m pathMatcher) match(path string) bool {
-	if m.re != nil {
-		return m.re.MatchString(path)
+	switch m.kind {
+	case pathMatchExact:
+		return path == m.token
+	case pathMatchDirPrefix:
+		return path == m.trimmed || strings.HasPrefix(path, m.token)
+	case pathMatchPrefix:
+		return strings.HasPrefix(path, m.token)
+	case pathMatchSuffix:
+		return strings.HasSuffix(path, m.token)
+	case pathMatchContains:
+		return strings.Contains(path, m.token)
+	case pathMatchRegex:
+		return m.re != nil && m.re.MatchString(path)
+	default:
+		return false
 	}
-	if m.prefix != "" {
-		trimmed := strings.TrimSuffix(m.prefix, "/")
-		return path == trimmed || strings.HasPrefix(path, m.prefix)
-	}
-	return path == m.exact
 }
 
 type kvCompiledMatcher struct {
-	name      string
-	wantEmpty bool
-	wantAny   bool
-	valMatch  textMatcher
+	canonicalName string
+	lowerName     string
+	rawName       string
+	wantEmpty     bool
+	wantAny       bool
+	valMatch      textMatcher
 }
 
-func compileKVMatcher(kv config.KeyValueMatch, lowerName bool) kvCompiledMatcher {
-	name := strings.TrimSpace(kv.Name)
-	if lowerName {
-		name = strings.ToLower(name)
+func compileKVMatcher(kv config.KeyValueMatch, isHeader bool) kvCompiledMatcher {
+	raw := strings.TrimSpace(kv.Name)
+	lower := strings.ToLower(raw)
+	canonical := raw
+	if isHeader {
+		canonical = canonicalHeaderName(raw)
 	}
 	if kv.Pattern == "" {
-		return kvCompiledMatcher{name: name, wantEmpty: true}
+		return kvCompiledMatcher{canonicalName: canonical, lowerName: lower, rawName: raw, wantEmpty: true}
 	}
 	if kv.Pattern == "*" {
-		return kvCompiledMatcher{name: name, wantAny: true}
+		return kvCompiledMatcher{canonicalName: canonical, lowerName: lower, rawName: raw, wantAny: true}
 	}
 	return kvCompiledMatcher{
-		name:     name,
-		valMatch: compileTextMatcher(kv.Pattern, true),
+		canonicalName: canonical,
+		lowerName:     lower,
+		rawName:       raw,
+		valMatch:      compileTextMatcher(kv.Pattern, true),
 	}
 }
 
-func (m kvCompiledMatcher) matchMap(values map[string]string) bool {
-	actual := strings.TrimSpace(values[m.name])
+func (m kvCompiledMatcher) matchValue(rawVal string) bool {
+	actual := trimASCIISpace(rawVal)
 	if m.wantEmpty {
 		return actual == ""
 	}
@@ -116,7 +190,7 @@ func (m kvCompiledMatcher) matchMap(values map[string]string) bool {
 	if m.wantAny {
 		return true
 	}
-	return m.valMatch.match(actual)
+	return m.valMatch.match(actual, asciiLowerIfNeeded(actual))
 }
 
 func wildcardToRegexp(glob string, caseInsensitive bool) *regexp.Regexp {
@@ -138,15 +212,20 @@ func wildcardToRegexp(glob string, caseInsensitive bool) *regexp.Regexp {
 }
 
 type compiledCustomRule struct {
-	name       string
-	action     config.RuleAction
-	ipSet      *intel.IPSet
-	userAgents []textMatcher
-	paths      []pathMatcher
-	queries    []textMatcher
-	methods    map[string]struct{}
-	headers    []kvCompiledMatcher
-	cookies    []kvCompiledMatcher
+	name              string
+	action            config.RuleAction
+	ipSet             *intel.IPSet
+	userAgentAC       *asciiAC
+	userAgents        []textMatcher
+	hasUserAgents     bool
+	exactPaths        map[string]struct{}
+	paths             []pathMatcher
+	hasPaths          bool
+	queries           []textMatcher
+	queryMatchesEmpty bool
+	methods           map[string]struct{}
+	headers           []kvCompiledMatcher
+	cookies           []kvCompiledMatcher
 }
 
 func compileCustomRule(r config.CustomRule) compiledCustomRule {
@@ -163,14 +242,41 @@ func compileCustomRule(r config.CustomRule) compiledCustomRule {
 		}
 		out.ipSet = intel.NewIPSet(prefs)
 	}
-	for _, ua := range r.UserAgents {
-		out.userAgents = append(out.userAgents, compileTextMatcher(ua, true))
+	if len(r.UserAgents) > 0 {
+		out.hasUserAgents = true
+		var acSubs []string
+		for _, ua := range r.UserAgents {
+			tm := compileTextMatcher(ua, true)
+			if tm.kind == textMatchSubstring || tm.kind == textMatchContainsLower {
+				acSubs = append(acSubs, tm.token)
+			} else {
+				out.userAgents = append(out.userAgents, tm)
+			}
+		}
+		if len(acSubs) > 0 {
+			out.userAgentAC = compileASCIIAC(acSubs)
+		}
 	}
-	for _, p := range r.Paths {
-		out.paths = append(out.paths, compilePathMatcher(p))
+	if len(r.Paths) > 0 {
+		out.hasPaths = true
+		for _, p := range r.Paths {
+			pm := compilePathMatcher(p)
+			if pm.kind == pathMatchExact {
+				if out.exactPaths == nil {
+					out.exactPaths = make(map[string]struct{})
+				}
+				out.exactPaths[pm.token] = struct{}{}
+			} else {
+				out.paths = append(out.paths, pm)
+			}
+		}
 	}
 	for _, q := range r.Queries {
-		out.queries = append(out.queries, compileTextMatcher(q, true))
+		qm := compileTextMatcher(q, true)
+		if qm.matchesEmpty() {
+			out.queryMatchesEmpty = true
+		}
+		out.queries = append(out.queries, qm)
 	}
 	if len(r.Methods) > 0 {
 		out.methods = make(map[string]struct{}, len(r.Methods))
@@ -187,34 +293,26 @@ func compileCustomRule(r config.CustomRule) compiledCustomRule {
 	return out
 }
 
-func (cr *compiledCustomRule) matches(req IncomingRequest) bool {
-	if cr.ipSet != nil && !cr.ipSet.ContainsString(req.ClientIP) {
+func (cr *compiledCustomRule) matchesView(v *reqView) bool {
+	if cr.ipSet != nil && !cr.ipSet.ContainsString(v.clientIP) {
 		return false
 	}
 	if len(cr.methods) > 0 {
-		if _, ok := cr.methods[strings.ToUpper(req.Method)]; !ok {
+		if _, ok := cr.methods[v.method]; !ok {
 			return false
 		}
 	}
-	if len(cr.userAgents) > 0 {
-		ua := req.Headers["user-agent"]
+	if cr.hasPaths {
 		matched := false
-		for _, m := range cr.userAgents {
-			if m.match(ua) {
-				matched = true
-				break
-			}
+		if cr.exactPaths != nil {
+			_, matched = cr.exactPaths[v.path]
 		}
 		if !matched {
-			return false
-		}
-	}
-	if len(cr.paths) > 0 {
-		matched := false
-		for _, m := range cr.paths {
-			if m.match(req.Path) {
-				matched = true
-				break
+			for i := range cr.paths {
+				if cr.paths[i].match(v.path) {
+					matched = true
+					break
+				}
 			}
 		}
 		if !matched {
@@ -222,13 +320,20 @@ func (cr *compiledCustomRule) matches(req IncomingRequest) bool {
 		}
 	}
 	if len(cr.queries) > 0 {
-		decoded, err := url.QueryUnescape(req.Query)
-		if err != nil {
-			decoded = req.Query
+		if v.query == "" && !cr.queryMatchesEmpty {
+			return false
+		}
+		decoded := v.getDecodedQuery()
+		lowerDecoded := v.getLowerDecodedQuery()
+		rawDiffers := decoded != v.query
+		var lowerRaw string
+		if rawDiffers {
+			lowerRaw = asciiLowerIfNeeded(v.query)
 		}
 		matched := false
-		for _, m := range cr.queries {
-			if m.match(decoded) || m.match(req.Query) {
+		for i := range cr.queries {
+			m := &cr.queries[i]
+			if m.match(decoded, lowerDecoded) || (rawDiffers && m.match(v.query, lowerRaw)) {
 				matched = true
 				break
 			}
@@ -237,13 +342,31 @@ func (cr *compiledCustomRule) matches(req IncomingRequest) bool {
 			return false
 		}
 	}
-	for _, hm := range cr.headers {
-		if !hm.matchMap(req.Headers) {
+	if cr.hasUserAgents {
+		ua := v.getUserAgent()
+		matched := cr.userAgentAC != nil && cr.userAgentAC.MatchAny(ua)
+		if !matched && len(cr.userAgents) > 0 {
+			lowerUA := v.getLowerUA()
+			for i := range cr.userAgents {
+				if cr.userAgents[i].match(ua, lowerUA) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
 			return false
 		}
 	}
-	for _, cm := range cr.cookies {
-		if !cm.matchMap(req.Cookies) {
+	for i := range cr.headers {
+		hm := &cr.headers[i]
+		if !hm.matchValue(v.getHeader(hm.canonicalName, hm.lowerName)) {
+			return false
+		}
+	}
+	for i := range cr.cookies {
+		cm := &cr.cookies[i]
+		if !cm.matchValue(v.getCookie(cm.rawName)) {
 			return false
 		}
 	}
@@ -270,10 +393,15 @@ func NewCustomRulesRule(rules []config.CustomRule, tokens ClearanceManager, cook
 	}
 }
 
-func (r *CustomRulesRule) Evaluate(_ context.Context, req IncomingRequest) *Decision {
+func (r *CustomRulesRule) Evaluate(ctx context.Context, req IncomingRequest) *Decision {
+	v := newIncomingReqView(&req)
+	return r.evaluateView(ctx, &v)
+}
+
+func (r *CustomRulesRule) evaluateView(_ context.Context, v *reqView) *Decision {
 	for i := range r.rules {
 		rule := &r.rules[i]
-		if !rule.matches(req) {
+		if !rule.matchesView(v) {
 			continue
 		}
 		switch rule.action {
@@ -285,11 +413,11 @@ func (r *CustomRulesRule) Evaluate(_ context.Context, req IncomingRequest) *Deci
 			return &d
 		case config.RuleActionVerify:
 			// Allow CORS preflight and WAF challenge-completion endpoints so browser PoW succeeds.
-			if strings.EqualFold(req.Method, http.MethodOptions) || isInternalWAFPublicPath(req.Path) {
+			if v.method == http.MethodOptions || isInternalWAFPublicPath(v.path) {
 				d := Allow()
 				return &d
 			}
-			if r.tokens != nil && r.tokens.Valid(req.Cookies[r.cookieName], req.Host, req.ClientIP) {
+			if r.tokens != nil && r.tokens.Valid(v.getCookie(r.cookieName), v.host, v.clientIP) {
 				d := Allow()
 				return &d
 			}
@@ -301,6 +429,9 @@ func (r *CustomRulesRule) Evaluate(_ context.Context, req IncomingRequest) *Deci
 }
 
 func isInternalWAFPublicPath(path string) bool {
+	if len(path) < 11 || path[0] != '/' || path[1] != '.' || path[2] != 'w' {
+		return false
+	}
 	if strings.HasPrefix(path, "/.waf/assets/") || strings.HasPrefix(path, "/.waf/v1/assets/") {
 		return true
 	}

@@ -2,7 +2,6 @@ package waf
 
 import (
 	"context"
-	"net/url"
 	"slices"
 	"strings"
 )
@@ -121,8 +120,8 @@ var defaultSuspiciousQueryTokens = []string{
 // AIDetector identifies AI training crawlers, AI search crawlers, and LLM agent fetchers
 // using both official AI crawler IP CIDR lists and User-Agent / agent header signatures.
 type AIDetector struct {
-	signatures []string
-	intel      IntelProvider
+	ac    *asciiAC
+	intel IntelProvider
 }
 
 // NewAIDetector creates an AIDetector combining AI IP feeds, built-in signatures, and custom patterns.
@@ -134,37 +133,50 @@ func NewAIDetector(customPatterns []string, intel IntelProvider) *AIDetector {
 			sigs = append(sigs, trimmed)
 		}
 	}
-	return &AIDetector{signatures: sigs, intel: intel}
+	return &AIDetector{ac: compileASCIIAC(sigs), intel: intel}
 }
 
 // Match reports whether req originates from a known AI crawler IP block or LLM agent signature.
-func (d *AIDetector) Match(_ context.Context, req IncomingRequest) bool {
-	if d.intel != nil && d.intel.IsAIIP(req.ClientIP) {
+func (d *AIDetector) Match(ctx context.Context, req IncomingRequest) bool {
+	v := newIncomingReqView(&req)
+	return d.matchView(ctx, &v)
+}
+
+func (d *AIDetector) matchView(_ context.Context, v *reqView) bool {
+	if v.aiMatchChecked {
+		return v.isAIMatch
+	}
+	matched := d.evalAI(v)
+	v.aiMatchChecked = true
+	v.isAIMatch = matched
+	return matched
+}
+
+func (d *AIDetector) evalAI(v *reqView) bool {
+	if d.intel != nil && v.checkAIIP(d.intel) {
 		return true
 	}
-	if req.Headers["x-ai-agent"] != "" || req.Headers["sec-agent"] != "" {
+	if v.getHeader("X-Ai-Agent", "x-ai-agent") != "" || v.getHeader("Sec-Agent", "sec-agent") != "" {
 		return true
 	}
-	ua := strings.ToLower(strings.TrimSpace(req.Headers["user-agent"]))
+	ua := trimASCIISpace(v.getUserAgent())
 	if ua == "" {
 		return false
 	}
-	for _, sig := range d.signatures {
-		if strings.Contains(ua, sig) {
-			return true
-		}
-	}
-	return false
+	return d.ac.MatchAny(ua)
 }
 
 // SuspicionDetector identifies malicious/threat IPs, automated scrapers, headless browsers,
 // header spoofing, and reconnaissance/exploit probe traffic.
 type SuspicionDetector struct {
-	uaSignatures []string
+	uaAC         *asciiAC
+	queryAC      *asciiAC
 	pathPrefixes []string
 	aiDetector   Detector
 	intel        IntelProvider
 }
+
+var defaultSuspiciousQueryAC = compileASCIIAC(defaultSuspiciousQueryTokens)
 
 // NewSuspicionDetector creates a SuspicionDetector with optional threat intel and custom patterns.
 func NewSuspicionDetector(customUAs, customPaths []string, aiDetector Detector, intel IntelProvider) *SuspicionDetector {
@@ -183,7 +195,8 @@ func NewSuspicionDetector(customUAs, customPaths []string, aiDetector Detector, 
 		}
 	}
 	return &SuspicionDetector{
-		uaSignatures: uas,
+		uaAC:         compileASCIIAC(uas),
+		queryAC:      defaultSuspiciousQueryAC,
 		pathPrefixes: paths,
 		aiDetector:   aiDetector,
 		intel:        intel,
@@ -192,72 +205,79 @@ func NewSuspicionDetector(customUAs, customPaths []string, aiDetector Detector, 
 
 // Match reports whether req exhibits threat-intel, bot, scraper, spoofing, or exploit-probing signals.
 func (d *SuspicionDetector) Match(ctx context.Context, req IncomingRequest) bool {
+	v := newIncomingReqView(&req)
+	return d.matchView(ctx, &v)
+}
+
+func (d *SuspicionDetector) matchView(ctx context.Context, v *reqView) bool {
 	// 1. Exploit / reconnaissance path & query probes always trigger suspicion.
-	lowerPath := strings.ToLower(req.Path)
+	lowerPath := v.getLowerPath()
 	for _, prefix := range d.pathPrefixes {
 		if strings.HasPrefix(lowerPath, prefix) {
 			return true
 		}
 	}
-	if req.Query != "" {
-		decodedQuery, err := url.QueryUnescape(req.Query)
-		if err != nil {
-			decodedQuery = req.Query
-		}
-		lowerQuery := strings.ToLower(decodedQuery)
-		for _, tok := range defaultSuspiciousQueryTokens {
-			if strings.Contains(lowerQuery, tok) {
-				return true
-			}
+	if v.query != "" {
+		if d.queryAC.MatchAny(v.getDecodedQuery()) {
+			return true
 		}
 	}
 
-	// 2. IP security threat-feed & live reputation check (Spamhaus DROP, IPsum, Feodo, InternetDB, StopForumSpam).
-	if d.intel != nil && d.intel.IsThreatIP(ctx, req.ClientIP) {
+	// 2. IP security threat-feed & live reputation check (reuses cached result from ThreatIntelRule).
+	if d.intel != nil && v.checkThreatIP(ctx, d.intel) {
 		return true
 	}
 
-	ua := strings.ToLower(strings.TrimSpace(req.Headers["user-agent"]))
+	rawUA := trimASCIISpace(v.getUserAgent())
 	// 3. Missing or implausibly short User-Agent.
-	if len(ua) < 8 {
+	if len(rawUA) < 8 {
 		return true
 	}
 
 	// If recognized as a known AI crawler (without exploit probes or threat IP above), leave classification
 	// to AIDetector so verify level 1 (only suspicious) and level 2 (only ai) stay cleanly orthogonal.
-	if d.aiDetector != nil && d.aiDetector.Match(ctx, req) {
-		return false
+	if d.aiDetector != nil {
+		if fd, ok := d.aiDetector.(fastDetector); ok {
+			if fd.matchView(ctx, v) {
+				return false
+			}
+		} else if d.aiDetector.Match(ctx, v.toIncoming()) {
+			return false
+		}
 	}
 
-	// 3. Known CLI tools, HTTP client libraries, scrapers, headless browsers, and vulnerability scanners.
-	if slices.Contains(defaultExactSuspiciousUAs, ua) {
+	// 4. Known CLI tools, HTTP client libraries, scrapers, headless browsers, and vulnerability scanners.
+	if len(rawUA) <= 6 && slices.Contains(defaultExactSuspiciousUAs, v.getLowerUA()) {
 		return true
 	}
-	for _, sig := range d.uaSignatures {
-		if strings.Contains(ua, sig) {
-			return true
-		}
+	if d.uaAC.MatchAny(rawUA) {
+		return true
 	}
 
-	// 4. Interactive browser impersonation without standard browser request headers.
-	claimsInteractiveBrowser := strings.Contains(ua, "mozilla/5.0") &&
-		!strings.Contains(ua, "compatible;") &&
-		(strings.Contains(ua, "chrome/") ||
-			strings.Contains(ua, "firefox/") ||
-			strings.Contains(ua, "safari/") ||
-			strings.Contains(ua, "edg/"))
-
-	if claimsInteractiveBrowser {
-		if strings.TrimSpace(req.Headers["accept"]) == "" {
+	// 5. Interactive browser impersonation without standard browser request headers.
+	if claimsInteractiveBrowserASCII(rawUA) {
+		if trimASCIISpace(v.getHeader("Accept", "accept")) == "" {
 			return true
 		}
-		if strings.TrimSpace(req.Headers["accept-language"]) == "" &&
-			strings.TrimSpace(req.Headers["sec-fetch-mode"]) == "" {
+		if trimASCIISpace(v.getHeader("Accept-Language", "accept-language")) == "" &&
+			trimASCIISpace(v.getHeader("Sec-Fetch-Mode", "sec-fetch-mode")) == "" {
 			return true
 		}
 	}
 
 	return false
+}
+
+var (
+	browserMozillaAC = compileASCIIAC([]string{"mozilla/5.0"})
+	browserCompatAC  = compileASCIIAC([]string{"compatible;"})
+	browserEngineAC  = compileASCIIAC([]string{"chrome/", "firefox/", "safari/", "edg/"})
+)
+
+func claimsInteractiveBrowserASCII(ua string) bool {
+	return browserMozillaAC.MatchAny(ua) &&
+		!browserCompatAC.MatchAny(ua) &&
+		browserEngineAC.MatchAny(ua)
 }
 
 // OrDetector matches when any child Detector matches (Composite pattern).
@@ -271,8 +291,20 @@ func NewOrDetector(detectors ...Detector) *OrDetector {
 }
 
 func (o *OrDetector) Match(ctx context.Context, req IncomingRequest) bool {
+	v := newIncomingReqView(&req)
+	return o.matchView(ctx, &v)
+}
+
+func (o *OrDetector) matchView(ctx context.Context, v *reqView) bool {
 	for _, d := range o.detectors {
-		if d != nil && d.Match(ctx, req) {
+		if d == nil {
+			continue
+		}
+		if fd, ok := d.(fastDetector); ok {
+			if fd.matchView(ctx, v) {
+				return true
+			}
+		} else if d.Match(ctx, v.toIncoming()) {
 			return true
 		}
 	}

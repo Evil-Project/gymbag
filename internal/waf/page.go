@@ -21,10 +21,24 @@ const (
 	RejectAsset  = "reject_Evil_v3_corrected.png"
 )
 
-var allowedAssets = map[string]struct{}{
-	PensiveAsset: {},
-	HappyAsset:   {},
-	RejectAsset:  {},
+type cachedAsset struct {
+	data []byte
+	etag string
+}
+
+var preloadedAssets map[string]cachedAsset
+
+func init() {
+	preloadedAssets = make(map[string]cachedAsset, 3)
+	for _, name := range []string{PensiveAsset, HappyAsset, RejectAsset} {
+		if raw, err := embeddedAssets.ReadFile("assets/" + name); err == nil {
+			sum := sha256.Sum256(raw)
+			preloadedAssets[name] = cachedAsset{
+				data: raw,
+				etag: `"` + hex.EncodeToString(sum[:12]) + `"`,
+			}
+		}
+	}
 }
 
 var challengeTagRE = regexp.MustCompile(`(?s)(<script type="application/json" id="gymbag-challenge">).*?(</script>)`)
@@ -37,23 +51,24 @@ var pageSecurityHeaders = map[string]string{
 		"script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'",
 }
 
-// AssetData retrieves an embedded mascot PNG asset and its ETag if allowed.
+// AssetData retrieves a pre-cached embedded mascot PNG asset and its ETag if allowed.
 func AssetData(name string) (data []byte, etag string, ok bool) {
-	if _, allowed := allowedAssets[name]; !allowed {
+	a, exists := preloadedAssets[name]
+	if !exists {
 		return nil, "", false
 	}
-	raw, err := embeddedAssets.ReadFile("assets/" + name)
-	if err != nil {
-		return nil, "", false
-	}
-	sum := sha256.Sum256(raw)
-	return raw, `"` + hex.EncodeToString(sum[:12]) + `"`, true
+	return a.data, a.etag, true
 }
 
 // Renderer renders HTML challenge and rejection responses using embedded templates and solver JS.
 type Renderer struct {
-	template string
-	solverJS string
+	prefix       string
+	suffix       string
+	hasTag       bool
+	fullFallback string
+
+	rejectForbidden []byte
+	rejectRateLimit []byte
 }
 
 // NewRenderer constructs a Renderer using the embedded HTML template (or customTemplatePath if non-empty).
@@ -66,55 +81,73 @@ func NewRenderer(customTemplatePath string) *Renderer {
 			tpl = string(diskBytes)
 		}
 	}
-	return &Renderer{
-		template: tpl,
-		solverJS: string(solverBytes),
+	solverJS := string(solverBytes)
+	tpl = strings.ReplaceAll(tpl, "/* SOLVER_PLACEHOLDER */", solverJS)
+	tpl = strings.ReplaceAll(tpl, "SOLVER_PLACEHOLDER", solverJS)
+
+	r := &Renderer{
+		fullFallback:    tpl,
+		rejectForbidden: []byte(buildRejectHTML("rule", http.StatusForbidden)),
+		rejectRateLimit: []byte(buildRejectHTML("rate", http.StatusTooManyRequests)),
 	}
+	if loc := challengeTagRE.FindStringSubmatchIndex(tpl); len(loc) == 6 {
+		// loc[2]:loc[3] is opening <script ...>, loc[4]:loc[5] is closing </script>
+		r.prefix = tpl[:loc[3]]
+		r.suffix = tpl[loc[4]:]
+		r.hasTag = true
+	}
+	return r
+}
+
+type challengeSpecJSON struct {
+	ChallengeID string            `json:"challenge_id"`
+	Difficulty  int               `json:"difficulty"`
+	Images      map[string]string `json:"images"`
+}
+
+var challengeImages = map[string]string{
+	"pass": "/.waf/assets/" + HappyAsset,
+	"fail": "/.waf/assets/" + RejectAsset,
 }
 
 // RenderChallengeHTML returns the rendered proof-of-work HTML document.
 func (r *Renderer) RenderChallengeHTML(challengeID string, difficulty int) string {
-	spec := map[string]any{
-		"challenge_id": challengeID,
-		"difficulty":   difficulty,
-		"images": map[string]string{
-			"pass": "/.waf/assets/" + HappyAsset,
-			"fail": "/.waf/assets/" + RejectAsset,
-		},
+	if !r.hasTag {
+		return r.fullFallback
 	}
-	rawJSON, _ := json.Marshal(spec)
+	rawJSON, _ := json.Marshal(challengeSpecJSON{
+		ChallengeID: challengeID,
+		Difficulty:  difficulty,
+		Images:      challengeImages,
+	})
 	escapedJSON := strings.ReplaceAll(string(rawJSON), "<", `\u003c`)
 
-	replaced := false
-	html := challengeTagRE.ReplaceAllStringFunc(r.template, func(match string) string {
-		if replaced {
-			return match
-		}
-		replaced = true
-		sub := challengeTagRE.FindStringSubmatch(match)
-		if len(sub) == 3 {
-			return sub[1] + escapedJSON + sub[2]
-		}
-		return match
-	})
-	html = strings.ReplaceAll(html, "/* SOLVER_PLACEHOLDER */", r.solverJS)
-	html = strings.ReplaceAll(html, "SOLVER_PLACEHOLDER", r.solverJS)
-	return html
+	var b strings.Builder
+	b.Grow(len(r.prefix) + len(escapedJSON) + len(r.suffix))
+	b.WriteString(r.prefix)
+	b.WriteString(escapedJSON)
+	b.WriteString(r.suffix)
+	return b.String()
 }
 
 // WriteChallenge writes the 403 HTML proof-of-work page to w.
 func (r *Renderer) WriteChallenge(w http.ResponseWriter, challengeID string, difficulty int) {
 	html := r.RenderChallengeHTML(challengeID, difficulty)
+	hdr := w.Header()
 	for k, v := range pageSecurityHeaders {
-		w.Header().Set(k, v)
+		hdr.Set(k, v)
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write([]byte(html))
 }
 
 // RenderRejectHTML returns the rendered block or rate-limit HTML document.
 func (r *Renderer) RenderRejectHTML(reason string, statusCode int) string {
+	return buildRejectHTML(reason, statusCode)
+}
+
+func buildRejectHTML(reason string, statusCode int) string {
 	title := "Request blocked"
 	detail := "Gymbag blocked this request."
 	if reason == "rate" {
@@ -227,19 +260,29 @@ func (r *Renderer) RenderRejectHTML(reason string, statusCode int) string {
 `, title, title, RejectAsset, detail, retry)
 }
 
-// WriteReject writes the HTML block/rate-limit page to w.
+// WriteReject writes the HTML block/rate-limit page to w using pre-rendered static HTML bytes.
 func (r *Renderer) WriteReject(w http.ResponseWriter, reason string, statusCode int) {
 	if statusCode == 0 {
 		statusCode = http.StatusForbidden
 	}
-	html := r.RenderRejectHTML(reason, statusCode)
+	hdr := w.Header()
 	for k, v := range pageSecurityHeaders {
-		w.Header().Set(k, v)
+		hdr.Set(k, v)
 	}
+	var body []byte
 	if statusCode == http.StatusTooManyRequests {
-		w.Header().Set("Retry-After", "60")
+		hdr.Set("Retry-After", "60")
+		if reason == "rate" {
+			body = r.rejectRateLimit
+		} else {
+			body = []byte(buildRejectHTML(reason, statusCode))
+		}
+	} else if reason != "rate" {
+		body = r.rejectForbidden
+	} else {
+		body = []byte(buildRejectHTML(reason, statusCode))
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(statusCode)
-	_, _ = w.Write([]byte(html))
+	_, _ = w.Write(body)
 }

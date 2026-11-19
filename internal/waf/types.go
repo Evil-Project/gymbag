@@ -133,6 +133,18 @@ type AccessGate interface {
 	Decide(ctx context.Context, req IncomingRequest) Decision
 }
 
+// HTTPAccessGate is an optional zero-allocation fast-path extension of AccessGate operating directly on *http.Request.
+type HTTPAccessGate interface {
+	AccessGate
+	DecideHTTP(ctx context.Context, r *http.Request, hostName, clientIP string) Decision
+}
+
+// ClearanceInspector optionally exposes token expiration timestamps alongside clearance validation.
+type ClearanceInspector interface {
+	ClearanceManager
+	Parse(token, hostName, clientIP string) (expiresAt int64, ok bool)
+}
+
 // Submission represents the browser's proof-of-work solution payload.
 type Submission struct {
 	ChallengeID string `json:"challenge_id"`
