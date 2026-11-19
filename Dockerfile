@@ -5,7 +5,8 @@ COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gymbag ./cmd/gymbag
+ARG VERSION=0.1.0
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X gymbag/internal/cli.Version=${VERSION}" -o /out/gymbag ./cmd/gymbag
 
 FROM alpine:3.21
 
