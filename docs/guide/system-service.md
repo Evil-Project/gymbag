@@ -59,6 +59,52 @@ sudo ./gymbag service start --system
 
 ---
 
+## NixOS Declarative Module (`services.gymbag`)
+
+On NixOS, `/etc/systemd/system` is managed declaratively. Add the flake input and import `nixosModules.default`:
+
+```nix
+{
+  inputs.gymbag.url = "github:Evil-Project/gymbag";
+
+  outputs = { nixpkgs, gymbag, ... }: {
+    nixosConfigurations.my-server = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        gymbag.nixosModules.default
+        {
+          services.gymbag = {
+            enable = true;
+            openFirewall = true;
+            configText = ''
+              app.example.com {
+                  reverse_proxy http://127.0.0.1:3000
+                  verify 3
+              }
+            '';
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, and `CAP_NET_BIND_SERVICE` so it binds ports `80`/`443` safely without root.
+
+---
+
+## Arch Linux (`pacman` + `systemd`)
+
+When installed via the Arch Linux `.pkg.tar.zst` package (or `packaging/arch/PKGBUILD`), Gymbag installs `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile`, and `/usr/lib/systemd/system/gymbag.service`:
+
+```bash
+sudo gymbag init -o /etc/gymbag/Gymbagfile
+sudo systemctl enable --now gymbag
+```
+
+---
+
 ## Previewing or Generating Unit Files Cross-Platform (`render`)
 
 You can render a service file for **any** supported manager from **any** OS (for example, generating a Linux `systemd` unit on macOS before deploying to a VPS):

@@ -8,11 +8,27 @@ If you self-host web apps, Gitea/Forgejo instances, documentation sites, or inte
 
 ## Quick Start (Open-Box Protection)
 
-Build the binary with a standard Go toolchain:
+Download a prebuilt static binary from [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) (Linux/macOS/Windows, plus `.pkg.tar.zst` for Arch Linux), install via Nix Flakes, or build from source:
 
 ```bash
 go build -o gymbag ./cmd/gymbag
 ```
+
+**Arch Linux:**
+```bash
+# Install prebuilt release package (.pkg.tar.zst)
+sudo pacman -U gymbag-0.1.0-1-x86_64.pkg.tar.zst
+# Or build locally with makepkg
+cd packaging/arch && makepkg -si
+```
+
+**Nix / NixOS:**
+```bash
+# Run or install via flake
+nix run github:Evil-Project/gymbag -- --help
+nix profile install github:Evil-Project/gymbag
+```
+Static `CGO_ENABLED=0` Linux release binaries also execute directly on NixOS without `patchelf` or `nix-ld`, and `nixosModules.default` provides declarative `services.gymbag` configuration.
 
 Get started in **two commands** — generate `Gymbagfile` and start the server:
 

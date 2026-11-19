@@ -2,13 +2,37 @@
 
 Gymbag is compiled into a single standalone binary with zero external Go dependencies — all HTML templates, SHA-256 browser solver scripts, and mascot PNGs are embedded via `go:embed`.
 
-## Build from Source
+## Installation
 
-```bash
+### Prebuilt Static Binaries & Arch Linux Packages
+
+Every tagged release on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) publishes `CGO_ENABLED=0` static binaries (`linux`, `darwin`, `windows` for `amd64`/`arm64`) as well as Arch Linux `.pkg.tar.zst` packages (`x86_64` and `aarch64`):
+
+::: code-group
+```bash [Arch Linux (pacman)]
+# Install a release .pkg.tar.zst binary package
+sudo pacman -U gymbag-<version>-1-x86_64.pkg.tar.zst
+
+# Or build from source with PKGBUILD
+git clone https://github.com/Evil-Project/gymbag.git
+cd gymbag/packaging/arch
+makepkg -si
+```
+
+```bash [Nix / NixOS]
+# Run or install directly via Nix Flakes
+nix run github:Evil-Project/gymbag -- --help
+nix profile install github:Evil-Project/gymbag
+
+# Static Linux release tarballs (CGO_ENABLED=0) also run directly on NixOS
+```
+
+```bash [Build from Source (Go)]
 git clone https://github.com/Evil-Project/gymbag.git
 cd gymbag
 go build -o gymbag ./cmd/gymbag
 ```
+:::
 
 ## Start in Two Commands
 
