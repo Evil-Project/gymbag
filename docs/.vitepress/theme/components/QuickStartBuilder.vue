@@ -1,5 +1,193 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useData } from 'vitepress'
+
+const { lang } = useData()
+
+type LocaleKey = 'en' | 'zh' | 'ja' | 'ko' | 'es'
+
+const activeLocale = computed<LocaleKey>(() => {
+  const code = (lang.value || 'en').slice(0, 2).toLowerCase()
+  if (code === 'zh' || code === 'ja' || code === 'ko' || code === 'es') {
+    return code
+  }
+  return 'en'
+})
+
+const copyByLocale: Record<
+  LocaleKey,
+  {
+    eyebrow: string
+    title: string
+    copyBtn: string
+    copiedBtn: string
+    domain: string
+    upstream: string
+    verifyLevel: string
+    verify3: string
+    verify2: string
+    verify1: string
+    verify0: string
+    verifyOff: string
+    service: string
+    serviceNone: string
+    serviceAuto: string
+    serviceSystemd: string
+    serviceLaunchd: string
+    serviceOpenrc: string
+    serviceSupervisor: string
+    sslProvider: string
+    acmeEmail: string
+    runCommands: string
+    step1Gen: string
+    step1GenSvc: string
+    step2Start: string
+    generatedFile: string
+  }
+> = {
+  en: {
+    eyebrow: 'Two-Command Quickstart',
+    title: 'Configure & Launch Preview',
+    copyBtn: 'Copy 2 Commands',
+    copiedBtn: 'Copied!',
+    domain: 'Domain',
+    upstream: 'Upstream URL',
+    verifyLevel: 'Verify Level',
+    verify3: '3 — suspicious & ai (Recommended)',
+    verify2: '2 — only ai',
+    verify1: '1 — only suspicious',
+    verify0: '0 — always challenge',
+    verifyOff: 'off — protect off',
+    service: 'System Service',
+    serviceNone: 'None (run directly with ./gymbag)',
+    serviceAuto: 'auto (detect OS init)',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'SSL Provider',
+    acmeEmail: 'ACME Email',
+    runCommands: 'Run these 2 commands',
+    step1Gen: '# 1. Generate config',
+    step1GenSvc: '# 1. Generate config & register service',
+    step2Start: '# 2. Start service',
+    generatedFile: 'Generated Gymbagfile'
+  },
+  zh: {
+    eyebrow: '两条命令快速启动',
+    title: '配置生成与启动预览',
+    copyBtn: '复制两条命令',
+    copiedBtn: '已复制!',
+    domain: '域名',
+    upstream: '上游地址 (Upstream URL)',
+    verifyLevel: '验证级别 (Verify Level)',
+    verify3: '3 — 可疑流量与 AI 爬虫（推荐）',
+    verify2: '2 — 仅 AI 爬虫',
+    verify1: '1 — 仅可疑流量',
+    verify0: '0 — 始终验证',
+    verifyOff: 'off — 关闭 WAF 防护',
+    service: '系统服务',
+    serviceNone: '无（直接运行 ./gymbag）',
+    serviceAuto: 'auto（自动检测系统 Init）',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'SSL 证书提供商',
+    acmeEmail: 'ACME 联系邮箱',
+    runCommands: '执行这两条命令',
+    step1Gen: '# 1. 生成配置文件',
+    step1GenSvc: '# 1. 生成配置并注册系统服务',
+    step2Start: '# 2. 启动服务',
+    generatedFile: '生成的 Gymbagfile'
+  },
+  ja: {
+    eyebrow: '2コマンド クイックスタート',
+    title: '設定＆起動プレビュー',
+    copyBtn: '2コマンドをコピー',
+    copiedBtn: 'コピーしました!',
+    domain: 'ドメイン',
+    upstream: 'アップストリーム URL',
+    verifyLevel: '検証レベル (Verify Level)',
+    verify3: '3 — 不審トラフィック & AI（推奨）',
+    verify2: '2 — AI クローラーのみ',
+    verify1: '1 — 不審トラフィックのみ',
+    verify0: '0 — 常にチャレンジ',
+    verifyOff: 'off — WAF 保護オフ',
+    service: 'システムサービス',
+    serviceNone: 'なし（./gymbag を直接起動）',
+    serviceAuto: 'auto（OS init 自動検出）',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'SSL プロバイダー',
+    acmeEmail: 'ACME メールアドレス',
+    runCommands: '次の2つのコマンドを実行',
+    step1Gen: '# 1. 設定ファイルを生成',
+    step1GenSvc: '# 1. 設定生成 & サービス登録',
+    step2Start: '# 2. サービスを起動',
+    generatedFile: '生成される Gymbagfile'
+  },
+  ko: {
+    eyebrow: '두 줄 명령어 빠른 시작',
+    title: '설정 및 실행 미리보기',
+    copyBtn: '명령어 2개 복사',
+    copiedBtn: '복사됨!',
+    domain: '도메인',
+    upstream: '업스트림 URL',
+    verifyLevel: '검증 레벨 (Verify Level)',
+    verify3: '3 — 의심 트래픽 & AI (권장)',
+    verify2: '2 — AI 크롤러만',
+    verify1: '1 — 의심 트래픽만',
+    verify0: '0 — 항상 검증',
+    verifyOff: 'off — WAF 보호 끄기',
+    service: '시스템 서비스',
+    serviceNone: '없음 (./gymbag 직접 실행)',
+    serviceAuto: 'auto (OS init 자동 감지)',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'SSL 공급자',
+    acmeEmail: 'ACME 이메일',
+    runCommands: '아래 2개 명령어 실행',
+    step1Gen: '# 1. 설정 파일 생성',
+    step1GenSvc: '# 1. 설정 생성 및 서비스 등록',
+    step2Start: '# 2. 서비스 시작',
+    generatedFile: '생성된 Gymbagfile'
+  },
+  es: {
+    eyebrow: 'Inicio Rápido en 2 Comandos',
+    title: 'Vista Previa de Configuración',
+    copyBtn: 'Copiar 2 Comandos',
+    copiedBtn: '¡Copiado!',
+    domain: 'Dominio',
+    upstream: 'URL Upstream',
+    verifyLevel: 'Nivel de Verificación',
+    verify3: '3 — sospechoso e IA (Recomendado)',
+    verify2: '2 — solo IA',
+    verify1: '1 — solo sospechoso',
+    verify0: '0 — desafiar siempre',
+    verifyOff: 'off — protección desactivada',
+    service: 'Servicio del Sistema',
+    serviceNone: 'Ninguno (ejecutar ./gymbag directo)',
+    serviceAuto: 'auto (detectar init del SO)',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'Proveedor SSL',
+    acmeEmail: 'Correo ACME',
+    runCommands: 'Ejecuta estos 2 comandos',
+    step1Gen: '# 1. Generar configuración',
+    step1GenSvc: '# 1. Generar config y registrar servicio',
+    step2Start: '# 2. Iniciar servicio',
+    generatedFile: 'Gymbagfile generado'
+  }
+}
+
+const t = computed(() => copyByLocale[activeLocale.value])
 
 const domain = ref('app.example.com')
 const upstream = ref('http://localhost:3000')
@@ -106,51 +294,51 @@ async function copyCommands() {
   <div class="gb-card qb-wrap">
     <div class="qb-header">
       <div>
-        <div class="qb-eyebrow">Two-Command Quickstart</div>
-        <h3 class="qb-title">Configure &amp; Launch Preview</h3>
+        <div class="qb-eyebrow">{{ t.eyebrow }}</div>
+        <h3 class="qb-title">{{ t.title }}</h3>
       </div>
       <button class="gb-pill" type="button" @click="copyCommands">
-        {{ copied ? 'Copied!' : 'Copy 2 Commands' }}
+        {{ copied ? t.copiedBtn : t.copyBtn }}
       </button>
     </div>
 
     <div class="qb-grid">
       <label class="qb-field">
-        <span>Domain</span>
+        <span>{{ t.domain }}</span>
         <input v-model="domain" type="text" placeholder="app.example.com" />
       </label>
 
       <label class="qb-field">
-        <span>Upstream URL</span>
+        <span>{{ t.upstream }}</span>
         <input v-model="upstream" type="text" placeholder="http://localhost:3000" />
       </label>
 
       <label class="qb-field">
-        <span>Verify Level</span>
+        <span>{{ t.verifyLevel }}</span>
         <select v-model="verify">
-          <option value="3">3 — suspicious &amp; ai (Recommended)</option>
-          <option value="2">2 — only ai</option>
-          <option value="1">1 — only suspicious</option>
-          <option value="0">0 — always challenge</option>
-          <option value="off">off — protect off</option>
+          <option value="3">{{ t.verify3 }}</option>
+          <option value="2">{{ t.verify2 }}</option>
+          <option value="1">{{ t.verify1 }}</option>
+          <option value="0">{{ t.verify0 }}</option>
+          <option value="off">{{ t.verifyOff }}</option>
         </select>
       </label>
 
       <label class="qb-field">
-        <span>System Service</span>
+        <span>{{ t.service }}</span>
         <select v-model="serviceMgr">
-          <option value="none">None (run directly with ./gymbag)</option>
-          <option value="auto">auto (detect OS init)</option>
-          <option value="systemd">systemd (Linux)</option>
-          <option value="launchd">launchd (macOS)</option>
-          <option value="openrc">OpenRC (Alpine / Gentoo)</option>
-          <option value="supervisor">Supervisor</option>
+          <option value="none">{{ t.serviceNone }}</option>
+          <option value="auto">{{ t.serviceAuto }}</option>
+          <option value="systemd">{{ t.serviceSystemd }}</option>
+          <option value="launchd">{{ t.serviceLaunchd }}</option>
+          <option value="openrc">{{ t.serviceOpenrc }}</option>
+          <option value="supervisor">{{ t.serviceSupervisor }}</option>
         </select>
       </label>
 
       <template v-if="!isLocalDomain">
         <label class="qb-field">
-          <span>SSL Provider</span>
+          <span>{{ t.sslProvider }}</span>
           <select v-model="sslProvider">
             <option value="letsencrypt">letsencrypt</option>
             <option value="zerossl">zerossl (auto-EAB)</option>
@@ -163,7 +351,7 @@ async function copyCommands() {
         </label>
 
         <label class="qb-field">
-          <span>ACME Email</span>
+          <span>{{ t.acmeEmail }}</span>
           <input v-model="email" type="email" placeholder="ops@example.com" />
         </label>
       </template>
@@ -171,16 +359,16 @@ async function copyCommands() {
 
     <div class="qb-outputs">
       <div class="qb-pane">
-        <div class="qb-pane-label">Run these 2 commands</div>
-        <pre class="qb-pre"><code><span class="qb-step"># 1. Generate config{{ serviceMgr !== 'none' ? ' &amp; register service' : '' }}</span>
+        <div class="qb-pane-label">{{ t.runCommands }}</div>
+        <pre class="qb-pre"><code><span class="qb-step">{{ serviceMgr !== 'none' ? t.step1GenSvc : t.step1Gen }}</span>
 {{ initCommand }}
 
-<span class="qb-step"># 2. Start service</span>
+<span class="qb-step">{{ t.step2Start }}</span>
 {{ startCommand }}</code></pre>
       </div>
 
       <div class="qb-pane">
-        <div class="qb-pane-label">Generated Gymbagfile</div>
+        <div class="qb-pane-label">{{ t.generatedFile }}</div>
         <pre class="qb-pre"><code>{{ generatedGymbagfile }}</code></pre>
       </div>
     </div>
