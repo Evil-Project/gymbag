@@ -1,0 +1,29 @@
+# Maintainer: Evil-Project <https://github.com/Evil-Project/gymbag>
+pkgname=gymbag-bin
+_pkgname=gymbag
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Single-binary HTTPS reverse proxy & Proof-of-Work WAF in pure Go (prebuilt binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Evil-Project/gymbag"
+license=('Apache-2.0')
+depends=('libcap')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+backup=('etc/gymbag/Gymbagfile')
+options=('!strip' '!debug')
+install=gymbag.install
+source_x86_64=("${_pkgname}-${pkgver}-x86_64.tar.gz::${url}/releases/download/v${pkgver}/${_pkgname}_${pkgver}_linux_amd64.tar.gz")
+source_aarch64=("${_pkgname}-${pkgver}-aarch64.tar.gz::${url}/releases/download/v${pkgver}/${_pkgname}_${pkgver}_linux_arm64.tar.gz")
+source=("gymbag.service")
+sha256sums=('SKIP')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    install -Dm755 "$srcdir/gymbag" "$pkgdir/usr/bin/gymbag"
+    install -Dm644 "$srcdir/Gymbagfile" "$pkgdir/etc/gymbag/Gymbagfile"
+    install -Dm644 "$srcdir/gymbag.service" "$pkgdir/usr/lib/systemd/system/gymbag.service"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+    install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$_pkgname/README.md"
+}

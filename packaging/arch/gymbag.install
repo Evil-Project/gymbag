@@ -1,0 +1,18 @@
+post_install() {
+    if command -v setcap >/dev/null 2>&1; then
+        setcap 'cap_net_bind_service=+ep' /usr/bin/gymbag 2>/dev/null || true
+    fi
+    cat <<'EOF'
+==> Gymbag installed!
+    1. Generate or edit your config:
+         sudo gymbag init -o /etc/gymbag/Gymbagfile
+    2. Start and enable the systemd service:
+         sudo systemctl enable --now gymbag
+EOF
+}
+
+post_upgrade() {
+    if command -v setcap >/dev/null 2>&1; then
+        setcap 'cap_net_bind_service=+ep' /usr/bin/gymbag 2>/dev/null || true
+    fi
+}

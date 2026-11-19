@@ -1,0 +1,38 @@
+# Maintainer: Evil-Project <https://github.com/Evil-Project/gymbag>
+pkgname=gymbag
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Single-binary HTTPS reverse proxy & Proof-of-Work WAF in pure Go"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Evil-Project/gymbag"
+license=('Apache-2.0')
+depends=('libcap')
+makedepends=('go')
+backup=('etc/gymbag/Gymbagfile')
+install=gymbag.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    export CGO_ENABLED=0
+    go build \
+        -trimpath \
+        -ldflags="-s -w -X gymbag/internal/cli.Version=$pkgver" \
+        -o gymbag \
+        ./cmd/gymbag
+}
+
+check() {
+    cd "$srcdir/$pkgname-$pkgver"
+    go test ./...
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    install -Dm755 gymbag "$pkgdir/usr/bin/gymbag"
+    install -Dm644 Gymbagfile "$pkgdir/etc/gymbag/Gymbagfile"
+    install -Dm644 packaging/arch/gymbag.service "$pkgdir/usr/lib/systemd/system/gymbag.service"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
