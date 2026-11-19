@@ -3,7 +3,11 @@ name: Test and publish image
 on:
   push:
     branches: [main, master]
-    tags: ["v*"]
+    tags:
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]+*"
+  release:
+    types: [published]
   pull_request:
   workflow_dispatch:
 
@@ -39,6 +43,23 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RAW_TAG="${GITHUB_REF_NAME#v}"
+            echo "value=${RAW_TAG}" >> "${GITHUB_OUTPUT}"
+            if [[ "${RAW_TAG}" != *-* ]]; then
+              echo "is_stable_tag=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "is_stable_tag=false" >> "${GITHUB_OUTPUT}"
+            fi
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+            echo "is_stable_tag=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -61,10 +82,12 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || steps.version.outputs.is_stable_tag == 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -74,5 +97,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
