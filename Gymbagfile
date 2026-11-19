@@ -59,6 +59,13 @@ localhost {
 #     ai_ip_list on               # OpenAI, Anthropic, Perplexity, Google, Apple CIDRs
 #     intel_refresh 21600         # Refresh feeds every 6 hours (in seconds)
 #
+#     # Default verified clearance timeout (seconds or duration: 30m, 12h, 7d; default 24h)
+#     # verify_timeout 12h
+#
+#     # Remote firewall rules (Gymbagfile rule syntax or JSON, auto-refreshed with ETag caching)
+#     # remote_rules https://rules.example.com/baseline.rules
+#     # remote_rules_refresh 5m
+#
 #     # Global custom rules inherited by every site:
 #     block ip 198.51.100.99 192.0.2.0/24
 # }
@@ -70,11 +77,13 @@ localhost {
 #     verify
 # }
 #
-# # Level 3 (suspicious & ai) + custom one-liner and compound rules
+# # Level 3 (suspicious & ai) + custom timeout, remote rules, one-liners, and compound rules
 # app.example.com, www.example.com {
 #     reverse_proxy http://localhost:3000
 #     verify 3
 #     difficulty 4
+#     # verify_timeout 12h         # Custom verified status timeout (or clearance_ttl 43200)
+#     # remote_rules https://rules.example.com/app.json
 #     # default_rules on          # Built-in baseline rules stay active unless set to off
 #
 #     # One-liner rules: <allow|verify|block> <ip|user_agent|path|query|method|header|cookie> <pattern...>
