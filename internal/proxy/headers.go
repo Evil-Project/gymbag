@@ -9,6 +9,15 @@ import (
 	"gymbag/internal/host"
 )
 
+func isHopByHopCanonical(k string) bool {
+	switch k {
+	case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+		"Te", "Trailer", "Trailers", "Transfer-Encoding", "Upgrade":
+		return true
+	}
+	return false
+}
+
 var hopByHopHeaders = map[string]struct{}{
 	"connection":          {},
 	"keep-alive":          {},
@@ -22,12 +31,28 @@ var hopByHopHeaders = map[string]struct{}{
 }
 
 func connectionOptions(h http.Header) map[string]struct{} {
-	opts := make(map[string]struct{})
-	for _, raw := range h.Values("Connection") {
+	connVals := h["Connection"]
+	if len(connVals) == 0 {
+		return nil
+	}
+	// Fast check: common single "keep-alive" or "close" token has no custom header names to strip.
+	if len(connVals) == 1 {
+		v := connVals[0]
+		if v == "keep-alive" || v == "Keep-Alive" || v == "close" || v == "Close" {
+			return nil
+		}
+	}
+	var opts map[string]struct{}
+	for _, raw := range connVals {
 		for _, part := range strings.Split(raw, ",") {
-			if tok := strings.ToLower(strings.TrimSpace(part)); tok != "" {
-				opts[tok] = struct{}{}
+			tok := strings.ToLower(strings.TrimSpace(part))
+			if tok == "" || tok == "keep-alive" || tok == "close" {
+				continue
 			}
+			if opts == nil {
+				opts = make(map[string]struct{}, 2)
+			}
+			opts[tok] = struct{}{}
 		}
 	}
 	return opts
@@ -38,26 +63,27 @@ func ForwardRequestHeaders(src http.Header, rawHost, clientIP, scheme string) ht
 	connOpts := connectionOptions(src)
 	dst := make(http.Header, len(src)+4)
 	for k, vals := range src {
-		lower := strings.ToLower(k)
-		if _, hop := hopByHopHeaders[lower]; hop {
+		if isHopByHopCanonical(k) || k == "Host" || k == "Content-Length" {
 			continue
 		}
-		if lower == "host" || lower == "content-length" {
-			continue
+		if len(connOpts) > 0 {
+			lower := strings.ToLower(k)
+			if _, hop := hopByHopHeaders[lower]; hop || lower == "host" || lower == "content-length" {
+				continue
+			}
+			if _, customHop := connOpts[lower]; customHop {
+				continue
+			}
 		}
-		if _, customHop := connOpts[lower]; customHop {
-			continue
-		}
-		copied := make([]string, len(vals))
-		copy(copied, vals)
-		dst[k] = copied
+		// Copy slice header only when needed; single-element reuse is safe because Transport only reads it.
+		dst[k] = vals
 	}
 	if rawHost != "" {
-		dst.Set("X-Forwarded-Host", rawHost)
+		dst["X-Forwarded-Host"] = []string{rawHost}
 	}
-	dst.Set("X-Forwarded-For", clientIP)
-	dst.Set("X-Real-IP", clientIP)
-	dst.Set("X-Forwarded-Proto", scheme)
+	dst["X-Forwarded-For"] = []string{clientIP}
+	dst["X-Real-Ip"] = []string{clientIP}
+	dst["X-Forwarded-Proto"] = []string{scheme}
 	return dst
 }
 
@@ -85,18 +111,25 @@ func RewriteLocation(location, upstream, origin string) string {
 	if origin == "" {
 		return location
 	}
-	target, err := url.Parse(location)
-	if err != nil || target.Scheme == "" || target.Hostname() == "" {
-		return location
-	}
 	base, err := url.Parse(upstream)
 	if err != nil || base.Hostname() == "" {
 		return location
 	}
-	if !strings.EqualFold(target.Hostname(), base.Hostname()) {
+	return rewriteLocationParsed(location, base.Hostname(), effectivePort(base), origin)
+}
+
+func rewriteLocationParsed(location, baseHost, basePort, origin string) string {
+	if origin == "" || baseHost == "" {
 		return location
 	}
-	if effectivePort(target) != effectivePort(base) {
+	target, err := url.Parse(location)
+	if err != nil || target.Scheme == "" || target.Hostname() == "" {
+		return location
+	}
+	if !strings.EqualFold(target.Hostname(), baseHost) {
+		return location
+	}
+	if effectivePort(target) != basePort {
 		return location
 	}
 	path := target.EscapedPath()
@@ -112,29 +145,82 @@ func RewriteLocation(location, upstream, origin string) string {
 // CopyResponseHeaders copies upstream response headers to dst, stripping hop-by-hop/HSTS/Alt-Svc
 // headers, preserving multi-value headers (Set-Cookie), and rewriting Location headers.
 func CopyResponseHeaders(dst, src http.Header, upstream, hostHeader string, httpsPort int) {
+	copyResponseHeadersParsed(dst, src, parseUpstream(upstream), hostHeader, httpsPort)
+}
+
+func copyResponseHeadersParsed(dst, src http.Header, up ParsedUpstream, hostHeader string, httpsPort int) {
 	connOpts := connectionOptions(src)
 	var origin string
-	if hostHeader != "" {
-		origin = PublicOrigin(hostHeader, httpsPort)
-	}
+	originReady := false
+
 	for k, vals := range src {
-		lower := strings.ToLower(k)
-		if _, hop := hopByHopHeaders[lower]; hop {
+		if isHopByHopCanonical(k) || k == "Alt-Svc" || k == "Strict-Transport-Security" {
 			continue
 		}
-		if lower == "alt-svc" || lower == "strict-transport-security" {
-			continue
-		}
-		if _, customHop := connOpts[lower]; customHop {
-			continue
-		}
-		for _, v := range vals {
-			if lower == "location" && origin != "" {
-				v = RewriteLocation(v, upstream, origin)
+		if len(connOpts) > 0 {
+			lower := strings.ToLower(k)
+			if _, hop := hopByHopHeaders[lower]; hop || lower == "alt-svc" || lower == "strict-transport-security" {
+				continue
 			}
-			dst.Add(k, v)
+			if _, customHop := connOpts[lower]; customHop {
+				continue
+			}
+		}
+		if k == "Location" {
+			if !originReady {
+				if hostHeader != "" {
+					origin = PublicOrigin(hostHeader, httpsPort)
+				}
+				originReady = true
+			}
+			if origin != "" {
+				for _, v := range vals {
+					dst.Add(k, rewriteLocationParsed(v, up.Hostname, up.EffectivePort, origin))
+				}
+				continue
+			}
+		}
+		if existing, exists := dst[k]; exists && len(existing) > 0 {
+			dst[k] = append(existing, vals...)
+		} else {
+			dst[k] = vals
 		}
 	}
+}
+
+// BuildUpstreamURL joins a pre-parsed upstream URL with reqPath and rawQuery without calling url.Parse.
+func BuildUpstreamURL(up ParsedUpstream, reqPath, rawQuery string) (url.URL, error) {
+	if up.URL == nil {
+		u, err := UpstreamURL(up.Raw, reqPath, rawQuery)
+		if err != nil {
+			return url.URL{}, err
+		}
+		return *u, nil
+	}
+	suffix := reqPath
+	if suffix == "" {
+		suffix = "/"
+	} else if suffix[0] != '/' {
+		suffix = "/" + suffix
+	}
+	joined := suffix
+	if up.BasePath != "" {
+		joined = up.BasePath + suffix
+	}
+	if joined == "" {
+		joined = "/"
+	}
+
+	out := *up.URL
+	if strings.IndexByte(joined, '%') >= 0 {
+		out.Path = unescapeOrKeep(joined)
+		out.RawPath = joined
+	} else {
+		out.Path = joined
+		out.RawPath = ""
+	}
+	out.RawQuery = rawQuery
+	return out, nil
 }
 
 // UpstreamURL joins an upstream base URL with an incoming request path and raw query string.
@@ -185,10 +271,17 @@ func WebSocketUpstreamURL(upstream, reqPath, rawQuery string) (*url.URL, error) 
 
 // IsWebSocketUpgrade reports whether r is an HTTP/1.1 WebSocket upgrade handshake.
 func IsWebSocketUpgrade(r *http.Request) bool {
-	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+	upgrades := r.Header["Upgrade"]
+	if len(upgrades) == 0 {
 		return false
 	}
-	for _, raw := range r.Header.Values("Connection") {
+	if !strings.EqualFold(strings.TrimSpace(upgrades[0]), "websocket") {
+		return false
+	}
+	for _, raw := range r.Header["Connection"] {
+		if strings.EqualFold(strings.TrimSpace(raw), "upgrade") {
+			return true
+		}
 		for _, part := range strings.Split(raw, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), "upgrade") {
 				return true
