@@ -278,12 +278,22 @@ var knownDirectiveNames = map[string]struct{}{
 	"difficulty":         {},
 	"rate_limit":         {},
 	"rate_window":        {},
-	"challenge_ttl":      {},
-	"clearance_ttl":      {},
-	"cookie_name":        {},
-	"cookie_secure":      {},
-	"default_rules":      {},
-	"redis":              {},
+	"challenge_ttl":        {},
+	"clearance_ttl":        {},
+	"verify_timeout":       {},
+	"verified_timeout":     {},
+	"clearance_timeout":    {},
+	"cookie_name":          {},
+	"cookie_secure":        {},
+	"default_rules":        {},
+	"remote_rules":         {},
+	"remote_rule":          {},
+	"rules_url":            {},
+	"rule_url":             {},
+	"remote_rules_url":     {},
+	"remote_rules_refresh": {},
+	"rules_refresh":        {},
+	"redis":                {},
 	"redis_url":          {},
 	"secret":             {},
 	"cert_dir":           {},
@@ -315,21 +325,22 @@ var ruleFieldKeywords = map[string]struct{}{
 }
 
 type parseState struct {
-	tls             TLSConfig
-	intel           IntelConfig
-	bindHost        string
-	httpPort        int
-	httpsPort       int
-	httpsPortSet    bool
-	adminAddr       string
-	redisURL        string
-	secret          string
-	trustedProxies  []string
-	defaultWAF      SiteWAFConfig
-	defaultProtect  bool
-	protectedFilter map[string]struct{}
-	flatDomains     []string
-	flatUpstreams   []string
+	tls                TLSConfig
+	intel              IntelConfig
+	remoteRulesRefresh int
+	bindHost           string
+	httpPort           int
+	httpsPort          int
+	httpsPortSet       bool
+	adminAddr          string
+	redisURL           string
+	secret             string
+	trustedProxies     []string
+	defaultWAF         SiteWAFConfig
+	defaultProtect     bool
+	protectedFilter    map[string]struct{}
+	flatDomains        []string
+	flatUpstreams      []string
 }
 
 func applyRuleConditionField(field string, args []string, rule *CustomRule) error {
@@ -526,9 +537,9 @@ func applyIntelDirective(name string, args []string, ic *IntelConfig) (bool, err
 
 	case "intel_refresh", "refresh_interval":
 		if len(args) != 1 {
-			return true, fmt.Errorf("%s requires seconds", name)
+			return true, fmt.Errorf("%s requires seconds or a duration (e.g. 6h)", name)
 		}
-		sec, err := parsePositiveInt(args[0], name)
+		sec, err := ParseDurationSeconds(args[0], name)
 		if err != nil {
 			return true, err
 		}
@@ -705,7 +716,7 @@ func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *In
 
 	case "rate_limit":
 		if len(args) != 1 && len(args) != 2 {
-			return true, fmt.Errorf("rate_limit requires a limit and optional window in seconds")
+			return true, fmt.Errorf("rate_limit requires a limit and optional window (seconds or duration)")
 		}
 		limit, err := parsePositiveInt(args[0], "rate_limit")
 		if err != nil {
@@ -713,7 +724,7 @@ func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *In
 		}
 		waf.RateLimit = limit
 		if len(args) == 2 {
-			win, err := parsePositiveInt(args[1], "rate_window")
+			win, err := ParseDurationSeconds(args[1], "rate_window")
 			if err != nil {
 				return true, err
 			}
@@ -723,9 +734,9 @@ func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *In
 
 	case "rate_window":
 		if len(args) != 1 {
-			return true, fmt.Errorf("rate_window requires seconds")
+			return true, fmt.Errorf("rate_window requires seconds or a duration (e.g. 60s, 1m)")
 		}
-		win, err := parsePositiveInt(args[0], "rate_window")
+		win, err := ParseDurationSeconds(args[0], "rate_window")
 		if err != nil {
 			return true, err
 		}
@@ -734,24 +745,44 @@ func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *In
 
 	case "challenge_ttl":
 		if len(args) != 1 {
-			return true, fmt.Errorf("challenge_ttl requires seconds")
+			return true, fmt.Errorf("challenge_ttl requires seconds or a duration (e.g. 5m)")
 		}
-		ttl, err := parsePositiveInt(args[0], "challenge_ttl")
+		ttl, err := ParseDurationSeconds(args[0], "challenge_ttl")
 		if err != nil {
 			return true, err
 		}
 		waf.ChallengeTTL = ttl
 		return true, nil
 
-	case "clearance_ttl":
+	case "clearance_ttl", "verify_timeout", "verified_timeout", "clearance_timeout":
 		if len(args) != 1 {
-			return true, fmt.Errorf("clearance_ttl requires seconds")
+			return true, fmt.Errorf("%s requires seconds or a duration (e.g. 30m, 12h, 7d)", name)
 		}
-		ttl, err := parsePositiveInt(args[0], "clearance_ttl")
+		ttl, err := ParseDurationSeconds(args[0], name)
 		if err != nil {
 			return true, err
 		}
 		waf.ClearanceTTL = ttl
+		return true, nil
+
+	case "remote_rules", "remote_rule", "rules_url", "rule_url", "remote_rules_url":
+		if len(args) == 0 {
+			return true, fmt.Errorf("%s requires at least one http:// or https:// URL", name)
+		}
+		for _, a := range args {
+			for _, part := range strings.Split(a, ",") {
+				u := strings.TrimSpace(part)
+				if u == "" {
+					continue
+				}
+				if err := RequireHTTPURL(u, name); err != nil {
+					return true, err
+				}
+				if !slices.Contains(waf.RemoteRules, u) {
+					waf.RemoteRules = append(waf.RemoteRules, u)
+				}
+			}
+		}
 		return true, nil
 
 	case "cookie_name":
@@ -959,9 +990,9 @@ func applyTLSDirective(
 
 	case "renew_interval":
 		if len(args) != 1 {
-			return true, fmt.Errorf("renew_interval requires seconds")
+			return true, fmt.Errorf("renew_interval requires seconds or a duration (e.g. 12h)")
 		}
-		v, err := parsePositiveInt(args[0], "renew_interval")
+		v, err := ParseDurationSeconds(args[0], "renew_interval")
 		if err != nil {
 			return true, err
 		}
@@ -1331,6 +1362,17 @@ func applyGlobalDirective(
 		st.secret = args[0]
 		return nil, nil
 
+	case "remote_rules_refresh", "rules_refresh":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("%s requires seconds or a duration (e.g. 5m)", name)
+		}
+		sec, err := ParseDurationSeconds(args[0], name)
+		if err != nil {
+			return nil, err
+		}
+		st.remoteRulesRefresh = sec
+		return nil, nil
+
 	case "trusted_proxies":
 		if len(args) == 0 {
 			return nil, fmt.Errorf("trusted_proxies requires at least one IP or CIDR")
@@ -1349,12 +1391,13 @@ func ParseCaddyfile(text string) (Config, error) {
 		return Config{}, err
 	}
 	st := &parseState{
-		tls:            DefaultTLSConfig(),
-		intel:          DefaultIntelConfig(),
-		httpPort:       80,
-		httpsPort:      443,
-		defaultWAF:     DefaultSiteWAFConfig(),
-		defaultProtect: true,
+		tls:                DefaultTLSConfig(),
+		intel:              DefaultIntelConfig(),
+		remoteRulesRefresh: DefaultRemoteRulesRefresh,
+		httpPort:           80,
+		httpsPort:          443,
+		defaultWAF:         DefaultSiteWAFConfig(),
+		defaultProtect:     true,
 	}
 
 	hasBraces := false
@@ -1512,17 +1555,18 @@ func ParseCaddyfile(text string) (Config, error) {
 	}
 
 	cfg := Config{
-		Sites:          sites,
-		BindHost:       st.bindHost,
-		HTTPPort:       st.httpPort,
-		HTTPSPort:      st.httpsPort,
-		AdminAddr:      st.adminAddr,
-		TLS:            st.tls,
-		Intel:          st.intel,
-		RedisURL:       st.redisURL,
-		Secret:         st.secret,
-		TrustedProxies: st.trustedProxies,
-		Defaults:       st.defaultWAF,
+		Sites:              sites,
+		BindHost:           st.bindHost,
+		HTTPPort:           st.httpPort,
+		HTTPSPort:          st.httpsPort,
+		AdminAddr:          st.adminAddr,
+		TLS:                st.tls,
+		Intel:              st.intel,
+		RemoteRulesRefresh: st.remoteRulesRefresh,
+		RedisURL:           st.redisURL,
+		Secret:             st.secret,
+		TrustedProxies:     st.trustedProxies,
+		Defaults:           st.defaultWAF,
 	}
 	if cfg.BindHost == "" {
 		cfg.BindHost = DefaultBindHost(cfg.Domains())
@@ -1545,6 +1589,7 @@ func cloneSiteWAF(in SiteWAFConfig) SiteWAFConfig {
 			out.Rules[i] = r.Clone()
 		}
 	}
+	out.RemoteRules = slices.Clone(in.RemoteRules)
 	out.CustomAIBots = slices.Clone(in.CustomAIBots)
 	out.CustomSuspiciousUAs = slices.Clone(in.CustomSuspiciousUAs)
 	out.CustomSuspiciousPaths = slices.Clone(in.CustomSuspiciousPaths)
@@ -1771,6 +1816,9 @@ func FormatConfig(cfg Config) string {
 	for _, u := range cfg.Intel.AIIPFeeds {
 		globalLines = append(globalLines, fmt.Sprintf("    ai_ip_feed %s", quoteIfNeeded(u)))
 	}
+	if cfg.RemoteRulesRefresh != 0 && cfg.RemoteRulesRefresh != DefaultRemoteRulesRefresh {
+		globalLines = append(globalLines, fmt.Sprintf("    remote_rules_refresh %d", cfg.RemoteRulesRefresh))
+	}
 
 	if len(globalLines) > 0 {
 		b.WriteString("{\n")
@@ -1820,6 +1868,9 @@ func FormatConfig(cfg Config) string {
 		}
 		for _, r := range site.WAF.Rules {
 			formatCustomRule(&b, r)
+		}
+		for _, u := range site.WAF.RemoteRules {
+			b.WriteString(fmt.Sprintf("    remote_rules %s\n", quoteIfNeeded(u)))
 		}
 		if site.CertFile != "" && site.KeyFile != "" {
 			b.WriteString(fmt.Sprintf("    tls %s %s\n", site.CertFile, site.KeyFile))

@@ -12,14 +12,17 @@ import (
 
 // LoadOptions specifies CLI overrides applied on top of config file and environment variables.
 type LoadOptions struct {
-	ConfigPath  string
-	Domain      string
-	Upstream    string
-	VerifyLevel string
-	Protect     *bool
-	AdminAddr   string
-	HTTPPort    int
-	HTTPSPort   int
+	ConfigPath         string
+	Domain             string
+	Upstream           string
+	VerifyLevel        string
+	ClearanceTTL       string
+	RemoteRules        []string
+	RemoteRulesRefresh string
+	Protect            *bool
+	AdminAddr          string
+	HTTPPort           int
+	HTTPSPort          int
 }
 
 // ParseFile reads a Gymbagfile, Caddyfile, or JSON configuration file from disk.
@@ -133,6 +136,42 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 		for i := range cfg.Sites {
 			cfg.Sites[i].Protect = *opts.Protect
 		}
+	}
+
+	if rawTTL := strings.TrimSpace(opts.ClearanceTTL); rawTTL != "" {
+		ttl, err := ParseDurationSeconds(rawTTL, "verify-timeout")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Defaults.ClearanceTTL = ttl
+		for i := range cfg.Sites {
+			cfg.Sites[i].WAF.ClearanceTTL = ttl
+		}
+	}
+
+	if len(opts.RemoteRules) > 0 {
+		urls, err := splitRemoteRuleURLs(opts.RemoteRules)
+		if err != nil {
+			return Config{}, err
+		}
+		for _, u := range urls {
+			if !slices.Contains(cfg.Defaults.RemoteRules, u) {
+				cfg.Defaults.RemoteRules = append(cfg.Defaults.RemoteRules, u)
+			}
+			for i := range cfg.Sites {
+				if !slices.Contains(cfg.Sites[i].WAF.RemoteRules, u) {
+					cfg.Sites[i].WAF.RemoteRules = append(cfg.Sites[i].WAF.RemoteRules, u)
+				}
+			}
+		}
+	}
+
+	if rawRefresh := strings.TrimSpace(opts.RemoteRulesRefresh); rawRefresh != "" {
+		sec, err := ParseDurationSeconds(rawRefresh, "remote-rules-refresh")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.RemoteRulesRefresh = sec
 	}
 
 	if strings.TrimSpace(opts.AdminAddr) != "" {
@@ -366,7 +405,7 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		}
 	}
 
-	if v, ok, err := envPositiveInt(getenv, "GYMBAG_CHALLENGE_TTL"); err != nil {
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_CHALLENGE_TTL"); err != nil {
 		return Config{}, err
 	} else if ok {
 		cfg.Defaults.ChallengeTTL = v
@@ -375,13 +414,43 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		}
 	}
 
-	if v, ok, err := envPositiveInt(getenv, "GYMBAG_CLEARANCE_TTL"); err != nil {
-		return Config{}, err
-	} else if ok {
+	rawClearance := firstNonEmpty(
+		getenv("GYMBAG_CLEARANCE_TTL"),
+		getenv("GYMBAG_VERIFY_TIMEOUT"),
+		getenv("GYMBAG_VERIFIED_TIMEOUT"),
+	)
+	if rawClearance != "" {
+		v, err := ParseDurationSeconds(rawClearance, "GYMBAG_CLEARANCE_TTL")
+		if err != nil {
+			return Config{}, err
+		}
 		cfg.Defaults.ClearanceTTL = v
 		for i := range cfg.Sites {
 			cfg.Sites[i].WAF.ClearanceTTL = v
 		}
+	}
+
+	if rawRemote := strings.TrimSpace(getenv("GYMBAG_REMOTE_RULES")); rawRemote != "" {
+		urls, err := splitRemoteRuleURLs([]string{rawRemote})
+		if err != nil {
+			return Config{}, err
+		}
+		for _, u := range urls {
+			if !slices.Contains(cfg.Defaults.RemoteRules, u) {
+				cfg.Defaults.RemoteRules = append(cfg.Defaults.RemoteRules, u)
+			}
+			for i := range cfg.Sites {
+				if !slices.Contains(cfg.Sites[i].WAF.RemoteRules, u) {
+					cfg.Sites[i].WAF.RemoteRules = append(cfg.Sites[i].WAF.RemoteRules, u)
+				}
+			}
+		}
+	}
+
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_REMOTE_RULES_REFRESH"); err != nil {
+		return Config{}, err
+	} else if ok {
+		cfg.RemoteRulesRefresh = v
 	}
 
 	if rawCookie := strings.TrimSpace(getenv("GYMBAG_COOKIE_NAME")); rawCookie != "" {
@@ -411,7 +480,7 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		}
 	}
 
-	if v, ok, err := envPositiveInt(getenv, "GYMBAG_RATE_WINDOW"); err != nil {
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_RATE_WINDOW"); err != nil {
 		return Config{}, err
 	} else if ok {
 		cfg.Defaults.RateWindow = v
@@ -479,7 +548,7 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 			cfg.AdminAddr = rawAdmin
 		}
 	}
-	if v, ok, err := envPositiveInt(getenv, "GYMBAG_RENEW_INTERVAL"); err != nil {
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_RENEW_INTERVAL"); err != nil {
 		return Config{}, err
 	} else if ok {
 		cfg.TLS.RenewInterval = v
@@ -521,7 +590,7 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		}
 		cfg.Intel.AIIPList = b
 	}
-	if v, ok, err := envPositiveInt(getenv, "GYMBAG_INTEL_REFRESH"); err != nil {
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_INTEL_REFRESH"); err != nil {
 		return Config{}, err
 	} else if ok {
 		cfg.Intel.RefreshInterval = v
@@ -562,6 +631,40 @@ func envPort(getenv func(string) string, name string) (int, bool, error) {
 		return 0, false, err
 	}
 	return v, true, nil
+}
+
+func envDurationSeconds(getenv func(string) string, name string) (int, bool, error) {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	v, err := ParseDurationSeconds(raw, name)
+	if err != nil {
+		return 0, false, err
+	}
+	return v, true, nil
+}
+
+func splitRemoteRuleURLs(inputs []string) ([]string, error) {
+	var out []string
+	for _, raw := range inputs {
+		fields := strings.FieldsFunc(raw, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		for _, f := range fields {
+			u := strings.TrimSpace(f)
+			if u == "" {
+				continue
+			}
+			if err := RequireHTTPURL(u, "remote_rules"); err != nil {
+				return nil, err
+			}
+			if !slices.Contains(out, u) {
+				out = append(out, u)
+			}
+		}
+	}
+	return out, nil
 }
 
 func firstNonEmpty(values ...string) string {

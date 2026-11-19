@@ -10,39 +10,44 @@ import (
 
 // SiteSpec describes a single downstream site entry for config generation.
 type SiteSpec struct {
-	Domain      string
-	Upstreams   []string
-	VerifyLevel string
-	Protect     *bool
-	Difficulty  int
-	CertFile    string
-	KeyFile     string
+	Domain       string
+	Upstreams    []string
+	VerifyLevel  string
+	Protect      *bool
+	Difficulty   int
+	ClearanceTTL string
+	RemoteRules  []string
+	CertFile     string
+	KeyFile      string
 }
 
 // GenerateOptions controls how GenerateConfig and RenderGeneratedConfig construct a Gymbag config.
 type GenerateOptions struct {
-	Preset           string
-	Domain           string
-	Upstream         string
-	Sites            []SiteSpec
-	VerifyLevel      string
-	Protect          *bool
-	Difficulty       int
-	DefaultRules     *bool
-	SSLProvider      string
-	Email            string
-	EABKID           string
-	EABHMACKey       string
-	HTTPPort         int
-	HTTPSPort        int
-	BindHost         string
-	AdminAddr        string
-	CertDir          string
-	RedisURL         string
-	AutoHosts        *bool
-	IPSecurityAction string
-	Format           string // "gymbagfile" (default) or "json"
-	IncludeComments  bool
+	Preset             string
+	Domain             string
+	Upstream           string
+	Sites              []SiteSpec
+	VerifyLevel        string
+	Protect            *bool
+	Difficulty         int
+	ClearanceTTL       string
+	RemoteRules        []string
+	RemoteRulesRefresh string
+	DefaultRules       *bool
+	SSLProvider        string
+	Email              string
+	EABKID             string
+	EABHMACKey         string
+	HTTPPort           int
+	HTTPSPort          int
+	BindHost           string
+	AdminAddr          string
+	CertDir            string
+	RedisURL           string
+	AutoHosts          *bool
+	IPSecurityAction   string
+	Format             string // "gymbagfile" (default) or "json"
+	IncludeComments    bool
 }
 
 // ParseSiteSpec parses a "domain=upstream" (or "domain1,domain2=upstream") CLI specification.
@@ -131,6 +136,27 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	if opts.Difficulty != 0 {
 		cfg.Defaults.Difficulty = opts.Difficulty
 	}
+	if rawTTL := strings.TrimSpace(opts.ClearanceTTL); rawTTL != "" {
+		ttl, err := ParseDurationSeconds(rawTTL, "verify-timeout")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Defaults.ClearanceTTL = ttl
+	}
+	if len(opts.RemoteRules) > 0 {
+		urls, err := splitRemoteRuleURLs(opts.RemoteRules)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Defaults.RemoteRules = urls
+	}
+	if rawRefresh := strings.TrimSpace(opts.RemoteRulesRefresh); rawRefresh != "" {
+		sec, err := ParseDurationSeconds(rawRefresh, "remote-rules-refresh")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.RemoteRulesRefresh = sec
+	}
 	if opts.DefaultRules != nil {
 		b := *opts.DefaultRules
 		cfg.Defaults.DefaultRules = &b
@@ -199,6 +225,24 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		if sp.Difficulty != 0 {
 			wafCfg.Difficulty = sp.Difficulty
 		}
+		if rawSiteTTL := strings.TrimSpace(sp.ClearanceTTL); rawSiteTTL != "" {
+			ttl, err := ParseDurationSeconds(rawSiteTTL, "verify-timeout")
+			if err != nil {
+				return Config{}, err
+			}
+			wafCfg.ClearanceTTL = ttl
+		}
+		if len(sp.RemoteRules) > 0 {
+			urls, err := splitRemoteRuleURLs(sp.RemoteRules)
+			if err != nil {
+				return Config{}, err
+			}
+			for _, u := range urls {
+				if !stringsContainsSlice(wafCfg.RemoteRules, u) {
+					wafCfg.RemoteRules = append(wafCfg.RemoteRules, u)
+				}
+			}
+		}
 		cfg.Sites = append(cfg.Sites, SiteConfig{
 			Domain:    d,
 			Upstreams: append([]string(nil), sp.Upstreams...),
@@ -256,6 +300,15 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func stringsContainsSlice(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeConfigFormat normalizes a config output format ("gymbagfile" or "json").

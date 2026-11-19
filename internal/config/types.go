@@ -393,6 +393,7 @@ type SiteWAFConfig struct {
 	RateWindow            int          `json:"rate_window"`
 	DefaultRules          *bool        `json:"default_rules,omitempty"`
 	Rules                 []CustomRule `json:"rules,omitempty"`
+	RemoteRules           []string     `json:"remote_rules,omitempty"`
 	CustomAIBots          []string     `json:"custom_ai_bots,omitempty"`
 	CustomSuspiciousUAs   []string     `json:"custom_suspicious_uas,omitempty"`
 	CustomSuspiciousPaths []string     `json:"custom_suspicious_paths,omitempty"`
@@ -444,6 +445,24 @@ func (w *SiteWAFConfig) Validate() error {
 		if err := w.Rules[i].Validate(); err != nil {
 			return err
 		}
+	}
+	if len(w.RemoteRules) > 0 {
+		seen := make(map[string]struct{}, len(w.RemoteRules))
+		cleaned := make([]string, 0, len(w.RemoteRules))
+		for _, rawURL := range w.RemoteRules {
+			u := strings.TrimSpace(rawURL)
+			if u == "" {
+				continue
+			}
+			if err := RequireHTTPURL(u, "remote_rules"); err != nil {
+				return err
+			}
+			if _, ok := seen[u]; !ok {
+				seen[u] = struct{}{}
+				cleaned = append(cleaned, u)
+			}
+		}
+		w.RemoteRules = cleaned
 	}
 	return nil
 }
@@ -545,19 +564,23 @@ func DefaultTLSConfig() TLSConfig {
 	}
 }
 
+// DefaultRemoteRulesRefresh is the default refresh interval (in seconds) for remote rule URLs.
+const DefaultRemoteRulesRefresh = 300
+
 // Config is the root configuration model for Gymbag.
 type Config struct {
-	Sites          []SiteConfig  `json:"sites"`
-	BindHost       string        `json:"bind_host"`
-	HTTPPort       int           `json:"http_port"`
-	HTTPSPort      int           `json:"https_port"`
-	AdminAddr      string        `json:"admin_addr,omitempty"`
-	TLS            TLSConfig     `json:"tls"`
-	Intel          IntelConfig   `json:"intel"`
-	RedisURL       string        `json:"redis_url,omitempty"`
-	Secret         string        `json:"secret,omitempty"`
-	TrustedProxies []string      `json:"trusted_proxies,omitempty"`
-	Defaults       SiteWAFConfig `json:"defaults"`
+	Sites              []SiteConfig  `json:"sites"`
+	BindHost           string        `json:"bind_host"`
+	HTTPPort           int           `json:"http_port"`
+	HTTPSPort          int           `json:"https_port"`
+	AdminAddr          string        `json:"admin_addr,omitempty"`
+	TLS                TLSConfig     `json:"tls"`
+	Intel              IntelConfig   `json:"intel"`
+	RemoteRulesRefresh int           `json:"remote_rules_refresh,omitempty"`
+	RedisURL           string        `json:"redis_url,omitempty"`
+	Secret             string        `json:"secret,omitempty"`
+	TrustedProxies     []string      `json:"trusted_proxies,omitempty"`
+	Defaults           SiteWAFConfig `json:"defaults"`
 }
 
 // Default returns a baseline Config for localhost -> http://localhost:5173.
@@ -572,13 +595,39 @@ func Default() Config {
 				WAF:       waf,
 			},
 		},
-		BindHost:  "127.0.0.1",
-		HTTPPort:  80,
-		HTTPSPort: 443,
-		TLS:       DefaultTLSConfig(),
-		Intel:     DefaultIntelConfig(),
-		Defaults:  waf,
+		BindHost:           "127.0.0.1",
+		HTTPPort:           80,
+		HTTPSPort:          443,
+		TLS:                DefaultTLSConfig(),
+		Intel:              DefaultIntelConfig(),
+		RemoteRulesRefresh: DefaultRemoteRulesRefresh,
+		Defaults:           waf,
 	}
+}
+
+// RemoteRuleURLs returns the ordered unique list of remote rule URLs referenced across all sites.
+func (c Config) RemoteRuleURLs() []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			out = append(out, u)
+		}
+	}
+	for _, u := range c.Defaults.RemoteRules {
+		add(u)
+	}
+	for _, s := range c.Sites {
+		for _, u := range s.WAF.RemoteRules {
+			add(u)
+		}
+	}
+	return out
 }
 
 // Domains returns the ordered unique list of site domains.
@@ -693,6 +742,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Intel.Validate(); err != nil {
 		return err
+	}
+	if c.RemoteRulesRefresh <= 0 {
+		c.RemoteRulesRefresh = DefaultRemoteRulesRefresh
 	}
 	if err := c.Defaults.Validate(); err != nil {
 		c.Defaults = DefaultSiteWAFConfig()
