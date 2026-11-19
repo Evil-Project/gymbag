@@ -40,14 +40,24 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
+      - name: Resolve VitePress base path
+        shell: bash
+        run: |
+          RAW_BASE="${{ steps.pages.outputs.base_path }}"
+          CLEAN_BASE="${RAW_BASE#/}"
+          CLEAN_BASE="${CLEAN_BASE%/}"
+          if [[ -z "${CLEAN_BASE}" ]]; then
+            echo "VITEPRESS_BASE=/" >> "${GITHUB_ENV}"
+          else
+            echo "VITEPRESS_BASE=/${CLEAN_BASE}/" >> "${GITHUB_ENV}"
+          fi
+
       - name: Install docs dependencies
         working-directory: docs
         run: npm ci
 
       - name: Build VitePress site
         working-directory: docs
-        env:
-          VITEPRESS_BASE: ${{ steps.pages.outputs.base_path != '' && format('{0}/', steps.pages.outputs.base_path) || (github.event_name == 'pull_request' && format('/{0}/', github.event.repository.name) || '/') }}
         run: npm run docs:build
 
       - name: Upload Pages artifact

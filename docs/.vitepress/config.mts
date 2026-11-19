@@ -1,6 +1,11 @@
 import { defineConfig } from 'vitepress'
 
-const base = process.env.VITEPRESS_BASE || '/gymbag/'
+function normalizeBase(raw?: string): string {
+  const trimmed = (raw ?? '/').trim().replace(/^\/+|\/+$/g, '')
+  return trimmed ? `/${trimmed}/` : '/'
+}
+
+const base = normalizeBase(process.env.VITEPRESS_BASE)
 
 export default defineConfig({
   title: 'Gymbag',
