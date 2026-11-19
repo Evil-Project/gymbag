@@ -119,4 +119,29 @@ app.example.com {
 		t.Fatalf("expected custom ACME directory reset on named CLI override, got provider=%q dir=%q",
 			overriddenCfg.TLS.Provider, overriddenCfg.TLS.ACMEDirectory)
 	}
+
+	// Verify init & validate with --verify-timeout and --remote-rules
+	initOutPath := filepath.Join(dir, "remote-timeout.Gymbagfile")
+	out.Reset()
+	errBuf.Reset()
+	if code := Execute([]string{
+		"init", "-y", "-f",
+		"-o", initOutPath,
+		"-d", "app.example.com",
+		"-u", ":3000",
+		"-l", "3",
+		"--verify-timeout", "6h",
+		"--remote-rules", "https://rules.example.com/waf.rules",
+		"--remote-rules-refresh", "10m",
+	}, &out, &errBuf); code != 0 {
+		t.Fatalf("init with verify-timeout/remote-rules failed (%d): %s", code, errBuf.String())
+	}
+	out.Reset()
+	errBuf.Reset()
+	if code := Execute([]string{"validate", "-c", initOutPath}, &out, &errBuf); code != 0 {
+		t.Fatalf("validate generated config failed (%d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "clearance_ttl: 21600s") || !strings.Contains(out.String(), "remote rules: 1") {
+		t.Fatalf("expected clearance_ttl and remote rules in validate output, got:\n%s", out.String())
+	}
 }

@@ -60,16 +60,19 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		cfgFile     string
-		domain      string
-		upstream    string
-		verifyLevel string
-		sslProvider string
-		noProtect   bool
-		adminAddr   string
-		httpPort    int
-		httpsPort   int
-		watch       bool
+		cfgFile            string
+		domain             string
+		upstream           string
+		verifyLevel        string
+		verifyTimeout      string
+		remoteRules        multiStringFlag
+		remoteRulesRefresh string
+		sslProvider        string
+		noProtect          bool
+		adminAddr          string
+		httpPort           int
+		httpsPort          int
+		watch              bool
 	)
 
 	fs.StringVar(&cfgFile, "c", "", "Path to a Gymbagfile, Caddyfile, or JSON config file")
@@ -83,6 +86,10 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&verifyLevel, "verify", "", "Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)")
 	fs.StringVar(&verifyLevel, "m", "", "Alias for --verify")
 	fs.StringVar(&verifyLevel, "mode", "", "Alias for --verify")
+	fs.StringVar(&verifyTimeout, "verify-timeout", "", "Verified clearance timeout (seconds or duration like 30m, 12h, 7d)")
+	fs.StringVar(&verifyTimeout, "clearance-ttl", "", "Alias for --verify-timeout")
+	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
+	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification for CLI-configured sites")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address (e.g. 127.0.0.1:2019 or off)")
@@ -112,14 +119,17 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	loadOpts := config.LoadOptions{
-		ConfigPath:  cfgFile,
-		Domain:      domain,
-		Upstream:    upstream,
-		VerifyLevel: verifyLevel,
-		Protect:     protectOpt,
-		AdminAddr:   adminAddr,
-		HTTPPort:    httpPort,
-		HTTPSPort:   httpsPort,
+		ConfigPath:         cfgFile,
+		Domain:             domain,
+		Upstream:           upstream,
+		VerifyLevel:        verifyLevel,
+		ClearanceTTL:       verifyTimeout,
+		RemoteRules:        remoteRules,
+		RemoteRulesRefresh: remoteRulesRefresh,
+		Protect:            protectOpt,
+		AdminAddr:          adminAddr,
+		HTTPPort:           httpPort,
+		HTTPSPort:          httpsPort,
 	}
 
 	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
@@ -136,14 +146,17 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		from        string
-		to          string
-		verifyLevel string
-		sslProvider string
-		noProtect   bool
-		adminAddr   string
-		httpPort    int
-		httpsPort   int
+		from               string
+		to                 string
+		verifyLevel        string
+		verifyTimeout      string
+		remoteRules        multiStringFlag
+		remoteRulesRefresh string
+		sslProvider        string
+		noProtect          bool
+		adminAddr          string
+		httpPort           int
+		httpsPort          int
 	)
 	fs.StringVar(&from, "from", "localhost", "Downstream domain(s), comma-separated")
 	fs.StringVar(&to, "to", "", "Upstream address or URL (required, e.g. :5173 or http://localhost:3000)")
@@ -151,6 +164,10 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&verifyLevel, "verify-level", "", "Alias for --verify")
 	fs.StringVar(&verifyLevel, "l", "", "Alias for --verify")
 	fs.StringVar(&verifyLevel, "mode", "", "Alias for --verify")
+	fs.StringVar(&verifyTimeout, "verify-timeout", "", "Verified clearance timeout (seconds or duration like 30m, 12h, 7d)")
+	fs.StringVar(&verifyTimeout, "clearance-ttl", "", "Alias for --verify-timeout")
+	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
+	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address")
@@ -174,13 +191,16 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		protectOpt = &f
 	}
 	loadOpts := config.LoadOptions{
-		Domain:      from,
-		Upstream:    to,
-		VerifyLevel: verifyLevel,
-		Protect:     protectOpt,
-		AdminAddr:   adminAddr,
-		HTTPPort:    httpPort,
-		HTTPSPort:   httpsPort,
+		Domain:             from,
+		Upstream:           to,
+		VerifyLevel:        verifyLevel,
+		ClearanceTTL:       verifyTimeout,
+		RemoteRules:        remoteRules,
+		RemoteRulesRefresh: remoteRulesRefresh,
+		Protect:            protectOpt,
+		AdminAddr:          adminAddr,
+		HTTPPort:           httpPort,
+		HTTPSPort:          httpsPort,
 	}
 	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
 	if err != nil {
@@ -224,10 +244,10 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		if !s.WAF.DefaultRulesEnabled() {
 			defRulesLabel = "off"
 		}
-		state := fmt.Sprintf("protected (verify: %d [%s], difficulty: %d, default_rules: %s, custom rules: %d)",
-			int(s.WAF.VerifyLevel), s.WAF.VerifyLevel.Label(), s.WAF.Difficulty, defRulesLabel, len(s.WAF.Rules))
+		state := fmt.Sprintf("protected (verify: %d [%s], difficulty: %d, clearance_ttl: %ds, default_rules: %s, custom rules: %d, remote rules: %d)",
+			int(s.WAF.VerifyLevel), s.WAF.VerifyLevel.Label(), s.WAF.Difficulty, s.WAF.ClearanceTTL, defRulesLabel, len(s.WAF.Rules), len(s.WAF.RemoteRules))
 		if !s.Protect {
-			state = fmt.Sprintf("unprotected (WAF verification off, custom rules: %d)", len(s.WAF.Rules))
+			state = fmt.Sprintf("unprotected (WAF verification off, custom rules: %d, remote rules: %d)", len(s.WAF.Rules), len(s.WAF.RemoteRules))
 		}
 		_, _ = fmt.Fprintf(stdout, "  - %s -> %s [%s]\n", s.Domain, strings.Join(s.Upstreams, ", "), state)
 	}
@@ -447,8 +467,11 @@ Flags:
   -c, --config <path>        Path to Gymbagfile, Caddyfile, or JSON config
   -d, --domain <domains>     Downstream domain(s), comma-separated
   -u, --upstream <url>       Upstream URL to reverse proxy to
-  -l, --verify <0-3>         Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)
-      --ssl-provider <name>  SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)
+  -l, --verify <0-3>              Verify level (0=always, 1=only suspicious, 2=only ai, 3=suspicious & ai)
+      --verify-timeout <dur>      Verified clearance timeout (e.g. 30m, 12h, 7d, or seconds; default 86400s)
+      --remote-rules <url>        Remote firewall rules URL (repeatable or comma-separated)
+      --remote-rules-refresh <d>  Refresh interval for remote rules (default 5m)
+      --ssl-provider <name>       SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)
       --no-protect           Disable WAF verification for CLI-configured websites
       --admin <addr>         Enable local REST Admin API (e.g. 127.0.0.1:2019)
       --http-port <port>     HTTP redirect & ACME HTTP-01 port (default 80)

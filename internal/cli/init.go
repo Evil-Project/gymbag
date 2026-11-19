@@ -39,9 +39,12 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		domain           string
 		upstream         string
 		siteFlags        multiStringFlag
-		verifyLevel      string
-		difficulty       int
-		noProtect        bool
+		verifyLevel        string
+		difficulty         int
+		verifyTimeout      string
+		remoteRules        multiStringFlag
+		remoteRulesRefresh string
+		noProtect          bool
 		sslProvider      string
 		email            string
 		eabKID           string
@@ -84,6 +87,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&verifyLevel, "m", "", "Alias for --verify")
 	fs.StringVar(&verifyLevel, "mode", "", "Alias for --verify")
 	fs.IntVar(&difficulty, "difficulty", 0, "SHA-256 PoW difficulty (1-5, default 4)")
+	fs.StringVar(&verifyTimeout, "verify-timeout", "", "Verified clearance timeout (seconds or duration like 30m, 12h, 7d)")
+	fs.StringVar(&verifyTimeout, "clearance-ttl", "", "Alias for --verify-timeout")
+	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
+	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification (protect off)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
 	fs.StringVar(&email, "email", "", "ACME contact email")
@@ -177,10 +184,13 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Domain:           domain,
 		Upstream:         upstream,
 		Sites:            parsedSites,
-		VerifyLevel:      verifyLevel,
-		Protect:          protectOpt,
-		Difficulty:       difficulty,
-		DefaultRules:     defaultRulesOpt,
+		VerifyLevel:        verifyLevel,
+		Protect:            protectOpt,
+		Difficulty:         difficulty,
+		ClearanceTTL:       verifyTimeout,
+		RemoteRules:        remoteRules,
+		RemoteRulesRefresh: remoteRulesRefresh,
+		DefaultRules:       defaultRulesOpt,
 		SSLProvider:      sslProvider,
 		Email:            email,
 		EABKID:           eabKID,
@@ -198,7 +208,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	hasConfigFlags := preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
-		verifyLevel != "" || noProtect || sslProvider != "" || email != "" ||
+		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || noProtect || sslProvider != "" || email != "" ||
 		httpPort != 0 || httpsPort != 0 || adminAddr != ""
 	runWizard := interactive || (!yes && !hasConfigFlags && len(args) == 0)
 	if !interactive && !yes && !hasConfigFlags && len(args) > 0 {
@@ -517,8 +527,11 @@ Flags:
   -u, --upstream <url>         Upstream target URL (e.g. http://localhost:3000 or :3000)
       --site <domain=url>      Add a site entry (repeatable)
   -l, --verify <0-3|off>       Verify level (0=always, 1=suspicious, 2=ai, 3=suspicious & ai, off=disable)
-      --difficulty <1-5>       SHA-256 PoW difficulty (default 4)
-      --no-protect             Disable WAF verification (protect off)
+      --difficulty <1-5>           SHA-256 PoW difficulty (default 4)
+      --verify-timeout <duration>  Verified clearance timeout (e.g. 30m, 12h, 7d, or seconds)
+      --remote-rules <url>         Remote firewall rules URL (repeatable or comma-separated)
+      --remote-rules-refresh <d>   Refresh interval for remote rules (default 5m)
+      --no-protect                 Disable WAF verification (protect off)
       --ssl-provider <name>    SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, URL)
       --email <addr>           ACME contact email
       --eab-kid <id>           ACME EAB Key ID
