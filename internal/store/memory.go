@@ -17,13 +17,23 @@ type windowEntry struct {
 	window    time.Duration
 }
 
-// MemoryStore is a concurrency-safe in-memory implementation of Store.
+const rateShardCount = 64
+
+type rateShard struct {
+	mu      sync.Mutex
+	windows map[string]windowEntry
+	ops     uint64
+	_       [40]byte // prevent false sharing across CPU cache lines
+}
+
+// MemoryStore is a concurrency-safe, sharded in-memory implementation of Store.
 type MemoryStore struct {
-	mu         sync.Mutex
+	chalMu     sync.Mutex
 	challenges map[string]challengeEntry
-	windows    map[string]windowEntry
-	now        func() time.Time
-	ops        uint64
+	chalOps    uint64
+
+	shards [rateShardCount]rateShard
+	now    func() time.Time
 }
 
 // NewMemoryStore creates a new in-memory Store using the system clock.
@@ -33,19 +43,22 @@ func NewMemoryStore() *MemoryStore {
 
 // NewMemoryStoreWithClock creates a MemoryStore with a custom clock function for testing.
 func NewMemoryStoreWithClock(clock func() time.Time) *MemoryStore {
-	return &MemoryStore{
+	m := &MemoryStore{
 		challenges: make(map[string]challengeEntry),
-		windows:    make(map[string]windowEntry),
 		now:        clock,
 	}
+	for i := range m.shards {
+		m.shards[i].windows = make(map[string]windowEntry)
+	}
+	return m
 }
 
 func (m *MemoryStore) SaveChallenge(_ context.Context, challengeID string, record ChallengeRecord, ttlSeconds int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.chalMu.Lock()
+	defer m.chalMu.Unlock()
 
 	now := m.now()
-	m.maybeSweepLocked(now)
+	m.maybeSweepChallengesLocked(now)
 
 	var expiresAt time.Time
 	if ttlSeconds <= 0 {
@@ -65,8 +78,8 @@ func (m *MemoryStore) SaveChallenge(_ context.Context, challengeID string, recor
 }
 
 func (m *MemoryStore) GetChallenge(_ context.Context, challengeID string) (*ChallengeRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.chalMu.Lock()
+	defer m.chalMu.Unlock()
 
 	cur, ok := m.challenges[challengeID]
 	if !ok {
@@ -81,37 +94,47 @@ func (m *MemoryStore) GetChallenge(_ context.Context, challengeID string) (*Chal
 }
 
 func (m *MemoryStore) DeleteChallenge(_ context.Context, challengeID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.chalMu.Lock()
+	defer m.chalMu.Unlock()
 	delete(m.challenges, challengeID)
 	return nil
 }
 
 func (m *MemoryStore) Increment(_ context.Context, key string, windowSeconds int) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	shard := &m.shards[fnv1a64(key)&(rateShardCount-1)]
 	now := m.now()
-	m.maybeSweepLocked(now)
-
 	win := time.Duration(windowSeconds) * time.Second
-	cur, ok := m.windows[key]
-	if !ok || now.Sub(cur.startedAt) >= win {
-		cur = windowEntry{startedAt: now, count: 0, window: win}
+
+	shard.mu.Lock()
+	shard.ops++
+	if shard.ops&255 == 0 {
+		for k, v := range shard.windows {
+			if now.Sub(v.startedAt) >= v.window {
+				delete(shard.windows, k)
+			}
+		}
 	}
-	cur.count++
-	cur.window = win
-	m.windows[key] = cur
-	return cur.count, nil
+
+	cur, ok := shard.windows[key]
+	if !ok || now.Sub(cur.startedAt) >= win {
+		cur = windowEntry{startedAt: now, count: 1, window: win}
+	} else {
+		cur.count++
+		cur.window = win
+	}
+	shard.windows[key] = cur
+	count := cur.count
+	shard.mu.Unlock()
+	return count, nil
 }
 
 func (m *MemoryStore) Close() error {
 	return nil
 }
 
-func (m *MemoryStore) maybeSweepLocked(now time.Time) {
-	m.ops++
-	if m.ops%256 != 0 {
+func (m *MemoryStore) maybeSweepChallengesLocked(now time.Time) {
+	m.chalOps++
+	if m.chalOps&255 != 0 {
 		return
 	}
 	for k, v := range m.challenges {
@@ -119,9 +142,17 @@ func (m *MemoryStore) maybeSweepLocked(now time.Time) {
 			delete(m.challenges, k)
 		}
 	}
-	for k, v := range m.windows {
-		if now.Sub(v.startedAt) >= v.window {
-			delete(m.windows, k)
-		}
+}
+
+func fnv1a64(s string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	var h uint64 = offset64
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime64
 	}
+	return h
 }

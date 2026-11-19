@@ -520,15 +520,17 @@ type Manager struct {
 	providers []Provider
 	current   *Material
 	active    atomic.Pointer[tls.Certificate]
-	sniCerts  map[string]*tls.Certificate
+	sniCerts  atomic.Pointer[map[string]*tls.Certificate]
 }
 
 // NewManager creates a certificate Manager from an ordered Provider slice.
 func NewManager(providers []Provider) *Manager {
-	return &Manager{
+	m := &Manager{
 		providers: providers,
-		sniCerts:  make(map[string]*tls.Certificate),
 	}
+	empty := make(map[string]*tls.Certificate)
+	m.sniCerts.Store(&empty)
+	return m
 }
 
 // RegisterSiteCertificates loads any per-site custom certificate pairs for SNI selection.
@@ -550,9 +552,7 @@ func (m *Manager) RegisterSiteCertificatesWithPassword(sites []config.SiteConfig
 		certCopy := pair
 		sni[host.Normalize(site.Domain)] = &certCopy
 	}
-	m.mu.Lock()
-	m.sniCerts = sni
-	m.mu.Unlock()
+	m.sniCerts.Store(&sni)
 	return nil
 }
 
@@ -691,12 +691,11 @@ func (m *Manager) ForceRenew(ctx context.Context) (*Material, error) {
 // GetCertificate implements crypto/tls.Config.GetCertificate for zero-downtime hot-reload & SNI.
 func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	if hello != nil && hello.ServerName != "" {
-		sni := host.Normalize(hello.ServerName)
-		m.mu.RLock()
-		custom, ok := m.sniCerts[sni]
-		m.mu.RUnlock()
-		if ok {
-			return custom, nil
+		if sniMap := m.sniCerts.Load(); sniMap != nil && len(*sniMap) > 0 {
+			sni := host.Normalize(hello.ServerName)
+			if custom, ok := (*sniMap)[sni]; ok {
+				return custom, nil
+			}
 		}
 	}
 	cert := m.active.Load()

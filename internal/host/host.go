@@ -11,6 +11,9 @@ import (
 // Normalize canonicalizes a host or domain name by trimming whitespace,
 // folding ASCII case to lower, stripping trailing dots, and unwrapping IPv6 brackets.
 func Normalize(raw string) string {
+	if isCleanNormalizedHost(raw) {
+		return raw
+	}
 	val := strings.TrimSpace(raw)
 	val = strings.ToLower(val)
 	val = strings.TrimSuffix(val, ".")
@@ -20,21 +23,45 @@ func Normalize(raw string) string {
 	return val
 }
 
+func isCleanNormalizedHost(s string) bool {
+	n := len(s)
+	if n == 0 {
+		return true
+	}
+	if s[0] == '[' || s[0] <= ' ' || s[n-1] <= ' ' || s[n-1] == '.' {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' || c >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 // FromHeader extracts the normalized hostname from an HTTP Host header value
 // (supporting IPv4, domain names, host:port, [ipv6], and [ipv6]:port).
 func FromHeader(value string) string {
-	header := strings.TrimSpace(value)
-	if header == "" {
+	if value == "" {
 		return ""
 	}
-	if strings.HasPrefix(header, "[") {
+	header := value
+	if header[0] <= ' ' || header[len(header)-1] <= ' ' {
+		header = strings.TrimSpace(header)
+		if header == "" {
+			return ""
+		}
+	}
+	if header[0] == '[' {
 		if end := strings.IndexByte(header, ']'); end != -1 {
 			return Normalize(header[1:end])
 		}
 	}
-	if strings.Count(header, ":") == 1 {
-		hostPart, _, _ := strings.Cut(header, ":")
-		return Normalize(hostPart)
+	if firstColon := strings.IndexByte(header, ':'); firstColon != -1 {
+		if strings.IndexByte(header[firstColon+1:], ':') == -1 {
+			return Normalize(header[:firstColon])
+		}
 	}
 	return Normalize(header)
 }
