@@ -27,20 +27,22 @@ import (
 )
 
 // RuntimeOptions allows dependency injection of custom transports, stores, intelligence managers,
-// ACME clients, hosts file paths, and loggers.
+// remote rules managers, ACME clients, hosts file paths, and loggers.
 type RuntimeOptions struct {
-	Store         store.Store
-	Intel         *intel.Manager
-	IntelHTTP     *http.Client
-	HTTPTransport http.RoundTripper
-	WSDialer      proxy.DialContextFunc
-	ACMEHTTP      *http.Client
-	HostsFilePath string
-	Logger        *slog.Logger
+	Store           store.Store
+	Intel           *intel.Manager
+	IntelHTTP       *http.Client
+	RemoteRules     *waf.RemoteRuleManager
+	RemoteRulesHTTP *http.Client
+	HTTPTransport   http.RoundTripper
+	WSDialer        proxy.DialContextFunc
+	ACMEHTTP        *http.Client
+	HostsFilePath   string
+	Logger          *slog.Logger
 }
 
-// Runtime is the composition root wiring configuration, WAF, IP intelligence, reverse proxy, TLS,
-// local PKI hosts management, and HTTP handlers.
+// Runtime is the composition root wiring configuration, WAF, IP intelligence, remote rules,
+// reverse proxy, TLS, local PKI hosts management, and HTTP handlers.
 type Runtime struct {
 	mu            sync.RWMutex
 	cfg           config.Config
@@ -50,6 +52,7 @@ type Runtime struct {
 	Logger      *slog.Logger
 	Store       store.Store
 	Intel       *intel.Manager
+	RemoteRules *waf.RemoteRuleManager
 	Clearance   *waf.ClearanceTokens
 	Challenges  *waf.ChallengeService
 	Pages       *waf.Renderer
@@ -216,10 +219,23 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		})
 	}
 
+	remoteMgr := opts.RemoteRules
+	if remoteMgr == nil {
+		remoteMgr = waf.NewRemoteRuleManager(waf.RemoteRuleManagerOptions{
+			CacheDir:        filepath.Join(cfg.TLS.CertDir, "rules-cache"),
+			RefreshInterval: time.Duration(cfg.RemoteRulesRefresh) * time.Second,
+			URLs:            cfg.RemoteRuleURLs(),
+			HTTPClient:      opts.RemoteRulesHTTP,
+			Logger:          logger,
+		})
+	} else {
+		remoteMgr.SetURLs(cfg.RemoteRuleURLs())
+	}
+
 	clearance := waf.NewClearanceTokens(secret, cfg.Defaults.ClearanceTTL)
 	challenges := waf.NewChallengeService(st, cfg.Defaults.Difficulty, cfg.Defaults.ChallengeTTL)
 	pages := waf.NewRenderer("")
-	router := proxy.NewSiteRouterWithIntel(cfg.Sites, st, clearance, intelMgr, cfg.Intel.IPSecurityAction)
+	router := proxy.NewSiteRouterWithProviders(cfg.Sites, st, clearance, intelMgr, cfg.Intel.IPSecurityAction, remoteMgr)
 	httpProxy := proxy.NewHTTPProxy(cfg.HTTPSPort, opts.HTTPTransport, logger)
 	wsProxy := proxy.NewWebSocketProxy(opts.WSDialer, logger)
 
@@ -246,6 +262,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		Logger:        logger,
 		Store:         st,
 		Intel:         intelMgr,
+		RemoteRules:   remoteMgr,
 		Clearance:     clearance,
 		Challenges:    challenges,
 		Pages:         pages,
@@ -260,16 +277,92 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 	if cfg.TLS.HSTS != nil {
 		rt.HSTS.Store(*cfg.TLS.HSTS)
 	}
+	remoteMgr.SetOnUpdate(rt.reloadRouter)
 
 	gateway := NewGatewayHandler(challenges, clearance, httpProxy, wsProxy, board, trustedNets)
-	wafProtected := WAFMiddleware(challenges, pages, trustedNets, gateway)
-	withHSTS := HSTSMiddleware(&rt.HSTS, wafProtected)
-	withHost := AllowedHostMiddleware(router, withHSTS)
-	rt.HTTPSHandler = ServerHeaderMiddleware("gymbag", withHost)
+	// Fused high-throughput HTTPS handler: avoids per-request context cloning, duplicate IP resolution,
+	// and duplicate WebSocket upgrade checks while preserving identical security semantics.
+	rt.HTTPSHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr := w.Header()
+		hdr["Server"] = serverHeaderValue
+
+		route, hostName, ok := router.ResolveWithHost(r.Host)
+		if !ok {
+			hdr.Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write(invalidHostBytes)
+			return
+		}
+
+		isWS := proxy.IsWebSocketUpgrade(r)
+		if rt.HSTS.Load() && !isWS {
+			hdr["Strict-Transport-Security"] = hstsHeaderValue
+		}
+
+		clientIP := ResolveClientIP(r, trustedNets)
+		var decision waf.Decision
+		if fastGate, isFast := route.Gate.(waf.HTTPAccessGate); isFast {
+			decision = fastGate.DecideHTTP(r.Context(), r, hostName, clientIP)
+		} else {
+			incoming := waf.FromHTTPRequest(r, clientIP)
+			decision = route.Gate.Decide(r.Context(), incoming)
+		}
+
+		if isWS {
+			if decision.Action != waf.ActionAllow {
+				status := decision.StatusCode
+				if status == 0 {
+					status = http.StatusForbidden
+				}
+				hdr.Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(status)
+				_, _ = w.Write(wsClearanceBytes)
+				return
+			}
+			gateway.ServeRouted(w, r, route, hostName, clientIP, true)
+			return
+		}
+
+		switch decision.Action {
+		case waf.ActionDeny:
+			pages.WriteReject(w, decision.Reason, decision.StatusCode)
+			return
+		case waf.ActionChallenge:
+			chalID, diff, cErr := challenges.Issue(
+				r.Context(),
+				hostName,
+				clientIP,
+				route.Config.WAF.Difficulty,
+				route.Config.WAF.ChallengeTTL,
+			)
+			if cErr != nil {
+				http.Error(w, "failed to issue challenge", http.StatusInternalServerError)
+				return
+			}
+			pages.WriteChallenge(w, chalID, diff)
+			return
+		default:
+			gateway.ServeRouted(w, r, route, hostName, clientIP, false)
+		}
+	})
 
 	rt.RedirectHandler = NewRedirectHandler(router, cfg.HTTPSPort, board)
 	rt.AdminHandler = NewAdminHandler(rt)
 	return rt, nil
+}
+
+var (
+	serverHeaderValue = []string{"gymbag"}
+	hstsHeaderValue   = []string{"max-age=31536000"}
+	invalidHostBytes  = []byte("Invalid host header")
+	wsClearanceBytes  = []byte("WebSocket clearance required")
+)
+
+func (rt *Runtime) reloadRouter() {
+	rt.mu.RLock()
+	cfg := rt.cfg
+	rt.mu.RUnlock()
+	rt.Router.ReloadWithProviders(cfg.Sites, rt.Store, rt.Clearance, rt.Intel, cfg.Intel.IPSecurityAction, rt.RemoteRules)
 }
 
 // Snapshot returns a thread-safe copy of the active Config (implements ConfigController).
@@ -297,16 +390,29 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	if rt.providerChain != nil {
 		rt.providerChain.setProviders(tlsmanager.BuildProviders(next, rt.ACMEBoard, acmeClient))
 	}
-	rt.Router.ReloadWithIntel(next.Sites, rt.Store, rt.Clearance, rt.Intel, next.Intel.IPSecurityAction)
-	if next.TLS.HSTS != nil {
-		rt.HSTS.Store(*next.TLS.HSTS)
-	} else {
-		rt.HSTS.Store(tlsmanager.HSTSEnabled(nil, rt.TLSSource()))
+	var addedURLs []string
+	if rt.RemoteRules != nil {
+		rt.RemoteRules.SetRefreshInterval(time.Duration(next.RemoteRulesRefresh) * time.Second)
+		addedURLs = rt.RemoteRules.SetURLs(next.RemoteRuleURLs())
 	}
 	rt.mu.Lock()
 	rt.cfg = next
 	rt.ACMEClient = acmeClient
 	rt.mu.Unlock()
+
+	rt.Router.ReloadWithProviders(next.Sites, rt.Store, rt.Clearance, rt.Intel, next.Intel.IPSecurityAction, rt.RemoteRules)
+	if next.TLS.HSTS != nil {
+		rt.HSTS.Store(*next.TLS.HSTS)
+	} else {
+		rt.HSTS.Store(tlsmanager.HSTSEnabled(nil, rt.TLSSource()))
+	}
+	if rt.RemoteRules != nil && len(addedURLs) > 0 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			rt.RemoteRules.RefreshNow(ctx)
+		}()
+	}
 	return nil
 }
 
@@ -445,6 +551,16 @@ func (rt *Runtime) RefreshIntel(ctx context.Context) intel.Status {
 	return rt.Intel.RefreshNow(ctx)
 }
 
+// RemoteRulesStatus returns live statistics for all configured remote firewall rule URLs.
+func (rt *Runtime) RemoteRulesStatus() waf.RemoteRulesStatus {
+	return rt.RemoteRules.Status()
+}
+
+// RefreshRemoteRules triggers an immediate refresh of all configured remote firewall rule URLs.
+func (rt *Runtime) RefreshRemoteRules(ctx context.Context) waf.RemoteRulesStatus {
+	return rt.RemoteRules.RefreshNow(ctx)
+}
+
 // Close removes any managed hosts entries and releases underlying state store resources.
 func (rt *Runtime) Close() error {
 	hostsErr := rt.CleanupHosts()
@@ -489,8 +605,11 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 		}()
 	}
 
-	// Start automatic background updates for IP security feeds & official AI robot IP lists.
+	// Start automatic background updates for IP security feeds, AI robot IP lists, and remote firewall rules.
 	rt.Intel.Start(ctx)
+	if rt.RemoteRules != nil {
+		rt.RemoteRules.Start(ctx)
+	}
 
 	rt.Logger.Info(
 		"starting Gymbag gateway",
@@ -526,6 +645,7 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 	httpSrv := &http.Server{
 		Handler:           rt.RedirectHandler,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 3)
@@ -581,6 +701,7 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 		Handler:           rt.HTTPSHandler,
 		TLSConfig:         rt.CertManager.TLSConfig(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	renewCtx, stopRenew := context.WithCancel(ctx)

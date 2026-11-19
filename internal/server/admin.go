@@ -14,6 +14,7 @@ import (
 	"gymbag/internal/host"
 	"gymbag/internal/intel"
 	"gymbag/internal/tlsmanager"
+	"gymbag/internal/waf"
 )
 
 // TLSStatus describes active TLS material, SSL provider configuration, HSTS state, and supported ACME providers.
@@ -34,8 +35,8 @@ type TLSStatus struct {
 	Providers          []tlsmanager.CAProviderInfo `json:"providers"`
 }
 
-// ConfigController abstracts live configuration, custom rules, TLS status/renewal, and threat-intelligence
-// inspection and mutation for the REST Admin API (DIP/ISP).
+// ConfigController abstracts live configuration, custom rules, remote rules, TLS status/renewal,
+// and threat-intelligence inspection and mutation for the REST Admin API (DIP/ISP).
 type ConfigController interface {
 	Snapshot() config.Config
 	ReplaceConfig(next config.Config) error
@@ -44,6 +45,8 @@ type ConfigController interface {
 	RenewTLS(ctx context.Context) (TLSStatus, error)
 	IntelStatus() intel.Status
 	RefreshIntel(ctx context.Context) intel.Status
+	RemoteRulesStatus() waf.RemoteRulesStatus
+	RefreshRemoteRules(ctx context.Context) waf.RemoteRulesStatus
 }
 
 // SitePatchPayload defines partial update fields for PATCH /api/v1/sites/{domain}.
@@ -60,6 +63,7 @@ type SitePatchPayload struct {
 	CookieSecure *bool                `json:"cookie_secure,omitempty"`
 	DefaultRules *bool                `json:"default_rules,omitempty"`
 	Rules        *[]config.CustomRule `json:"rules,omitempty"`
+	RemoteRules  *[]string            `json:"remote_rules,omitempty"`
 	CertFile     *string              `json:"cert_file,omitempty"`
 	KeyFile      *string              `json:"key_file,omitempty"`
 }
@@ -86,6 +90,10 @@ func NewAdminHandler(ctrl ConfigController) http.Handler {
 			handleAdminIntelStatus(w, r, ctrl)
 		case path == "/api/v1/intel/refresh":
 			handleAdminIntelRefresh(w, r, ctrl)
+		case path == "/api/v1/rules/remote":
+			handleAdminRemoteRulesStatus(w, r, ctrl)
+		case path == "/api/v1/rules/remote/refresh":
+			handleAdminRemoteRulesRefresh(w, r, ctrl)
 		case path == "/api/v1/sites":
 			handleAdminSitesCollection(w, r, ctrl)
 		case strings.HasPrefix(path, "/api/v1/sites/"):
@@ -124,12 +132,14 @@ func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigContro
 	}
 	snap := ctrl.Snapshot()
 	intelSt := ctrl.IntelStatus()
+	remoteSt := ctrl.RemoteRulesStatus()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"sites_count":    len(snap.Sites),
 		"tls_source":     ctrl.TLSSource(),
 		"threat_entries": intelSt.ThreatEntries,
 		"ai_entries":     intelSt.AIEntries,
+		"remote_rules":   remoteSt.TotalRules,
 	})
 }
 
@@ -176,6 +186,24 @@ func handleAdminIntelRefresh(w http.ResponseWriter, r *http.Request, ctrl Config
 		return
 	}
 	writeJSON(w, http.StatusOK, ctrl.RefreshIntel(r.Context()))
+}
+
+func handleAdminRemoteRulesStatus(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET is required")
+		return
+	}
+	writeJSON(w, http.StatusOK, ctrl.RemoteRulesStatus())
+}
+
+func handleAdminRemoteRulesRefresh(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST is required")
+		return
+	}
+	writeJSON(w, http.StatusOK, ctrl.RefreshRemoteRules(r.Context()))
 }
 
 func handleAdminConfig(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {
@@ -351,6 +379,9 @@ func handleAdminSiteItem(w http.ResponseWriter, r *http.Request, ctrl ConfigCont
 				cloned[i] = cr.Clone()
 			}
 			target.WAF.Rules = cloned
+		}
+		if patch.RemoteRules != nil {
+			target.WAF.RemoteRules = append([]string(nil), (*patch.RemoteRules)...)
 		}
 		if patch.CertFile != nil {
 			target.CertFile = *patch.CertFile

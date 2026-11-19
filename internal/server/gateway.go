@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 
 	"gymbag/internal/host"
 	"gymbag/internal/proxy"
@@ -73,32 +74,47 @@ func (g *GatewayHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid host header", http.StatusBadRequest)
 		return
 	}
+	clientIP := ResolveClientIP(r, g.trustedProxies)
+	g.ServeRouted(w, r, route, host.FromHeader(r.Host), clientIP, proxy.IsWebSocketUpgrade(r))
+}
+
+// ServeRouted serves a request whose route, normalized host, client IP, and WebSocket upgrade state
+// have already been resolved by the fused gateway fast path.
+func (g *GatewayHandler) ServeRouted(
+	w http.ResponseWriter,
+	r *http.Request,
+	route *proxy.SiteRoute,
+	hostName, clientIP string,
+	isWS bool,
+) {
 	path := r.URL.Path
 	if path == "" {
 		path = "/"
 	}
 
-	// 1. ACME HTTP-01 challenge endpoint
-	if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
-		if token == "" || strings.Contains(token, "/") {
-			w.WriteHeader(http.StatusNotFound)
+	// Fast prefix check: internal endpoints all start with "/."
+	if len(path) >= 2 && path[0] == '/' && path[1] == '.' {
+		// 1. ACME HTTP-01 challenge endpoint
+		if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
+			if token == "" || strings.Contains(token, "/") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			WriteACMEChallenge(w, r, g.acmeBoard, token)
 			return
 		}
-		WriteACMEChallenge(w, r, g.acmeBoard, token)
-		return
+
+		// 2. WAF internal & RESTful endpoints (/.waf/*)
+		if strings.HasPrefix(path, "/.waf/") || path == "/.waf" {
+			g.serveWAFEndpoint(w, r, route, path, hostName, clientIP)
+			return
+		}
 	}
 
-	// 2. WAF internal & RESTful endpoints (/.waf/*)
-	if strings.HasPrefix(path, "/.waf/") || path == "/.waf" {
-		g.serveWAFEndpoint(w, r, route, path)
-		return
-	}
-
-	clientIP := ResolveClientIP(r, g.trustedProxies)
 	scheme := RequestScheme(r)
 
 	// 3. WebSocket upgrade tunnel
-	if proxy.IsWebSocketUpgrade(r) {
+	if isWS {
 		g.wsProxy.Forward(w, r, route, clientIP, scheme)
 		return
 	}
@@ -107,7 +123,7 @@ func (g *GatewayHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.httpProxy.Forward(w, r, route, clientIP, scheme)
 }
 
-func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, path string) {
+func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, path, hostName, clientIP string) {
 	// Static mascot assets
 	if name, ok := strings.CutPrefix(path, "/.waf/assets/"); ok {
 		serveAsset(w, r, name)
@@ -120,11 +136,11 @@ func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request
 
 	switch path {
 	case "/.waf/verify", "/.waf/v1/verifications":
-		g.handleVerify(w, r, route)
+		g.handleVerify(w, r, route, hostName, clientIP)
 	case "/.waf/v1/challenges":
-		g.handleCreateChallenge(w, r, route)
+		g.handleCreateChallenge(w, r, route, hostName, clientIP)
 	case "/.waf/v1/session":
-		g.handleSession(w, r, route)
+		g.handleSession(w, r, route, hostName, clientIP)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -154,7 +170,7 @@ func serveAsset(w http.ResponseWriter, r *http.Request, name string) {
 	}
 }
 
-func (g *GatewayHandler) handleVerify(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute) {
+func (g *GatewayHandler) handleVerify(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, hostName, clientIP string) {
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Allow", "POST, OPTIONS")
 		w.WriteHeader(http.StatusNoContent)
@@ -185,8 +201,6 @@ func (g *GatewayHandler) handleVerify(w http.ResponseWriter, r *http.Request, ro
 		return
 	}
 
-	clientIP := ResolveClientIP(r, g.trustedProxies)
-	hostName := host.FromHeader(r.Host)
 	accepted, verifyErr := g.challenges.Verify(r.Context(), hostName, clientIP, sub)
 	if verifyErr != nil || !accepted {
 		writeJSON(w, http.StatusForbidden, map[string]any{
@@ -207,10 +221,13 @@ func (g *GatewayHandler) handleVerify(w http.ResponseWriter, r *http.Request, ro
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"expires_in": wafCfg.ClearanceTTL,
+	})
 }
 
-func (g *GatewayHandler) handleCreateChallenge(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute) {
+func (g *GatewayHandler) handleCreateChallenge(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, hostName, clientIP string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
@@ -218,8 +235,6 @@ func (g *GatewayHandler) handleCreateChallenge(w http.ResponseWriter, r *http.Re
 		})
 		return
 	}
-	clientIP := ResolveClientIP(r, g.trustedProxies)
-	hostName := host.FromHeader(r.Host)
 	chalID, diff, err := g.challenges.Issue(
 		r.Context(),
 		hostName,
@@ -242,9 +257,7 @@ func (g *GatewayHandler) handleCreateChallenge(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (g *GatewayHandler) handleSession(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute) {
-	clientIP := ResolveClientIP(r, g.trustedProxies)
-	hostName := host.FromHeader(r.Host)
+func (g *GatewayHandler) handleSession(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, hostName, clientIP string) {
 	wafCfg := route.Config.WAF
 
 	switch r.Method {
@@ -253,15 +266,33 @@ func (g *GatewayHandler) handleSession(w http.ResponseWriter, r *http.Request, r
 		if c, err := r.Cookie(wafCfg.CookieName); err == nil {
 			cookieVal = c.Value
 		}
-		cleared := !route.Config.Protect || g.clearance.Valid(cookieVal, hostName, clientIP)
+		var (
+			cleared   bool
+			expiresAt int64
+		)
+		if !route.Config.Protect {
+			cleared = true
+		} else if inspector, ok := g.clearance.(waf.ClearanceInspector); ok {
+			expiresAt, cleared = inspector.Parse(cookieVal, hostName, clientIP)
+		} else {
+			cleared = g.clearance.Valid(cookieVal, hostName, clientIP)
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"site":         route.Config.Domain,
-			"protected":    route.Config.Protect,
-			"verify_level": int(wafCfg.VerifyLevel),
-			"verify_mode":  wafCfg.VerifyLevel.Label(),
-			"cleared":      cleared,
-		})
+		payload := map[string]any{
+			"site":          route.Config.Domain,
+			"protected":     route.Config.Protect,
+			"verify_level":  int(wafCfg.VerifyLevel),
+			"verify_mode":   wafCfg.VerifyLevel.Label(),
+			"clearance_ttl": wafCfg.ClearanceTTL,
+			"cleared":       cleared,
+		}
+		if cleared && expiresAt > 0 {
+			payload["expires_at"] = time.Unix(expiresAt, 0).UTC().Format(time.RFC3339)
+			if rem := expiresAt - time.Now().Unix(); rem >= 0 {
+				payload["expires_in"] = rem
+			}
+		}
+		writeJSON(w, http.StatusOK, payload)
 	case http.MethodDelete:
 		http.SetCookie(w, &http.Cookie{
 			Name:     wafCfg.CookieName,

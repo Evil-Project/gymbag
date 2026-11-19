@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"gymbag/internal/host"
 	"gymbag/internal/proxy"
 	"gymbag/internal/waf"
 )
@@ -64,9 +65,26 @@ func ResolveClientIP(r *http.Request, trustedProxies []netip.Prefix) string {
 }
 
 func stripPort(addr string) string {
-	trimmed := strings.TrimSpace(addr)
-	if trimmed == "" {
+	if addr == "" {
 		return ""
+	}
+	trimmed := addr
+	if trimmed[0] <= ' ' || trimmed[len(trimmed)-1] <= ' ' {
+		trimmed = strings.TrimSpace(trimmed)
+		if trimmed == "" {
+			return ""
+		}
+	}
+	if trimmed[0] == '[' {
+		if end := strings.IndexByte(trimmed, ']'); end > 0 {
+			return trimmed[1:end]
+		}
+	}
+	if colon := strings.LastIndexByte(trimmed, ':'); colon > 0 {
+		// IPv4:port has a single colon; bare IPv6 has multiple colons without brackets.
+		if strings.IndexByte(trimmed[:colon], ':') == -1 {
+			return trimmed[:colon]
+		}
 	}
 	if h, _, err := net.SplitHostPort(trimmed); err == nil {
 		return strings.Trim(h, "[]")
@@ -143,8 +161,16 @@ func WAFMiddleware(
 		}
 
 		clientIP := ResolveClientIP(r, trustedProxies)
-		incoming := waf.FromHTTPRequest(r, clientIP)
-		decision := route.Gate.Decide(r.Context(), incoming)
+		var decision waf.Decision
+		var hostName string
+		if fastGate, ok := route.Gate.(waf.HTTPAccessGate); ok {
+			hostName = host.FromHeader(r.Host)
+			decision = fastGate.DecideHTTP(r.Context(), r, hostName, clientIP)
+		} else {
+			incoming := waf.FromHTTPRequest(r, clientIP)
+			hostName = incoming.Host
+			decision = route.Gate.Decide(r.Context(), incoming)
+		}
 
 		if proxy.IsWebSocketUpgrade(r) {
 			if decision.Action != waf.ActionAllow {
@@ -168,7 +194,7 @@ func WAFMiddleware(
 		case waf.ActionChallenge:
 			chalID, diff, err := challenges.Issue(
 				r.Context(),
-				incoming.Host,
+				hostName,
 				clientIP,
 				route.Config.WAF.Difficulty,
 				route.Config.WAF.ChallengeTTL,
