@@ -1,0 +1,248 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach assets to (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run vet and race tests
+        run: |
+          go vet ./...
+          go test -race ./...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+            archive: zip
+          - goos: windows
+            goarch: arm64
+            ext: ".exe"
+            archive: zip
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release tag and version
+        id: meta
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          ARCHIVE_NAME="gymbag_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive }}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build binary and package archive
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p staging dist
+          BIN_NAME="gymbag${{ matrix.ext }}"
+          go build -trimpath -ldflags="-s -w -X gymbag/internal/cli.Version=${{ steps.meta.outputs.version }}" -o "staging/${BIN_NAME}" ./cmd/gymbag
+          cp LICENSE README.md Gymbagfile staging/
+
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            (cd staging && zip -q -r "../dist/${{ steps.meta.outputs.archive_name }}" .)
+          else
+            tar -C staging -czf "dist/${{ steps.meta.outputs.archive_name }}" .
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ steps.meta.outputs.archive_name }}
+          if-no-files-found: error
+
+  package-arch:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            arch: x86_64
+          - goarch: arm64
+            arch: aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Download Linux binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.goarch }}
+          path: input
+
+      - name: Build Arch Linux .pkg.tar.zst package
+        id: pkg
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          PKGVER="${VERSION//-/.}"
+          ARCHIVE="input/gymbag_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
+
+          mkdir -p pkgbuild dist-arch
+          tar -xzf "${ARCHIVE}" -C pkgbuild
+          cp packaging/arch/gymbag.service packaging/arch/gymbag.install pkgbuild/
+
+          cat > pkgbuild/PKGBUILD <<EOF
+          pkgname=gymbag
+          pkgver=${PKGVER}
+          pkgrel=1
+          pkgdesc="Single-binary HTTPS reverse proxy & Proof-of-Work WAF in pure Go"
+          arch=('${{ matrix.arch }}')
+          url="https://github.com/Evil-Project/gymbag"
+          license=('Apache-2.0')
+          depends=('libcap')
+          backup=('etc/gymbag/Gymbagfile')
+          options=('!strip' '!debug')
+          install=gymbag.install
+          source=('gymbag' 'Gymbagfile' 'LICENSE' 'README.md' 'gymbag.service')
+          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+          package() {
+              install -Dm755 "\$srcdir/gymbag" "\$pkgdir/usr/bin/gymbag"
+              install -Dm644 "\$srcdir/Gymbagfile" "\$pkgdir/etc/gymbag/Gymbagfile"
+              install -Dm644 "\$srcdir/gymbag.service" "\$pkgdir/usr/lib/systemd/system/gymbag.service"
+              install -Dm644 "\$srcdir/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
+              install -Dm644 "\$srcdir/README.md" "\$pkgdir/usr/share/doc/\$pkgname/README.md"
+          }
+          EOF
+
+          docker run --rm \
+            -v "${PWD}/pkgbuild:/work" \
+            -v "${PWD}/dist-arch:/out" \
+            archlinux:base-devel \
+            bash -euo pipefail -c '
+              useradd -m builder
+              cp -r /work /home/builder/pkg
+              chown -R builder:builder /home/builder/pkg
+              CONF=/etc/makepkg.conf
+              if [[ "${{ matrix.arch }}" != "x86_64" ]]; then
+                cp /etc/makepkg.conf /tmp/makepkg-target.conf
+                sed -i "s/^CARCH=.*/CARCH=\"${{ matrix.arch }}\"/; s/^CHOST=.*/CHOST=\"${{ matrix.arch }}-unknown-linux-gnu\"/" /tmp/makepkg-target.conf
+                CONF=/tmp/makepkg-target.conf
+              fi
+              su builder -c "cd /home/builder/pkg && MAKEPKG_CONF=${CONF} PKGEXT=.pkg.tar.zst makepkg -f -A --nodeps --noconfirm"
+              cp /home/builder/pkg/*.pkg.tar.zst /out/
+              chmod 644 /out/*.pkg.tar.zst
+            '
+          ls -lh dist-arch/
+
+      - name: Upload Arch package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-arch-${{ matrix.arch }}
+          path: dist-arch/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    needs: [build, package-arch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd dist
+          LC_ALL=C sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          PRERELEASE_ARGS=()
+          if [[ "${TAG#v}" == *-* ]]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --title "${TAG}" \
+              --generate-notes \
+              "${PRERELEASE_ARGS[@]}"
+          fi
