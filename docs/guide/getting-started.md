@@ -4,11 +4,20 @@ Gymbag is compiled into a single standalone binary with zero external Go depende
 
 ## Installation
 
-### Prebuilt Static Binaries & Arch Linux Packages
+### Prebuilt Static Binaries, Docker, Arch Linux & NixOS
 
-Every tagged release on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) publishes `CGO_ENABLED=0` static binaries (`linux`, `darwin`, `windows` for `amd64`/`arm64`) as well as Arch Linux `.pkg.tar.zst` packages (`x86_64` and `aarch64`):
+Every tagged release on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) publishes `CGO_ENABLED=0` static binaries (`linux`, `darwin`, `windows` for `amd64`/`arm64`), Arch Linux `.pkg.tar.zst` packages (`x86_64` and `aarch64`), and multi-arch GHCR container images (`ghcr.io/evil-project/gymbag`):
 
 ::: code-group
+```bash [Docker (GHCR)]
+docker run -d --name gymbag \
+  -p 80:80 -p 443:443 \
+  --cap-add NET_BIND_SERVICE \
+  -v "$(pwd)/Gymbagfile:/app/Gymbagfile:ro" \
+  -v gymbag-certs:/app/certs \
+  ghcr.io/evil-project/gymbag:latest
+```
+
 ```bash [Arch Linux (pacman)]
 # Install a release .pkg.tar.zst binary package
 sudo pacman -U gymbag-<version>-1-x86_64.pkg.tar.zst
@@ -33,6 +42,8 @@ cd gymbag
 go build -o gymbag ./cmd/gymbag
 ```
 :::
+
+See the [Docker & Docker Compose guide](/guide/docker) for full container deployment, Compose + Redis stacks, and volume permissions.
 
 ## Start in Two Commands
 
@@ -87,7 +98,7 @@ See [System Service Setup](/guide/system-service) for `systemd`, `launchd`, `ope
 For quick one-off testing without creating any file on disk:
 
 ```bash
-./gymbag reverse-proxy --from app.internal --to :3000 --verify 3
+./gymbag reverse-proxy --from app.internal --to :3000 --verify 3 --verify-timeout 12h
 ```
 
 ---
@@ -106,11 +117,21 @@ For quick one-off testing without creating any file on disk:
 | `--site <domain=url>` | Add multiple site blocks (repeatable, e.g. `--site app.example.com=:3000 --site api.example.com=:8080`) |
 | `-l`, `--verify <0-3\|off>` | Verify level (`0`, `1`, `2`, `3`, or `off`) |
 | `--difficulty <1-5>` | SHA-256 PoW leading-hex-zero difficulty (default `4`) |
+| `--verify-timeout <dur>` | Verified clearance timeout (e.g. `30m`, `12h`, `7d`, or seconds; alias `--clearance-ttl`) |
+| `--remote-rules <url>` | Remote firewall rules URL (repeatable or comma-separated) |
+| `--remote-rules-refresh <dur>` | Refresh interval for remote rules (default `5m`) |
 | `--no-protect` | Disable WAF verification (`protect off`) |
+| `--no-default-rules` | Disable built-in baseline firewall rules (`default_rules off`) |
 | `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or custom URL |
 | `--email <addr>` | ACME contact email (also enables ZeroSSL auto-EAB) |
+| `--eab-kid` / `--eab-hmac-key` | ACME External Account Binding credentials |
 | `--http-port` / `--https-port` | Custom HTTP/HTTPS ports (defaults `80` / `443`) |
+| `--bind <ip>` | Bind address (auto-selected when omitted) |
 | `--admin <addr>` | Enable local REST Admin API (e.g. `127.0.0.1:2019`) |
+| `--cert-dir <dir>` | Directory for certificates, local CA, and caches (default `certs`) |
+| `--redis <url>` | Optional Redis URL for shared challenge and rate-limit state |
+| `--ip-security-action <act>` | Action for threat-intel IP hits (`verify` or `block`) |
+| `--no-auto-hosts` | Disable automatic `/etc/hosts` entries for local domains |
 | `-y`, `--yes` | Skip interactive prompts and accept defaults |
 | `-i`, `--interactive` | Force interactive wizard even when flags are present |
 | `--dry-run` | Print generated config to stdout without writing a file |

@@ -4,7 +4,7 @@ By default, Gymbag probes `./Gymbagfile` or `./Caddyfile` in the working directo
 
 ## Global Options Block `{ ... }`
 
-An optional top-level `{ ... }` block configures server-wide TLS, ACME, networking, threat intelligence, and default WAF policies inherited by all sites:
+An optional top-level `{ ... }` block configures server-wide TLS, ACME, networking, threat intelligence, remote rules, and default WAF policies inherited by all sites:
 
 ```caddyfile
 {
@@ -22,6 +22,9 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
     auto_hosts on
     hsts on
 
+    # Default verified clearance timeout (seconds or duration: 30m, 12h, 7d)
+    verify_timeout 24h
+
     # Optional Redis store for shared PoW nonces and rate limits
     # redis redis://127.0.0.1:6379/0
 
@@ -30,9 +33,13 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
     ip_security_action verify
     ip_reputation on
     ai_ip_list on
-    intel_refresh 21600
+    intel_refresh 6h
 
-    # Global custom rules evaluated before site rules
+    # Shared remote firewall rules (Gymbagfile syntax or JSON)
+    # remote_rules https://rules.example.com/baseline.rules
+    # remote_rules_refresh 5m
+
+    # Global custom rules evaluated before remote & site rules
     block ip 198.51.100.99 192.0.2.0/24
 }
 ```
@@ -49,11 +56,11 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
 | `ssl_key` | Path to existing private key for ACME CSRs | Auto-generated |
 | `tls` | `auto`, `acme`, `local`, `selfsigned`, or `<cert.pem> <key.pem>` | `auto` |
 | `key_password` | Passphrase for encrypted PEM private keys | — |
-| `cert_dir` | Directory for certs, local CA, secret, and intel cache | `certs` |
-| `renew_interval` | Certificate renewal check interval (seconds) | `43200` |
+| `cert_dir` | Directory for certs, local CA, secret, intel cache, and remote rules cache | `certs` |
+| `renew_interval` | Certificate renewal check interval (seconds or duration like `12h`) | `43200` (`12h`) |
 | `renew_within_days` | Renew certificates within N days of expiry | `30` |
 | `auto_hosts` | Manage `/etc/hosts` entries for `localhost` / `*.internal` (`on`/`off`) | `on` |
-| `hsts` | Send `Strict-Transport-Security` header (`on`/`off`) | `on` for public domains |
+| `hsts` | Send `Strict-Transport-Security` header (`on`/`off`) | `on` for public ACME certs |
 | `bind` / `bind_host` | Listen IP address | `127.0.0.1` (local) / `0.0.0.0` (public) |
 | `http_port` / `https_port` | HTTP redirect/ACME port & HTTPS gateway port | `80` / `443` |
 | `admin` | Local Admin REST API listen address (e.g. `127.0.0.1:2019` or `off`) | disabled |
@@ -64,8 +71,11 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
 | `ip_security_action` | Threat-intel match action (`verify` or `block`) | `verify` |
 | `ip_reputation` | Enable live Shodan InternetDB & StopForumSpam lookups | `on` |
 | `ai_ip_list` | Enable official AI crawler CIDR lists | `on` |
-| `intel_refresh` | Feed refresh interval in seconds | `21600` |
+| `intel_refresh` | Feed refresh interval (seconds or duration like `6h`) | `21600` (`6h`) |
 | `threat_feed` / `ai_ip_feed` | Additional custom IP feed URLs | — |
+| `remote_rules` | One or more HTTP/HTTPS remote firewall rule URLs inherited by all sites | — |
+| `remote_rules_refresh` | Refresh interval for remote rule URLs (seconds or duration like `5m`, `1h`; alias `rules_refresh`) | `300` (`5m`) |
+| `verify_timeout` / `clearance_ttl` | Default verified clearance cookie timeout (seconds or duration like `30m`, `12h`, `7d`) | `86400` (`24h`) |
 
 ---
 
@@ -76,12 +86,13 @@ app.example.com, www.example.com {
     reverse_proxy http://localhost:3000 http://localhost:3001
     verify 3
     difficulty 4
-    rate_limit 240 60
-    challenge_ttl 300
-    clearance_ttl 86400
+    rate_limit 240 60s
+    challenge_ttl 5m
+    verify_timeout 12h
     cookie_name waf_clearance
     cookie_secure true
     default_rules on
+    remote_rules https://rules.example.com/app.rules
 
     allow ip 10.0.0.0/8
     block path /internal-only*
@@ -94,22 +105,35 @@ app.example.com, www.example.com {
 | `verify [0\|1\|2\|3\|off]` | Verification level (bare `verify` enables level `3`) |
 | `protect <on\|off>` | Enable or disable WAF verification for the site |
 | `difficulty <1-5>` | SHA-256 leading-hex-zero PoW difficulty |
-| `rate_limit <count> [window_sec]` | Per-IP rate limit and optional window in seconds (`rate_window` also accepted) |
-| `challenge_ttl <sec>` | PoW challenge nonce expiry in seconds |
-| `clearance_ttl <sec>` | `waf_clearance` cookie lifetime in seconds |
+| `rate_limit <count> [window]` | Per-IP rate limit and optional window in seconds or duration (`rate_window` also accepted) |
+| `challenge_ttl <sec\|dur>` | PoW challenge nonce expiry (e.g. `300` or `5m`) |
+| `clearance_ttl <sec\|dur>` | Verified clearance cookie lifetime (e.g. `86400`, `30m`, `12h`, `7d`; aliases: `verify_timeout`, `verified_timeout`, `clearance_timeout`) |
 | `cookie_name <name>` | Clearance cookie name |
 | `cookie_secure <bool>` | Whether clearance cookie sets `Secure` |
 | `default_rules <on\|off>` | Toggle built-in baseline rules |
+| `remote_rules <urls...>` | One or more remote firewall rules URLs (Gymbagfile syntax or JSON; aliases: `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`) |
+| `ai_bots <patterns...>` | Additional User-Agent substrings treated as AI crawlers |
+| `suspicious_uas <patterns...>` | Additional User-Agent substrings treated as suspicious clients |
+| `suspicious_paths <prefixes...>` | Additional path prefixes treated as suspicious probes |
 | `tls <cert> <key>` | Per-site SNI certificate and private key paths |
 | `allow \| verify \| block ...` | Shorthand custom firewall rule |
 | `rule "name" { ... }` | Multi-condition custom firewall rule block |
 
 ---
 
+## Duration Syntax
+
+Time directives (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, `rate_window`, `intel_refresh`, `remote_rules_refresh`, and `renew_interval`) accept:
+- **Plain integer seconds**: `300`, `3600`, `86400`
+- **Go durations**: `45s`, `30m`, `12h`, `1h30m`
+- **Day & week shorthand**: `1d`, `7d`, `1d12h`, `2w`
+
+---
+
 ## Formatting & Validation
 
 ```bash
-# Validate syntax & print per-site summary
+# Validate syntax & print per-site summary (including clearance_ttl and remote rules)
 ./gymbag validate --config Gymbagfile
 
 # Format into canonical 4-space indentation in place
@@ -121,7 +145,7 @@ app.example.com, www.example.com {
 You can generate a `.json` config directly with:
 
 ```bash
-./gymbag init --format json -d app.example.com -u :3000
+./gymbag init --format json -d app.example.com -u :3000 --verify-timeout 12h
 ```
 
-All fields map directly to the JSON schema (`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `redis_url`, `secret`, `trusted_proxies`, `defaults`).
+All fields map directly to the JSON schema (`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `redis_url`, `secret`, `trusted_proxies`, `defaults`), with per-site `waf.clearance_ttl` (integer seconds) and `waf.remote_rules` (`[]string`).

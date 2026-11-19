@@ -41,9 +41,10 @@ export default defineConfig({
 
     nav: [
       { text: 'Quick Start', link: '/guide/getting-started' },
+      { text: 'Docker', link: '/guide/docker' },
       { text: 'Protection', link: '/guide/verify-levels' },
       { text: 'TLS & Local PKI', link: '/guide/ssl-acme' },
-      { text: 'System Service', link: '/guide/system-service' },
+      { text: 'Benchmarks', link: '/guide/benchmarks' },
       {
         text: 'Reference',
         items: [
@@ -60,6 +61,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: 'Two-Command Quick Start', link: '/guide/getting-started' },
+          { text: 'Docker & Docker Compose', link: '/guide/docker' },
           { text: 'System Service Setup', link: '/guide/system-service' },
           { text: 'Local Dev & PKI (.internal)', link: '/guide/local-dev' }
         ]
@@ -68,8 +70,8 @@ export default defineConfig({
         text: 'WAF & Traffic Defense',
         collapsed: false,
         items: [
-          { text: 'Verify Levels (0–3)', link: '/guide/verify-levels' },
-          { text: 'Firewall Rules & Threat Intel', link: '/guide/firewall-rules' }
+          { text: 'Verify Levels & Timeouts', link: '/guide/verify-levels' },
+          { text: 'Firewall & Remote Rules', link: '/guide/firewall-rules' }
         ]
       },
       {
@@ -80,12 +82,19 @@ export default defineConfig({
         ]
       },
       {
+        text: 'Performance',
+        collapsed: false,
+        items: [
+          { text: 'Benchmarks vs Caddy & Nginx', link: '/guide/benchmarks' }
+        ]
+      },
+      {
         text: 'Reference',
         collapsed: false,
         items: [
           { text: 'Gymbagfile & JSON Schema', link: '/reference/gymbagfile' },
           { text: 'CLI & GYMBAG_* Env Vars', link: '/reference/cli-env' },
-          { text: 'REST APIs & Docker / Redis', link: '/reference/api' }
+          { text: 'REST APIs & Redis', link: '/reference/api' }
         ]
       }
     ],
