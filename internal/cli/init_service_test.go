@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,7 +81,7 @@ func TestCLIInitTwoCommandDefaultWorkingDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
 
-	// Step 1: generate default ./Gymbagfile
+	// Step 1: generate default ./gymbag.json
 	var out, errBuf bytes.Buffer
 	if code := ExecuteWithIO([]string{"init", "--yes"}, strings.NewReader(""), &out, &errBuf); code != 0 {
 		t.Fatalf("init --yes failed (%d): %s", code, errBuf.String())
@@ -88,8 +89,16 @@ func TestCLIInitTwoCommandDefaultWorkingDir(t *testing.T) {
 	if !strings.Contains(out.String(), "Start server:     gymbag") {
 		t.Fatalf("expected 2nd-command hint `gymbag`, got:\n%s", out.String())
 	}
+	rawJSON, err := os.ReadFile(filepath.Join(dir, "gymbag.json"))
+	if err != nil {
+		t.Fatalf("expected ./gymbag.json to be created by default: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(rawJSON, &parsed); err != nil {
+		t.Fatalf("expected valid JSON in ./gymbag.json: %v\n%s", err, string(rawJSON))
+	}
 
-	// Step 2: verify `gymbag` (with no config flag) resolves the generated ./Gymbagfile
+	// Step 2: verify `gymbag` (with no config flag) resolves the generated ./gymbag.json
 	cfg, err := config.Load(config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load after init failed: %v", err)

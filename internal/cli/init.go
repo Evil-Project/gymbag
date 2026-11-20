@@ -33,48 +33,52 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		outputPath       string
-		format           string
-		preset           string
-		domain           string
-		upstream         string
-		siteFlags        multiStringFlag
+		outputPath         string
+		format             string
+		preset             string
+		domain             string
+		upstream           string
+		siteFlags          multiStringFlag
 		verifyLevel        string
 		difficulty         int
 		verifyTimeout      string
 		remoteRules        multiStringFlag
 		remoteRulesRefresh string
+		rulesFiles         multiStringFlag
+		rulesDirs          multiStringFlag
+		rulesDynamic       bool
+		rulesWatchInterval string
 		noProtect          bool
-		sslProvider      string
-		email            string
-		eabKID           string
-		eabHMACKey       string
-		httpPort         int
-		httpsPort        int
-		bindHost         string
-		adminAddr        string
-		certDir          string
-		redisURL         string
-		ipSecurityAction string
-		noDefaultRules   bool
-		noAutoHosts      bool
-		force            bool
-		yes              bool
-		interactive      bool
-		dryRun           bool
-		serviceType      string
-		serviceName      string
-		serviceUser      string
-		serviceUserScope bool
-		serviceSysScope  bool
-		serviceStart     bool
+		sslProvider        string
+		email              string
+		eabKID             string
+		eabHMACKey         string
+		httpPort           int
+		httpsPort          int
+		bindHost           string
+		adminAddr          string
+		certDir            string
+		redisURL           string
+		ipSecurityAction   string
+		noDefaultRules     bool
+		noAutoHosts        bool
+		force              bool
+		yes                bool
+		interactive        bool
+		dryRun             bool
+		serviceType        string
+		serviceName        string
+		serviceUser        string
+		serviceUserScope   bool
+		serviceSysScope    bool
+		serviceStart       bool
 	)
 
-	fs.StringVar(&outputPath, "o", "", "Output config file path (default Gymbagfile, or gymbag.json for --format json)")
-	fs.StringVar(&outputPath, "output", "", "Output config file path (default Gymbagfile, or gymbag.json for --format json)")
+	fs.StringVar(&outputPath, "o", "", "Output config file path (default gymbag.json, or Gymbagfile for --format gymbagfile)")
+	fs.StringVar(&outputPath, "output", "", "Output config file path (default gymbag.json, or Gymbagfile for --format gymbagfile)")
 	fs.StringVar(&outputPath, "c", "", "Alias for --output")
 	fs.StringVar(&outputPath, "config", "", "Alias for --output")
-	fs.StringVar(&format, "format", "gymbagfile", "Config format: gymbagfile or json")
+	fs.StringVar(&format, "format", "", "Config format: json (default) or gymbagfile")
 	fs.StringVar(&preset, "preset", "", "Preset template: standard, local, public, strict, ai-only, suspicious, or proxy-only")
 	fs.StringVar(&domain, "d", "", "Downstream domain(s), comma-separated")
 	fs.StringVar(&domain, "domain", "", "Downstream domain(s), comma-separated")
@@ -91,6 +95,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&verifyTimeout, "clearance-ttl", "", "Alias for --verify-timeout")
 	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
 	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
+	fs.Var(&rulesFiles, "rules-file", "Dedicated firewall rules file path (repeatable)")
+	fs.Var(&rulesDirs, "rules-dir", "Directory of firewall rule files (repeatable)")
+	fs.BoolVar(&rulesDynamic, "rules-dynamic", false, "Auto-reload --rules-file / --rules-dir when files change")
+	fs.StringVar(&rulesWatchInterval, "rules-watch-interval", "", "Polling interval for dynamic local rule files/folders (default 2s)")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification (protect off)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
 	fs.StringVar(&email, "email", "", "ACME contact email")
@@ -140,7 +148,15 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	normFmt, err := config.NormalizeConfigFormat(format)
+	effectiveFmt := strings.TrimSpace(format)
+	if effectiveFmt == "" {
+		if looksLikeGymbagfilePath(outputPath) {
+			effectiveFmt = "gymbagfile"
+		} else {
+			effectiveFmt = "json"
+		}
+	}
+	normFmt, err := config.NormalizeConfigFormat(effectiveFmt)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: %v\n", err)
 		return 2
@@ -150,6 +166,20 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			outputPath = "gymbag.json"
 		} else {
 			outputPath = "Gymbagfile"
+		}
+	}
+
+	var initRuleSources []config.RuleSource
+	for _, p := range append(append([]string(nil), rulesFiles...), rulesDirs...) {
+		for _, part := range strings.Split(p, ",") {
+			src := strings.TrimSpace(part)
+			if src == "" {
+				continue
+			}
+			initRuleSources = append(initRuleSources, config.RuleSource{
+				Source:  src,
+				Dynamic: rulesDynamic,
+			})
 		}
 	}
 
@@ -180,35 +210,38 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	opts := config.GenerateOptions{
-		Preset:           preset,
-		Domain:           domain,
-		Upstream:         upstream,
-		Sites:            parsedSites,
+		Preset:             preset,
+		Domain:             domain,
+		Upstream:           upstream,
+		Sites:              parsedSites,
 		VerifyLevel:        verifyLevel,
 		Protect:            protectOpt,
 		Difficulty:         difficulty,
 		ClearanceTTL:       verifyTimeout,
 		RemoteRules:        remoteRules,
 		RemoteRulesRefresh: remoteRulesRefresh,
+		RuleSources:        initRuleSources,
+		RulesWatchInterval: rulesWatchInterval,
 		DefaultRules:       defaultRulesOpt,
-		SSLProvider:      sslProvider,
-		Email:            email,
-		EABKID:           eabKID,
-		EABHMACKey:       eabHMACKey,
-		HTTPPort:         httpPort,
-		HTTPSPort:        httpsPort,
-		BindHost:         bindHost,
-		AdminAddr:        adminAddr,
-		CertDir:          certDir,
-		RedisURL:         redisURL,
-		AutoHosts:        autoHostsOpt,
-		IPSecurityAction: ipSecurityAction,
-		Format:           normFmt,
-		IncludeComments:  true,
+		SSLProvider:        sslProvider,
+		Email:              email,
+		EABKID:             eabKID,
+		EABHMACKey:         eabHMACKey,
+		HTTPPort:           httpPort,
+		HTTPSPort:          httpsPort,
+		BindHost:           bindHost,
+		AdminAddr:          adminAddr,
+		CertDir:            certDir,
+		RedisURL:           redisURL,
+		AutoHosts:          autoHostsOpt,
+		IPSecurityAction:   ipSecurityAction,
+		Format:             normFmt,
+		IncludeComments:    true,
 	}
 
 	hasConfigFlags := preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
-		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || noProtect || sslProvider != "" || email != "" ||
+		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || len(initRuleSources) > 0 ||
+		rulesWatchInterval != "" || noProtect || sslProvider != "" || email != "" ||
 		httpPort != 0 || httpsPort != 0 || adminAddr != ""
 	runWizard := interactive || (!yes && !hasConfigFlags && len(args) == 0)
 	if !interactive && !yes && !hasConfigFlags && len(args) > 0 {
@@ -319,13 +352,24 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	_, _ = fmt.Fprintln(stdout, "\nNext steps:")
-	if outputPath == "Gymbagfile" {
+	if outputPath == "gymbag.json" || outputPath == "Gymbagfile" {
 		_, _ = fmt.Fprintln(stdout, "  Start server:     gymbag")
 	} else {
 		_, _ = fmt.Fprintf(stdout, "  Start server:     gymbag --config %s\n", outputPath)
 	}
 	_, _ = fmt.Fprintf(stdout, "  System service:   gymbag service install --config %s\n", outputPath)
 	return 0
+}
+
+func looksLikeGymbagfilePath(p string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(p))
+	return base == "gymbagfile" || base == "caddyfile" ||
+		strings.HasSuffix(base, ".gymbagfile") ||
+		strings.HasSuffix(base, ".caddy") ||
+		strings.HasSuffix(base, ".caddyfile")
 }
 
 func runInitWizard(stdin io.Reader, out io.Writer, opts *config.GenerateOptions) (string, error) {
@@ -513,15 +557,16 @@ Two-command quickstart:
   2. gymbag
 
 Examples:
-  gymbag init                                         # Interactive wizard -> ./Gymbagfile
-  gymbag init --yes                                   # Non-interactive default localhost config
+  gymbag init                                         # Interactive wizard -> ./gymbag.json
+  gymbag init --yes                                   # Non-interactive default localhost JSON config
+  gymbag init --format gymbagfile                     # Generate Caddyfile-style Gymbagfile instead of JSON
   gymbag init --preset local                          # Local *.internal dev config with local PKI
-  gymbag init -d app.example.com -u :3000 -l 3        # Public site config -> ./Gymbagfile
+  gymbag init -d app.example.com -u :3000 -l 3        # Public site config -> ./gymbag.json
   gymbag init -d app.example.com -u :3000 --service auto  # Generate config + register system service
 
 Flags:
-  -o, --output <path>          Output config file path (default Gymbagfile, or gymbag.json for --format json)
-      --format <fmt>           Config format: gymbagfile or json
+  -o, --output <path>          Output config file path (default gymbag.json, or Gymbagfile for --format gymbagfile)
+      --format <fmt>           Config format: json (default) or gymbagfile
       --preset <name>          Preset: standard, local, public, strict, ai-only, suspicious, proxy-only
   -d, --domain <domains>       Downstream domain(s), comma-separated
   -u, --upstream <url>         Upstream target URL (e.g. http://localhost:3000 or :3000)
@@ -531,6 +576,10 @@ Flags:
       --verify-timeout <duration>  Verified clearance timeout (e.g. 30m, 12h, 7d, or seconds)
       --remote-rules <url>         Remote firewall rules URL (repeatable or comma-separated)
       --remote-rules-refresh <d>   Refresh interval for remote rules (default 5m)
+      --rules-file <path>          Dedicated firewall rules file path (repeatable)
+      --rules-dir <path>           Directory of firewall rule files (repeatable)
+      --rules-dynamic              Auto-reload --rules-file / --rules-dir when files change
+      --rules-watch-interval <d>   Polling interval for dynamic local rule files/folders (default 2s)
       --no-protect                 Disable WAF verification (protect off)
       --ssl-provider <name>    SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, URL)
       --email <addr>           ACME contact email
