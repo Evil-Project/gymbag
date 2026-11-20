@@ -1,8 +1,35 @@
 # Gymbag
 
+<p align="center">
+  <img src="docs/public/mascot-happy.png" alt="Gymbag mascot" width="140" />
+</p>
+
+<p align="center">
+  <strong>Single-binary HTTPS Reverse Proxy &amp; Proof-of-Work WAF in pure Go</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Evil-Project/gymbag/releases"><img src="https://img.shields.io/github/v/release/Evil-Project/gymbag?include_prereleases&label=Release" alt="Release" /></a>
+  <a href="https://github.com/Evil-Project/gymbag/pkgs/container/gymbag"><img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker" alt="Docker GHCR" /></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go" alt="Go 1.27+" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="Apache-2.0 License" /></a>
+  <a href="https://evil-project.github.io/gymbag/"><img src="https://img.shields.io/badge/Docs-VitePress-b81d33" alt="Docs" /></a>
+</p>
+
+<p align="center">
+  <strong>Docs Languages:</strong>
+  <a href="https://evil-project.github.io/gymbag/">English</a> ·
+  <a href="https://evil-project.github.io/gymbag/zh/">简体中文</a> ·
+  <a href="https://evil-project.github.io/gymbag/ja/">日本語</a> ·
+  <a href="https://evil-project.github.io/gymbag/ko/">한국어</a> ·
+  <a href="https://evil-project.github.io/gymbag/es/">Español</a>
+  <br />
+  <sub>Repository Markdown: <a href="docs/index.md">EN</a> · <a href="docs/zh/index.md">ZH</a> · <a href="docs/ja/index.md">JA</a> · <a href="docs/ko/index.md">KO</a> · <a href="docs/es/index.md">ES</a></sub>
+</p>
+
 Gymbag is a single-binary HTTPS reverse proxy with a built-in, Anubis-style proof-of-work Web Application Firewall. It is written in pure Go using only the standard library — zero external Go dependencies, and every HTML template, SHA-256 browser solver script, and mascot PNG is compiled directly into the executable via `go:embed`.
 
-If you self-host web apps, Gitea/Forgejo instances, documentation sites, or internal tools, you have probably run into the same problem that inspired Anubis: aggressive LLM scrapers ignoring `robots.txt` and vulnerability scanners hammering `/.env` and `/wp-admin` around the clock. Instead of stitching together Nginx/Caddy, a separate PoW sidecar container, fail2ban, and hand-curated CIDR lists, Gymbag puts TLS termination, multi-CA ACME, HTTP/WebSocket proxying, IP threat intelligence, and per-site PoW policies into one binary configured by a clean `Gymbagfile`.
+If you self-host web apps, Gitea/Forgejo instances, documentation sites, or internal tools, you have probably run into the same problem that inspired Anubis: aggressive LLM scrapers ignoring `robots.txt` and vulnerability scanners hammering `/.env` and `/wp-admin` around the clock. Instead of stitching together Nginx/Caddy, a separate PoW sidecar container, fail2ban, and hand-curated CIDR lists, Gymbag puts TLS termination, multi-CA ACME, HTTP/WebSocket proxying, local & remote firewall rules, IP threat intelligence, and per-site PoW policies into one binary configured by a clean `Gymbagfile`.
 
 ---
 
@@ -594,20 +621,34 @@ See [Benchmarks & Performance](docs/guide/benchmarks.md) for full methodology, G
 ```text
 .
 ├── cmd/gymbag/          # Standalone CLI entrypoint
+├── docs/                # Multi-language VitePress docs (EN, 简体中文, 日本語, 한국어, Español)
 ├── internal/
 │   ├── cli/             # Subcommands (init, service, run, reverse-proxy, validate, fmt, version), .env & watcher
-│   ├── config/          # Config models, Gymbagfile/Caddyfile parser, formatter & generator, GYMBAG_* env loader
+│   ├── config/          # Config models, Gymbagfile/Caddyfile & duration/remote-rules parsers, GYMBAG_* env loader
 │   ├── host/            # Domain normalization, IPv6 bracket handling, wildcard matching
 │   ├── intel/           # O(1) prefix set, auto-updating threat & AI crawler feeds, live IP reputation
 │   ├── localpki/        # Two-tier local CA ("Neuro-sama Headquarters Root CA") & /etc/hosts manager
-│   ├── proxy/           # Lock-free multi-site router, streaming HTTP & RFC 6455 WebSocket proxies
-│   ├── server/          # HTTPS gateway, HTTP->HTTPS/ACME redirector, middleware, REST Admin API
+│   ├── proxy/           # Lock-free multi-site router, pooled HTTP & RFC 6455 WebSocket proxies
+│   ├── server/          # Fused HTTPS gateway, HTTP->HTTPS/ACME redirector, REST Admin API
 │   ├── service/         # System service renderer & manager (systemd, launchd, openrc, supervisor)
-│   ├── store/           # StateStore interfaces, in-memory store, pure-Go RESP2 Redis client
-│   ├── tlsmanager/      # Multi-CA ACME v2 (EAB & ZeroSSL auto-EAB), local PKI, file & SNI cert manager
-│   └── waf/             # PoW verifier, HMAC clearance, open-box default rules, AI/suspicion detectors, UI
+│   ├── store/           # StateStore interfaces, 64-shard in-memory store, pure-Go RESP2 Redis client
+│   ├── tlsmanager/      # Multi-CA ACME v2 (EAB & ZeroSSL auto-EAB), local PKI, lock-free SNI cert manager
+│   └── waf/             # PoW verifier, sharded HMAC clearance cache, Aho-Corasick DFA, remote rules, UI
 ├── Dockerfile
 ├── compose.yaml
+├── flake.nix
 ├── Gymbagfile
 └── go.mod
 ```
+
+---
+
+## Star History
+
+<a href="https://www.star-history.com/#Evil-Project/gymbag&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Evil-Project/gymbag&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Evil-Project/gymbag&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Evil-Project/gymbag&type=Date" />
+ </picture>
+</a>
