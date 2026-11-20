@@ -21,22 +21,22 @@ type reqView struct {
 	query     string
 	clientIP  string
 
-	uaLoaded         bool
-	ua               string
-	lowerUALoaded    bool
-	lowerUA          string
-	lowerPathLoaded  bool
-	lowerPath        string
-	decodedQLoaded   bool
-	decodedQuery     string
-	lowerQLoaded     bool
-	lowerDecodedQ    string
-	threatChecked    bool
-	isThreat         bool
-	aiIPChecked      bool
-	isAIIP           bool
-	aiMatchChecked   bool
-	isAIMatch        bool
+	uaLoaded        bool
+	ua              string
+	lowerUALoaded   bool
+	lowerUA         string
+	lowerPathLoaded bool
+	lowerPath       string
+	decodedQLoaded  bool
+	decodedQuery    string
+	lowerQLoaded    bool
+	lowerDecodedQ   string
+	threatChecked   bool
+	isThreat        bool
+	aiIPChecked     bool
+	isAIIP          bool
+	aiMatchChecked  bool
+	isAIMatch       bool
 }
 
 func newHTTPReqView(r *http.Request, hostName, clientIP string) reqView {

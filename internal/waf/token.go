@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	tokenCacheShards    = 64
-	tokenCacheShardMax  = 2048
+	tokenCacheShards   = 64
+	tokenCacheShardMax = 2048
 )
 
 type tokenCacheKey struct {

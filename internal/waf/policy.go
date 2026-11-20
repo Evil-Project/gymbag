@@ -363,8 +363,12 @@ func BuildSiteEngineWithProviders(
 	acmeAllow := NewPrefixAllowRule("/.well-known/acme-challenge/")
 
 	var resolvedRemote []config.CustomRule
-	if remoteRules != nil && len(site.WAF.RemoteRules) > 0 {
-		resolvedRemote = remoteRules.RulesForURLs(site.WAF.RemoteRules)
+	if remoteRules != nil && (len(site.WAF.RuleSources) > 0 || len(site.WAF.RemoteRules) > 0) {
+		if sp, ok := remoteRules.(SiteRuleProvider); ok {
+			resolvedRemote = sp.RulesForSite(site.WAF)
+		} else {
+			resolvedRemote = remoteRules.RulesForURLs(site.WAF.RemoteRules)
+		}
 	}
 	userRulesCount := len(site.WAF.Rules) + len(resolvedRemote)
 
