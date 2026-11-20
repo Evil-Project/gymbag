@@ -34,13 +34,72 @@ func parseUpstream(raw string) ParsedUpstream {
 	}
 }
 
-// SiteRoute bundles a website's immutable SiteConfig, pre-parsed upstreams, compiled WAF AccessGate,
-// and upstream load-balancer index.
+// CompiledRoute holds a compiled path matcher and pre-parsed upstreams for a RouteConfig.
+type CompiledRoute struct {
+	Config    config.RouteConfig
+	match     func(string) bool
+	upstreams []ParsedUpstream
+	rr        atomic.Uint64
+}
+
+// Matches reports whether path matches this compiled route.
+func (cr *CompiledRoute) Matches(path string) bool {
+	if cr == nil || cr.match == nil {
+		return false
+	}
+	return cr.match(path)
+}
+
+// NextUpstream selects the next upstream URL string for this route using lock-free round-robin.
+func (cr *CompiledRoute) NextUpstream() string {
+	n := len(cr.Config.Upstreams)
+	if n == 0 {
+		return ""
+	}
+	if n == 1 {
+		return cr.Config.Upstreams[0]
+	}
+	idx := (cr.rr.Add(1) - 1) % uint64(n)
+	return cr.Config.Upstreams[idx]
+}
+
+// NextParsedUpstream selects the next pre-parsed upstream for this route using lock-free round-robin.
+func (cr *CompiledRoute) NextParsedUpstream() ParsedUpstream {
+	n := len(cr.upstreams)
+	if n == 0 {
+		if len(cr.Config.Upstreams) == 0 {
+			return ParsedUpstream{}
+		}
+		return parseUpstream(cr.NextUpstream())
+	}
+	if n == 1 {
+		return cr.upstreams[0]
+	}
+	idx := (cr.rr.Add(1) - 1) % uint64(n)
+	return cr.upstreams[idx]
+}
+
+// SiteRoute bundles a website's immutable SiteConfig, pre-parsed upstreams, compiled routes,
+// compiled WAF AccessGate, and upstream load-balancer index.
 type SiteRoute struct {
 	Config    config.SiteConfig
 	Gate      waf.AccessGate
+	Routes    []*CompiledRoute
 	upstreams []ParsedUpstream
 	rr        atomic.Uint64
+}
+
+// MatchRoute returns the first compiled route matching path, or nil if none matches.
+func (r *SiteRoute) MatchRoute(path string) *CompiledRoute {
+	if r == nil {
+		return nil
+	}
+	for _, cr := range r.Routes {
+		if cr.Matches(path) {
+			return cr
+		}
+	}
+	return nil
 }
 
 // NextUpstream selects the next upstream URL string for this website using lock-free round-robin.
@@ -147,9 +206,26 @@ func (r *SiteRouter) ReloadWithProviders(
 		for i, u := range sc.Upstreams {
 			parsed[i] = parseUpstream(u)
 		}
+		compiledRoutes := make([]*CompiledRoute, 0, len(sc.Routes))
+		for _, rc := range sc.Routes {
+			matcher, mErr := config.CompilePathMatcher(rc.Path)
+			if mErr != nil {
+				matcher = func(string) bool { return false }
+			}
+			routeUps := make([]ParsedUpstream, len(rc.Upstreams))
+			for i, u := range rc.Upstreams {
+				routeUps[i] = parseUpstream(u)
+			}
+			compiledRoutes = append(compiledRoutes, &CompiledRoute{
+				Config:    rc,
+				match:     matcher,
+				upstreams: routeUps,
+			})
+		}
 		entry := &SiteRoute{
 			Config:    sc,
 			Gate:      waf.BuildSiteEngineWithProviders(sc, counter, tokens, intel, ipSecurityAction, remoteRules),
+			Routes:    compiledRoutes,
 			upstreams: parsed,
 		}
 		ordered = append(ordered, entry)

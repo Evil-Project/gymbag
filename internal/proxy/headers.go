@@ -331,3 +331,25 @@ func unescapeOrKeep(escapedPath string) string {
 	}
 	return u
 }
+
+// ApplyResponseHeaders applies header mutations to dst:
+//   - "-Name" deletes Name
+//   - "+Name" appends value to Name
+//   - "Name" sets (replaces) Name
+func ApplyResponseHeaders(dst http.Header, mutations map[string]string) {
+	for rawKey, val := range mutations {
+		k := strings.TrimSpace(rawKey)
+		switch {
+		case strings.HasPrefix(k, "-"):
+			if name := strings.TrimSpace(k[1:]); name != "" {
+				dst.Del(name)
+			}
+		case strings.HasPrefix(k, "+"):
+			if name := strings.TrimSpace(k[1:]); name != "" {
+				dst.Add(name, val)
+			}
+		case k != "":
+			dst.Set(k, val)
+		}
+	}
+}

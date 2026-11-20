@@ -52,7 +52,6 @@ func NewHTTPProxy(httpsPort int, transport http.RoundTripper, logger *slog.Logge
 
 // Forward proxies r to the selected upstream of route and streams the upstream response back to w.
 func (p *HTTPProxy) Forward(w http.ResponseWriter, r *http.Request, route *SiteRoute, clientIP, scheme string) {
-	up := route.NextParsedUpstream()
 	reqPath := r.URL.RawPath
 	if reqPath == "" {
 		reqPath = r.URL.Path
@@ -60,6 +59,18 @@ func (p *HTTPProxy) Forward(w http.ResponseWriter, r *http.Request, route *SiteR
 			reqPath = r.URL.EscapedPath()
 		}
 	}
+	p.ForwardUpstream(w, r, route.Config.Domain, route.NextParsedUpstream(), reqPath, clientIP, scheme, route.Config.Headers)
+}
+
+// ForwardUpstream proxies r to a specific ParsedUpstream using reqPath and applies response header mutations.
+func (p *HTTPProxy) ForwardUpstream(
+	w http.ResponseWriter,
+	r *http.Request,
+	domain string,
+	up ParsedUpstream,
+	reqPath, clientIP, scheme string,
+	headerSets ...map[string]string,
+) {
 	targetURL, err := BuildUpstreamURL(up, reqPath, r.URL.RawQuery)
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -93,7 +104,7 @@ func (p *HTTPProxy) Forward(w http.ResponseWriter, r *http.Request, route *SiteR
 	resp, err := p.transport.RoundTrip(upReq)
 	if err != nil {
 		if p.logger != nil {
-			p.logger.Warn("upstream request failed", "path", r.URL.Path, "site", route.Config.Domain, "error", err)
+			p.logger.Warn("upstream request failed", "path", r.URL.Path, "site", domain, "error", err)
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusBadGateway)
@@ -103,6 +114,9 @@ func (p *HTTPProxy) Forward(w http.ResponseWriter, r *http.Request, route *SiteR
 	defer resp.Body.Close()
 
 	copyResponseHeadersParsed(w.Header(), resp.Header, up, r.Host, p.httpsPort)
+	for _, hs := range headerSets {
+		ApplyResponseHeaders(w.Header(), hs)
+	}
 	w.WriteHeader(resp.StatusCode)
 
 	if method == http.MethodHead || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {

@@ -35,11 +35,15 @@ func NewWebSocketProxy(dial DialContextFunc, logger *slog.Logger) *WebSocketProx
 
 // Forward upgrades and splices a client WebSocket connection to route's upstream.
 func (ws *WebSocketProxy) Forward(w http.ResponseWriter, r *http.Request, route *SiteRoute, clientIP, scheme string) {
-	upstreamBase := route.NextUpstream()
 	reqPath := r.URL.EscapedPath()
 	if reqPath == "" {
 		reqPath = r.URL.Path
 	}
+	ws.ForwardUpstream(w, r, route.Config.Domain, route.NextUpstream(), reqPath, clientIP, scheme)
+}
+
+// ForwardUpstream upgrades and splices a client WebSocket connection to upstreamBase using reqPath.
+func (ws *WebSocketProxy) ForwardUpstream(w http.ResponseWriter, r *http.Request, domain, upstreamBase, reqPath, clientIP, scheme string) {
 	wsURL, err := WebSocketUpstreamURL(upstreamBase, reqPath, r.URL.RawQuery)
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -61,7 +65,7 @@ func (ws *WebSocketProxy) Forward(w http.ResponseWriter, r *http.Request, route 
 	upConn, err := ws.dial(dialCtx, "tcp", dialAddr)
 	if err != nil {
 		if ws.logger != nil {
-			ws.logger.Warn("websocket upstream unavailable", "path", r.URL.Path, "site", route.Config.Domain, "error", err)
+			ws.logger.Warn("websocket upstream unavailable", "path", r.URL.Path, "site", domain, "error", err)
 		}
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
