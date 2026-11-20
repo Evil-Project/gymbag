@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -69,7 +70,9 @@ func shlexSplit(s string) ([]string, error) {
 	var quote rune
 	escaped := false
 
-	for _, ch := range s {
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
 		if escaped {
 			cur.WriteRune(ch)
 			inToken = true
@@ -94,6 +97,30 @@ func shlexSplit(s string) ([]string, error) {
 			quote = ch
 			inToken = true
 			continue
+		}
+		// Keep Caddyfile placeholders such as {path}, {args[0]}, {remote_host}, or /new{uri}
+		// intact as literal token text rather than treating their braces as block delimiters.
+		if ch == '{' {
+			endIdx := -1
+			for j := i + 1; j < len(runes); j++ {
+				if runes[j] == '{' || unicode.IsSpace(runes[j]) {
+					break
+				}
+				if runes[j] == '}' {
+					if j > i+1 {
+						endIdx = j
+					}
+					break
+				}
+			}
+			if endIdx != -1 {
+				for k := i; k <= endIdx; k++ {
+					cur.WriteRune(runes[k])
+				}
+				inToken = true
+				i = endIdx
+				continue
+			}
 		}
 		if ch == '{' || ch == '}' || ch == ';' {
 			if inToken {
@@ -212,72 +239,72 @@ func parseItems(tokens []string) ([]statementItem, error) {
 }
 
 var knownDirectiveNames = map[string]struct{}{
-	"reverse_proxy":      {},
-	"upstream":           {},
-	"proxy":              {},
-	"domain":             {},
-	"domains":            {},
-	"host":               {},
-	"hosts":              {},
-	"protect":            {},
-	"protected":          {},
-	"protect_sites":      {},
-	"protect_domains":    {},
-	"waf":                {},
-	"intel":              {},
-	"rule":               {},
-	"block":              {},
-	"deny":               {},
-	"drop":               {},
-	"reject":             {},
-	"allow":              {},
-	"pass":               {},
-	"bypass":             {},
-	"whitelist":          {},
-	"challenge":          {},
-	"pow":                {},
-	"verify":             {},
-	"verify_level":       {},
-	"verification":       {},
-	"verify_mode":        {},
-	"level":              {},
-	"trigger":            {},
-	"mode":               {},
-	"ip_security":        {},
-	"ip_security_action": {},
-	"ip_reputation":      {},
-	"live_reputation":    {},
-	"ai_ip_list":         {},
-	"intel_refresh":      {},
-	"threat_feed":        {},
-	"threat_feeds":       {},
-	"ai_ip_feed":         {},
-	"ai_ip_feeds":        {},
-	"email":              {},
-	"acme_email":         {},
-	"acme_directory":     {},
-	"ssl_provider":       {},
-	"acme_provider":      {},
-	"ca":                 {},
-	"cert_issuer":        {},
-	"tls":                {},
-	"eab":                {},
-	"eab_kid":            {},
-	"eab_hmac_key":       {},
-	"account_key":        {},
-	"account_key_file":   {},
-	"ssl_key":            {},
-	"cert_key":           {},
-	"auto_hosts":         {},
-	"key_password":       {},
-	"bind":               {},
-	"bind_host":          {},
-	"http_port":          {},
-	"https_port":         {},
-	"admin":              {},
-	"difficulty":         {},
-	"rate_limit":         {},
-	"rate_window":        {},
+	"reverse_proxy":        {},
+	"upstream":             {},
+	"proxy":                {},
+	"domain":               {},
+	"domains":              {},
+	"host":                 {},
+	"hosts":                {},
+	"protect":              {},
+	"protected":            {},
+	"protect_sites":        {},
+	"protect_domains":      {},
+	"waf":                  {},
+	"intel":                {},
+	"rule":                 {},
+	"block":                {},
+	"deny":                 {},
+	"drop":                 {},
+	"reject":               {},
+	"allow":                {},
+	"pass":                 {},
+	"bypass":               {},
+	"whitelist":            {},
+	"challenge":            {},
+	"pow":                  {},
+	"verify":               {},
+	"verify_level":         {},
+	"verification":         {},
+	"verify_mode":          {},
+	"level":                {},
+	"trigger":              {},
+	"mode":                 {},
+	"ip_security":          {},
+	"ip_security_action":   {},
+	"ip_reputation":        {},
+	"live_reputation":      {},
+	"ai_ip_list":           {},
+	"intel_refresh":        {},
+	"threat_feed":          {},
+	"threat_feeds":         {},
+	"ai_ip_feed":           {},
+	"ai_ip_feeds":          {},
+	"email":                {},
+	"acme_email":           {},
+	"acme_directory":       {},
+	"ssl_provider":         {},
+	"acme_provider":        {},
+	"ca":                   {},
+	"cert_issuer":          {},
+	"tls":                  {},
+	"eab":                  {},
+	"eab_kid":              {},
+	"eab_hmac_key":         {},
+	"account_key":          {},
+	"account_key_file":     {},
+	"ssl_key":              {},
+	"cert_key":             {},
+	"auto_hosts":           {},
+	"key_password":         {},
+	"bind":                 {},
+	"bind_host":            {},
+	"http_port":            {},
+	"https_port":           {},
+	"admin":                {},
+	"difficulty":           {},
+	"rate_limit":           {},
+	"rate_window":          {},
 	"challenge_ttl":        {},
 	"clearance_ttl":        {},
 	"verify_timeout":       {},
@@ -293,17 +320,37 @@ var knownDirectiveNames = map[string]struct{}{
 	"remote_rules_url":     {},
 	"remote_rules_refresh": {},
 	"rules_refresh":        {},
+	"rules_watch_interval": {},
+	"rules_file":           {},
+	"rule_file":            {},
+	"load_rules":           {},
+	"ruleset":              {},
+	"rules_dir":            {},
+	"rule_dir":             {},
+	"rules_folder":         {},
+	"handle":               {},
+	"handle_path":          {},
+	"route":                {},
+	"root":                 {},
+	"file_server":          {},
+	"try_files":            {},
+	"respond":              {},
+	"redir":                {},
+	"header":               {},
+	"encode":               {},
+	"log":                  {},
+	"import":               {},
 	"redis":                {},
-	"redis_url":          {},
-	"secret":             {},
-	"cert_dir":           {},
-	"hsts":               {},
-	"renew_interval":     {},
-	"renew_within_days":  {},
-	"trusted_proxies":    {},
-	"ai_bots":            {},
-	"suspicious_uas":     {},
-	"suspicious_paths":   {},
+	"redis_url":            {},
+	"secret":               {},
+	"cert_dir":             {},
+	"hsts":                 {},
+	"renew_interval":       {},
+	"renew_within_days":    {},
+	"trusted_proxies":      {},
+	"ai_bots":              {},
+	"suspicious_uas":       {},
+	"suspicious_paths":     {},
 }
 
 var ruleFieldKeywords = map[string]struct{}{
@@ -328,6 +375,7 @@ type parseState struct {
 	tls                TLSConfig
 	intel              IntelConfig
 	remoteRulesRefresh int
+	rulesWatchInterval int
 	bindHost           string
 	httpPort           int
 	httpsPort          int
@@ -341,6 +389,7 @@ type parseState struct {
 	protectedFilter    map[string]struct{}
 	flatDomains        []string
 	flatUpstreams      []string
+	snippets           map[string][]statementItem
 }
 
 func applyRuleConditionField(field string, args []string, rule *CustomRule) error {
@@ -785,6 +834,14 @@ func applyWAFDirective(name string, args []string, waf *SiteWAFConfig, intel *In
 		}
 		return true, nil
 
+	case "rules_file", "rule_file", "load_rules", "ruleset", "rules_dir", "rule_dir", "rules_folder":
+		sources, err := parseRuleSourceArgs(args, nil, name)
+		if err != nil {
+			return true, err
+		}
+		waf.RuleSources = append(waf.RuleSources, sources...)
+		return true, nil
+
 	case "cookie_name":
 		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 			return true, fmt.Errorf("cookie_name requires a value")
@@ -1087,6 +1144,14 @@ func applyGlobalDirective(
 			}
 			return nil, nil
 
+		case "ruleset":
+			rs, err := parseRuleSourceBlock(item.sub)
+			if err != nil {
+				return nil, err
+			}
+			waf.RuleSources = append(waf.RuleSources, rs)
+			return nil, nil
+
 		case "waf":
 			if len(words) > 1 {
 				joined := strings.Join(words[1:], " ")
@@ -1106,6 +1171,14 @@ func applyGlobalDirective(
 				}
 			}
 			for _, subItem := range item.sub.body {
+				if subItem.sub != nil && len(subItem.words) > 0 && strings.EqualFold(subItem.words[0], "ruleset") {
+					rs, err := parseRuleSourceBlock(subItem.sub)
+					if err != nil {
+						return nil, err
+					}
+					waf.RuleSources = append(waf.RuleSources, rs)
+					continue
+				}
 				if subItem.sub != nil {
 					if strings.EqualFold(subItem.words[0], "rule") {
 						rule, err := parseRuleBlock(subItem.sub)
@@ -1144,6 +1217,10 @@ func applyGlobalDirective(
 					return nil, fmt.Errorf("unknown waf directive: %s", subItem.words[0])
 				}
 			}
+			return nil, nil
+
+		case "encode", "log":
+			// Tolerate Caddyfile v2 compression/logging blocks.
 			return nil, nil
 
 		default:
@@ -1373,6 +1450,21 @@ func applyGlobalDirective(
 		st.remoteRulesRefresh = sec
 		return nil, nil
 
+	case "rules_watch_interval":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("%s requires seconds or a duration (e.g. 2s)", name)
+		}
+		sec, err := ParseDurationSeconds(args[0], name)
+		if err != nil {
+			return nil, err
+		}
+		st.rulesWatchInterval = sec
+		return nil, nil
+
+	case "encode", "log":
+		// Tolerate Caddyfile v2 compression/logging directives.
+		return nil, nil
+
 	case "trusted_proxies":
 		if len(args) == 0 {
 			return nil, fmt.Errorf("trusted_proxies requires at least one IP or CIDR")
@@ -1386,6 +1478,11 @@ func applyGlobalDirective(
 
 // ParseCaddyfile parses a Gymbagfile/Caddyfile document into a validated Config.
 func ParseCaddyfile(text string) (Config, error) {
+	return ParseCaddyfileWithBaseDir(text, "")
+}
+
+// ParseCaddyfileWithBaseDir parses a Gymbagfile/Caddyfile document resolving relative imports against baseDir.
+func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 	tokens, err := tokenizeCaddyfile(text)
 	if err != nil {
 		return Config{}, err
@@ -1394,15 +1491,40 @@ func ParseCaddyfile(text string) (Config, error) {
 		tls:                DefaultTLSConfig(),
 		intel:              DefaultIntelConfig(),
 		remoteRulesRefresh: DefaultRemoteRulesRefresh,
+		rulesWatchInterval: DefaultRulesWatchInterval,
 		httpPort:           80,
 		httpsPort:          443,
 		defaultWAF:         DefaultSiteWAFConfig(),
 		defaultProtect:     true,
+		snippets:           make(map[string][]statementItem),
+	}
+
+	rawItems, err := parseItems(tokens)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// Pass 1: collect top-level reusable snippets `(name) { ... }`.
+	var nonSnippetItems []statementItem
+	for _, it := range rawItems {
+		if it.sub != nil {
+			if sname, ok := isSnippetHeader(it.words); ok {
+				st.snippets[sname] = it.sub.body
+				continue
+			}
+		}
+		nonSnippetItems = append(nonSnippetItems, it)
+	}
+
+	// Pass 2: expand `import` directives across top-level and nested blocks.
+	items, err := expandImports(nonSnippetItems, baseDir, st.snippets, 0)
+	if err != nil {
+		return Config{}, err
 	}
 
 	hasBraces := false
-	for _, tok := range tokens {
-		if tok == "{" || tok == "}" {
+	for _, it := range items {
+		if it.sub != nil {
 			hasBraces = true
 			break
 		}
@@ -1411,10 +1533,6 @@ func ParseCaddyfile(text string) (Config, error) {
 	var sites []SiteConfig
 
 	if hasBraces {
-		items, err := parseItems(tokens)
-		if err != nil {
-			return Config{}, err
-		}
 		for _, item := range items {
 			if item.sub == nil {
 				return Config{}, fmt.Errorf("unexpected token or missing '{' in config file near %q", strings.Join(item.words, " "))
@@ -1439,7 +1557,7 @@ func ParseCaddyfile(text string) (Config, error) {
 					if strings.TrimSpace(part) == "" {
 						continue
 					}
-					h, port, hasPort, err := host.ParseSiteAddress(part)
+					h, port, hasPort, err := parseCaddySiteAddressToken(part)
 					if err != nil {
 						return Config{}, err
 					}
@@ -1459,8 +1577,141 @@ func ParseCaddyfile(text string) (Config, error) {
 			protectExplicit := false
 			var siteUpstreams []string
 			var siteCert, siteKey string
+			matchers := make(map[string][]string)
+			siteScope := newRouteScope(matchers)
+			siteHeaders := make(map[string]string)
 
 			for _, stmt := range block.body {
+				if len(stmt.words) == 0 {
+					continue
+				}
+				firstWord := stmt.words[0]
+				lowerFirst := strings.ToLower(firstWord)
+
+				// Named matcher: `@api path /api/*` or `@api { ... }`
+				if strings.HasPrefix(firstWord, "@") {
+					mName, mPaths, mErr := parseNamedMatcher(stmt)
+					if mErr != nil {
+						return Config{}, mErr
+					}
+					matchers[mName] = mPaths
+					continue
+				}
+
+				if stmt.sub != nil {
+					switch lowerFirst {
+					case "handle", "handle_path", "route":
+						routes, hErr := parseHandleScope(stmt, matchers, lowerFirst == "handle_path")
+						if hErr != nil {
+							return Config{}, hErr
+						}
+						siteScope.routes = append(siteScope.routes, routes...)
+						continue
+					case "reverse_proxy", "upstream", "proxy":
+						paths, targets, rpErr := parseReverseProxyDirective(stmt, matchers)
+						if rpErr != nil {
+							return Config{}, rpErr
+						}
+						if len(paths) == 1 && paths[0] == "" {
+							siteUpstreams = append(siteUpstreams, targets...)
+						} else {
+							emitProxyRoutes(siteScope, paths, targets)
+						}
+						continue
+					case "file_server":
+						if fsErr := applyFileServerItem(siteScope, stmt); fsErr != nil {
+							return Config{}, fsErr
+						}
+						continue
+					case "respond":
+						paths, resp, rErr := parseRespondBlock(stmt, matchers)
+						if rErr != nil {
+							return Config{}, rErr
+						}
+						emitRespondRoutes(siteScope, paths, resp)
+						continue
+					case "header":
+						hasM, mPaths, muts, hErr := parseHeaderBlockOrLine(stmt, matchers)
+						if hErr != nil {
+							return Config{}, hErr
+						}
+						if !hasM || (len(mPaths) == 1 && mPaths[0] == "") {
+							for k, v := range muts {
+								siteHeaders[k] = v
+							}
+						} else {
+							for k, v := range muts {
+								if siteScope.headers == nil {
+									siteScope.headers = make(map[string]string)
+								}
+								siteScope.headers[k] = v
+							}
+						}
+						continue
+					}
+				} else {
+					switch lowerFirst {
+					case "reverse_proxy", "upstream", "proxy":
+						paths, targets, rpErr := parseReverseProxyDirective(stmt, matchers)
+						if rpErr != nil {
+							return Config{}, rpErr
+						}
+						if len(paths) == 1 && paths[0] == "" {
+							siteUpstreams = append(siteUpstreams, targets...)
+						} else {
+							emitProxyRoutes(siteScope, paths, targets)
+						}
+						continue
+					case "root":
+						if rErr := applyRootDirective(siteScope, stmt.words[1:], matchers); rErr != nil {
+							return Config{}, rErr
+						}
+						continue
+					case "try_files":
+						if fb := extractTryFilesFallback(stmt.words[1:]); fb != "" {
+							siteScope.tryFiles = fb
+						}
+						continue
+					case "file_server":
+						if fsErr := applyFileServerItem(siteScope, stmt); fsErr != nil {
+							return Config{}, fsErr
+						}
+						continue
+					case "respond":
+						paths, resp, rErr := parseRespondArgs(stmt.words[1:], matchers)
+						if rErr != nil {
+							return Config{}, rErr
+						}
+						emitRespondRoutes(siteScope, paths, resp)
+						continue
+					case "redir":
+						paths, redir, rErr := parseRedirArgs(stmt.words[1:], matchers)
+						if rErr != nil {
+							return Config{}, rErr
+						}
+						emitRedirRoutes(siteScope, paths, redir)
+						continue
+					case "header":
+						hasM, mPaths, muts, hErr := parseHeaderBlockOrLine(stmt, matchers)
+						if hErr != nil {
+							return Config{}, hErr
+						}
+						if !hasM || (len(mPaths) == 1 && mPaths[0] == "") {
+							for k, v := range muts {
+								siteHeaders[k] = v
+							}
+						} else {
+							for k, v := range muts {
+								if siteScope.headers == nil {
+									siteScope.headers = make(map[string]string)
+								}
+								siteScope.headers[k] = v
+							}
+						}
+						continue
+					}
+				}
+
 				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, false)
 				if err != nil {
 					return Config{}, err
@@ -1469,11 +1720,16 @@ func ParseCaddyfile(text string) (Config, error) {
 					siteUpstreams = append(siteUpstreams, upstreams...)
 				}
 			}
-			if len(siteUpstreams) == 0 && len(st.flatUpstreams) > 0 {
+
+			siteRoutes := siteScope.finalize()
+			if len(siteUpstreams) == 0 && len(siteRoutes) == 0 && len(st.flatUpstreams) > 0 {
 				siteUpstreams = append(siteUpstreams, st.flatUpstreams...)
 			}
-			if len(siteUpstreams) == 0 {
-				return Config{}, fmt.Errorf("site block for %s requires reverse_proxy <upstream>", strings.Join(siteHosts, ", "))
+			if len(siteUpstreams) == 0 && len(siteRoutes) == 0 {
+				return Config{}, fmt.Errorf("site block for %s requires reverse_proxy <upstream> or a route handler (file_server, respond, redir, handle)", strings.Join(siteHosts, ", "))
+			}
+			if len(siteHeaders) == 0 {
+				siteHeaders = nil
 			}
 
 			for _, h := range siteHosts {
@@ -1481,9 +1737,15 @@ func ParseCaddyfile(text string) (Config, error) {
 				if !protectExplicit && st.protectedFilter != nil {
 					_, effectiveProtect = st.protectedFilter[h]
 				}
+				clonedRoutes := make([]RouteConfig, len(siteRoutes))
+				for i, r := range siteRoutes {
+					clonedRoutes[i] = r.Clone()
+				}
 				sites = append(sites, SiteConfig{
 					Domain:    h,
 					Upstreams: append([]string(nil), siteUpstreams...),
+					Routes:    clonedRoutes,
+					Headers:   cloneHeaderMap(siteHeaders),
 					Protect:   effectiveProtect,
 					WAF:       cloneSiteWAF(siteWAF),
 					CertFile:  siteCert,
@@ -1492,10 +1754,6 @@ func ParseCaddyfile(text string) (Config, error) {
 			}
 		}
 	} else {
-		items, err := parseItems(tokens)
-		if err != nil {
-			return Config{}, err
-		}
 		protectExplicit := false
 		for idx, stmt := range items {
 			words := stmt.words
@@ -1511,7 +1769,7 @@ func ParseCaddyfile(text string) (Config, error) {
 						if strings.TrimSpace(part) == "" {
 							continue
 						}
-						h, port, hasPort, err := host.ParseSiteAddress(part)
+						h, port, hasPort, err := parseCaddySiteAddressToken(part)
 						if err != nil {
 							return Config{}, err
 						}
@@ -1563,10 +1821,12 @@ func ParseCaddyfile(text string) (Config, error) {
 		TLS:                st.tls,
 		Intel:              st.intel,
 		RemoteRulesRefresh: st.remoteRulesRefresh,
+		RulesWatchInterval: st.rulesWatchInterval,
 		RedisURL:           st.redisURL,
 		Secret:             st.secret,
 		TrustedProxies:     st.trustedProxies,
 		Defaults:           st.defaultWAF,
+		BaseDir:            baseDir,
 	}
 	if cfg.BindHost == "" {
 		cfg.BindHost = DefaultBindHost(cfg.Domains())
@@ -1590,6 +1850,7 @@ func cloneSiteWAF(in SiteWAFConfig) SiteWAFConfig {
 		}
 	}
 	out.RemoteRules = slices.Clone(in.RemoteRules)
+	out.RuleSources = slices.Clone(in.RuleSources)
 	out.CustomAIBots = slices.Clone(in.CustomAIBots)
 	out.CustomSuspiciousUAs = slices.Clone(in.CustomSuspiciousUAs)
 	out.CustomSuspiciousPaths = slices.Clone(in.CustomSuspiciousPaths)
@@ -1819,6 +2080,12 @@ func FormatConfig(cfg Config) string {
 	if cfg.RemoteRulesRefresh != 0 && cfg.RemoteRulesRefresh != DefaultRemoteRulesRefresh {
 		globalLines = append(globalLines, fmt.Sprintf("    remote_rules_refresh %d", cfg.RemoteRulesRefresh))
 	}
+	if cfg.RulesWatchInterval != 0 && cfg.RulesWatchInterval != DefaultRulesWatchInterval {
+		globalLines = append(globalLines, fmt.Sprintf("    rules_watch_interval %d", cfg.RulesWatchInterval))
+	}
+	for _, rs := range cfg.Defaults.RuleSources {
+		globalLines = append(globalLines, formatRuleSourceLines("    ", rs)...)
+	}
 
 	if len(globalLines) > 0 {
 		b.WriteString("{\n")
@@ -1835,9 +2102,15 @@ func FormatConfig(cfg Config) string {
 		}
 		b.WriteString(site.Domain)
 		b.WriteString(" {\n")
-		b.WriteString("    reverse_proxy ")
-		b.WriteString(strings.Join(site.Upstreams, " "))
-		b.WriteByte('\n')
+		for _, rc := range site.Routes {
+			formatRouteConfig(&b, rc)
+		}
+		if len(site.Upstreams) > 0 {
+			b.WriteString("    reverse_proxy ")
+			b.WriteString(strings.Join(site.Upstreams, " "))
+			b.WriteByte('\n')
+		}
+		formatHeaderLines(&b, "    ", site.Headers)
 		if !site.Protect {
 			b.WriteString("    protect off\n")
 		} else {
@@ -1872,10 +2145,111 @@ func FormatConfig(cfg Config) string {
 		for _, u := range site.WAF.RemoteRules {
 			b.WriteString(fmt.Sprintf("    remote_rules %s\n", quoteIfNeeded(u)))
 		}
+		for _, rs := range site.WAF.RuleSources {
+			if slices.Contains(cfg.Defaults.RuleSources, rs) {
+				continue
+			}
+			for _, ln := range formatRuleSourceLines("    ", rs) {
+				b.WriteString(ln)
+				b.WriteByte('\n')
+			}
+		}
 		if site.CertFile != "" && site.KeyFile != "" {
 			b.WriteString(fmt.Sprintf("    tls %s %s\n", site.CertFile, site.KeyFile))
 		}
 		b.WriteString("}\n")
 	}
 	return b.String()
+}
+
+func formatRuleSourceLines(indent string, rs RuleSource) []string {
+	if rs.Name != "" {
+		lines := []string{fmt.Sprintf("%sruleset %s {", indent, quoteIfNeeded(rs.Name))}
+		lines = append(lines, fmt.Sprintf("%s    source %s", indent, quoteIfNeeded(rs.Source)))
+		if rs.Dynamic {
+			lines = append(lines, fmt.Sprintf("%s    dynamic on", indent))
+		}
+		lines = append(lines, indent+"}")
+		return lines
+	}
+	if rs.Dynamic {
+		return []string{fmt.Sprintf("%srules_file %s dynamic", indent, quoteIfNeeded(rs.Source))}
+	}
+	return []string{fmt.Sprintf("%srules_file %s", indent, quoteIfNeeded(rs.Source))}
+}
+
+func formatHeaderLines(b *strings.Builder, indent string, headers map[string]string) {
+	if len(headers) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if strings.HasPrefix(k, "-") {
+			b.WriteString(fmt.Sprintf("%sheader %s\n", indent, quoteIfNeeded(k)))
+		} else {
+			b.WriteString(fmt.Sprintf("%sheader %s %s\n", indent, quoteIfNeeded(k), quoteIfNeeded(headers[k])))
+		}
+	}
+}
+
+func formatRouteConfig(b *strings.Builder, rc RouteConfig) {
+	useBlock := rc.StripPrefix != "" || len(rc.Headers) > 0 ||
+		(rc.Path == "" && rc.HandlerKind() == "proxy") ||
+		(rc.Path != "" && rc.HandlerKind() == "static")
+	if useBlock {
+		headerKw := "handle"
+		headerArg := rc.Path
+		if rc.StripPrefix != "" {
+			headerKw = "handle_path"
+			if headerArg == "" {
+				headerArg = strings.TrimRight(rc.StripPrefix, "/") + "/*"
+			}
+		}
+		if headerArg != "" {
+			b.WriteString(fmt.Sprintf("    %s %s {\n", headerKw, quoteIfNeeded(headerArg)))
+		} else {
+			b.WriteString(fmt.Sprintf("    %s {\n", headerKw))
+		}
+		formatHeaderLines(b, "        ", rc.Headers)
+		formatRouteHandlerBody(b, "        ", rc, false)
+		b.WriteString("    }\n")
+		return
+	}
+	formatRouteHandlerBody(b, "    ", rc, true)
+}
+
+func formatRouteHandlerBody(b *strings.Builder, indent string, rc RouteConfig, includePath bool) {
+	matcherPrefix := ""
+	if includePath && rc.Path != "" {
+		matcherPrefix = quoteIfNeeded(rc.Path) + " "
+	}
+	switch rc.HandlerKind() {
+	case "proxy":
+		b.WriteString(fmt.Sprintf("%sreverse_proxy %s%s\n", indent, matcherPrefix, strings.Join(rc.Upstreams, " ")))
+	case "static":
+		b.WriteString(fmt.Sprintf("%sroot * %s\n", indent, quoteIfNeeded(rc.Root)))
+		if rc.Fallback != "" {
+			b.WriteString(fmt.Sprintf("%stry_files {path} %s\n", indent, quoteIfNeeded(rc.Fallback)))
+		}
+		if len(rc.Index) > 0 {
+			b.WriteString(fmt.Sprintf("%sfile_server {\n", indent))
+			b.WriteString(fmt.Sprintf("%s    index %s\n", indent, strings.Join(rc.Index, " ")))
+			if rc.Browse {
+				b.WriteString(fmt.Sprintf("%s    browse\n", indent))
+			}
+			b.WriteString(fmt.Sprintf("%s}\n", indent))
+		} else if rc.Browse {
+			b.WriteString(fmt.Sprintf("%sfile_server browse\n", indent))
+		} else {
+			b.WriteString(fmt.Sprintf("%sfile_server\n", indent))
+		}
+	case "respond":
+		b.WriteString(fmt.Sprintf("%srespond %s%s %d\n", indent, matcherPrefix, quoteIfNeeded(rc.Respond.Body), rc.Respond.Status))
+	case "redirect":
+		b.WriteString(fmt.Sprintf("%sredir %s%s %d\n", indent, matcherPrefix, quoteIfNeeded(rc.Redirect.To), rc.Redirect.Code))
+	}
 }

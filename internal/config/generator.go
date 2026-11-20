@@ -17,6 +17,7 @@ type SiteSpec struct {
 	Difficulty   int
 	ClearanceTTL string
 	RemoteRules  []string
+	RuleSources  []RuleSource
 	CertFile     string
 	KeyFile      string
 }
@@ -33,6 +34,8 @@ type GenerateOptions struct {
 	ClearanceTTL       string
 	RemoteRules        []string
 	RemoteRulesRefresh string
+	RuleSources        []RuleSource
+	RulesWatchInterval string
 	DefaultRules       *bool
 	SSLProvider        string
 	Email              string
@@ -157,6 +160,21 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		}
 		cfg.RemoteRulesRefresh = sec
 	}
+	if len(opts.RuleSources) > 0 {
+		for _, rs := range opts.RuleSources {
+			if err := rs.Validate(); err != nil {
+				return Config{}, err
+			}
+			cfg.Defaults.RuleSources = append(cfg.Defaults.RuleSources, rs)
+		}
+	}
+	if rawWatch := strings.TrimSpace(opts.RulesWatchInterval); rawWatch != "" {
+		sec, err := ParseDurationSeconds(rawWatch, "rules-watch-interval")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.RulesWatchInterval = sec
+	}
 	if opts.DefaultRules != nil {
 		b := *opts.DefaultRules
 		cfg.Defaults.DefaultRules = &b
@@ -242,6 +260,9 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 					wafCfg.RemoteRules = append(wafCfg.RemoteRules, u)
 				}
 			}
+		}
+		if len(sp.RuleSources) > 0 {
+			wafCfg.RuleSources = append(wafCfg.RuleSources, sp.RuleSources...)
 		}
 		cfg.Sites = append(cfg.Sites, SiteConfig{
 			Domain:    d,

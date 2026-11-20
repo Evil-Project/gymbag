@@ -379,7 +379,37 @@ func applySSLProvider(raw string, tlsCfg *TLSConfig) error {
 }
 
 // DefaultConfigFiles lists automatic config filenames probed in the working directory.
-var DefaultConfigFiles = []string{"Gymbagfile", "Caddyfile"}
+var DefaultConfigFiles = []string{"gymbag.json", "Gymbagfile", "Caddyfile"}
+
+// RuleSource references an external firewall rule file, directory, or URL.
+// When Dynamic is true, Gymbag watches local files/folders for changes or refreshes URLs periodically.
+type RuleSource struct {
+	Source  string `json:"source"`
+	Dynamic bool   `json:"dynamic,omitempty"`
+	Name    string `json:"name,omitempty"`
+}
+
+// IsURL reports whether the rule source is an http:// or https:// URL.
+func (rs RuleSource) IsURL() bool {
+	lower := strings.ToLower(strings.TrimSpace(rs.Source))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+// Validate normalizes and checks a RuleSource.
+func (rs *RuleSource) Validate() error {
+	rs.Source = strings.TrimSpace(rs.Source)
+	rs.Name = strings.TrimSpace(rs.Name)
+	if rs.Source == "" {
+		return fmt.Errorf("rule source must not be empty")
+	}
+	if strings.ContainsAny(rs.Source, "\r\n\x00") || strings.ContainsAny(rs.Name, "\r\n\x00") {
+		return fmt.Errorf("rule source contains invalid control characters")
+	}
+	if rs.IsURL() {
+		return RequireHTTPURL(rs.Source, "rule_source")
+	}
+	return nil
+}
 
 // SiteWAFConfig holds per-website WAF, verification level, and custom rules.
 type SiteWAFConfig struct {
@@ -394,6 +424,7 @@ type SiteWAFConfig struct {
 	DefaultRules          *bool        `json:"default_rules,omitempty"`
 	Rules                 []CustomRule `json:"rules,omitempty"`
 	RemoteRules           []string     `json:"remote_rules,omitempty"`
+	RuleSources           []RuleSource `json:"rule_sources,omitempty"`
 	CustomAIBots          []string     `json:"custom_ai_bots,omitempty"`
 	CustomSuspiciousUAs   []string     `json:"custom_suspicious_uas,omitempty"`
 	CustomSuspiciousPaths []string     `json:"custom_suspicious_paths,omitempty"`
@@ -464,17 +495,56 @@ func (w *SiteWAFConfig) Validate() error {
 		}
 		w.RemoteRules = cleaned
 	}
+	if len(w.RuleSources) > 0 {
+		idxBySrc := make(map[string]int, len(w.RuleSources))
+		cleaned := make([]RuleSource, 0, len(w.RuleSources))
+		for i := range w.RuleSources {
+			rs := w.RuleSources[i]
+			if err := rs.Validate(); err != nil {
+				return err
+			}
+			if pos, ok := idxBySrc[rs.Source]; ok {
+				if rs.Dynamic {
+					cleaned[pos].Dynamic = true
+				}
+				if cleaned[pos].Name == "" && rs.Name != "" {
+					cleaned[pos].Name = rs.Name
+				}
+				continue
+			}
+			idxBySrc[rs.Source] = len(cleaned)
+			cleaned = append(cleaned, rs)
+		}
+		w.RuleSources = cleaned
+	}
 	return nil
 }
 
 // SiteConfig describes a single downstream website hosted and optionally protected by Gymbag.
 type SiteConfig struct {
-	Domain    string        `json:"domain"`
-	Upstreams []string      `json:"upstreams"`
-	Protect   bool          `json:"protect"`
-	WAF       SiteWAFConfig `json:"waf"`
-	CertFile  string        `json:"cert_file,omitempty"`
-	KeyFile   string        `json:"key_file,omitempty"`
+	Domain    string            `json:"domain"`
+	Upstreams []string          `json:"upstreams,omitempty"`
+	Routes    []RouteConfig     `json:"routes,omitempty"`  // path-matched handlers evaluated before Upstreams
+	Headers   map[string]string `json:"headers,omitempty"` // response header mutations applied to every response ("-Name" deletes)
+	Protect   bool              `json:"protect"`
+	WAF       SiteWAFConfig     `json:"waf"`
+	CertFile  string            `json:"cert_file,omitempty"`
+	KeyFile   string            `json:"key_file,omitempty"`
+}
+
+// Clone returns a deep copy of the site configuration.
+func (s SiteConfig) Clone() SiteConfig {
+	out := s
+	out.Upstreams = append([]string(nil), s.Upstreams...)
+	if s.Routes != nil {
+		out.Routes = make([]RouteConfig, len(s.Routes))
+		for i, r := range s.Routes {
+			out.Routes[i] = r.Clone()
+		}
+	}
+	out.Headers = cloneHeaderMap(s.Headers)
+	out.WAF = cloneSiteWAF(s.WAF)
+	return out
 }
 
 // PrimaryUpstream returns the site's first upstream URL.
@@ -491,8 +561,8 @@ func (s *SiteConfig) Validate() error {
 	if s.Domain == "" {
 		return fmt.Errorf("site domain must not be empty")
 	}
-	if len(s.Upstreams) == 0 {
-		return fmt.Errorf("site %s requires at least one upstream URL", s.Domain)
+	if len(s.Upstreams) == 0 && len(s.Routes) == 0 {
+		return fmt.Errorf("site %s requires at least one upstream URL or route", s.Domain)
 	}
 	normalized := make([]string, 0, len(s.Upstreams))
 	for _, raw := range s.Upstreams {
@@ -503,6 +573,14 @@ func (s *SiteConfig) Validate() error {
 		normalized = append(normalized, u)
 	}
 	s.Upstreams = normalized
+	for i := range s.Routes {
+		if err := s.Routes[i].Validate(); err != nil {
+			return fmt.Errorf("site %s: %w", s.Domain, err)
+		}
+	}
+	if err := validateHeaderMap(s.Headers); err != nil {
+		return fmt.Errorf("site %s: %w", s.Domain, err)
+	}
 	if s.WAF.Difficulty == 0 {
 		s.WAF.Difficulty = 4
 	}
@@ -567,6 +645,9 @@ func DefaultTLSConfig() TLSConfig {
 // DefaultRemoteRulesRefresh is the default refresh interval (in seconds) for remote rule URLs.
 const DefaultRemoteRulesRefresh = 300
 
+// DefaultRulesWatchInterval is the default polling interval (in seconds) for dynamic local rule files/folders.
+const DefaultRulesWatchInterval = 2
+
 // Config is the root configuration model for Gymbag.
 type Config struct {
 	Sites              []SiteConfig  `json:"sites"`
@@ -577,10 +658,12 @@ type Config struct {
 	TLS                TLSConfig     `json:"tls"`
 	Intel              IntelConfig   `json:"intel"`
 	RemoteRulesRefresh int           `json:"remote_rules_refresh,omitempty"`
+	RulesWatchInterval int           `json:"rules_watch_interval,omitempty"`
 	RedisURL           string        `json:"redis_url,omitempty"`
 	Secret             string        `json:"secret,omitempty"`
 	TrustedProxies     []string      `json:"trusted_proxies,omitempty"`
 	Defaults           SiteWAFConfig `json:"defaults"`
+	BaseDir            string        `json:"-"`
 }
 
 // Default returns a baseline Config for localhost -> http://localhost:5173.
@@ -601,8 +684,48 @@ func Default() Config {
 		TLS:                DefaultTLSConfig(),
 		Intel:              DefaultIntelConfig(),
 		RemoteRulesRefresh: DefaultRemoteRulesRefresh,
+		RulesWatchInterval: DefaultRulesWatchInterval,
 		Defaults:           waf,
 	}
+}
+
+// AllRuleSources returns the ordered deduplicated list of external rule sources across global defaults and all sites.
+func (c Config) AllRuleSources() []RuleSource {
+	idxBySrc := make(map[string]int)
+	var out []RuleSource
+	add := func(rs RuleSource) {
+		rs.Source = strings.TrimSpace(rs.Source)
+		rs.Name = strings.TrimSpace(rs.Name)
+		if rs.Source == "" {
+			return
+		}
+		if pos, ok := idxBySrc[rs.Source]; ok {
+			if rs.Dynamic {
+				out[pos].Dynamic = true
+			}
+			if out[pos].Name == "" && rs.Name != "" {
+				out[pos].Name = rs.Name
+			}
+			return
+		}
+		idxBySrc[rs.Source] = len(out)
+		out = append(out, rs)
+	}
+	for _, rs := range c.Defaults.RuleSources {
+		add(rs)
+	}
+	for _, u := range c.Defaults.RemoteRules {
+		add(RuleSource{Source: u, Dynamic: true})
+	}
+	for _, s := range c.Sites {
+		for _, rs := range s.WAF.RuleSources {
+			add(rs)
+		}
+		for _, u := range s.WAF.RemoteRules {
+			add(RuleSource{Source: u, Dynamic: true})
+		}
+	}
+	return out
 }
 
 // RemoteRuleURLs returns the ordered unique list of remote rule URLs referenced across all sites.
@@ -745,6 +868,9 @@ func (c *Config) Validate() error {
 	}
 	if c.RemoteRulesRefresh <= 0 {
 		c.RemoteRulesRefresh = DefaultRemoteRulesRefresh
+	}
+	if c.RulesWatchInterval <= 0 {
+		c.RulesWatchInterval = DefaultRulesWatchInterval
 	}
 	if err := c.Defaults.Validate(); err != nil {
 		c.Defaults = DefaultSiteWAFConfig()
