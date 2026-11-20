@@ -17,14 +17,14 @@
 </p>
 
 <p align="center">
-  <strong>Docs Languages:</strong>
-  <a href="https://evil-project.github.io/gymbag/">English</a> ·
-  <a href="https://evil-project.github.io/gymbag/zh/">简体中文</a> ·
-  <a href="https://evil-project.github.io/gymbag/ja/">日本語</a> ·
-  <a href="https://evil-project.github.io/gymbag/ko/">한국어</a> ·
-  <a href="https://evil-project.github.io/gymbag/es/">Español</a>
+  <strong>README:</strong>
+  <a href="README.md">English</a> ·
+  <a href="README.zh.md">简体中文</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.es.md">Español</a>
   <br />
-  <sub>Repository Markdown: <a href="docs/index.md">EN</a> · <a href="docs/zh/index.md">ZH</a> · <a href="docs/ja/index.md">JA</a> · <a href="docs/ko/index.md">KO</a> · <a href="docs/es/index.md">ES</a></sub>
+  <sub>Online Docs: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
 Gymbag is a single-binary HTTPS reverse proxy with a built-in, Anubis-style proof-of-work Web Application Firewall. It is written in pure Go using only the standard library — zero external Go dependencies, and every HTML template, SHA-256 browser solver script, and mascot PNG is compiled directly into the executable via `go:embed`.
@@ -57,15 +57,17 @@ nix profile install github:Evil-Project/gymbag
 ```
 Static `CGO_ENABLED=0` Linux release binaries also execute directly on NixOS without `patchelf` or `nix-ld`, and `nixosModules.default` provides declarative `services.gymbag` configuration.
 
-Get started in **two commands** — generate `Gymbagfile` and start the server:
+Get started in **two commands** — generate `gymbag.json` and start the server:
 
 ```bash
-# 1. Generate a config (interactive wizard, or pass flags for one-liner setup)
+# 1. Generate a JSON config (or pass --format gymbagfile for Caddy-style Gymbagfile)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Start the server
+# 2. Start the server (auto-loads ./gymbag.json, ./Gymbagfile, or ./Caddyfile)
 ./gymbag
 ```
+
+Gymbag also natively reads existing **nginx** (`nginx.conf`), **Apache** (`httpd.conf` / `apache2.conf`), and **Caddyfile v2** configs (including snippets, `import`, `@matchers`, `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir`, and `header`).
 
 Or register it as a system service (`systemd`, `launchd`, `openrc`, or `supervisor`) and start it:
 
@@ -380,6 +382,28 @@ app.example.com {
 
 Inspect or trigger an immediate refresh via `GET /api/v1/rules/remote` and `POST /api/v1/rules/remote/refresh`, or pass `--remote-rules` / `GYMBAG_REMOTE_RULES`.
 
+### Local Rule Files, Rules Folders, & Dynamic Hot-Reload
+
+Store rules in a dedicated `.rules`/`.json` file or an entire rules directory and reference them by path (or link them via `gymbag ruleset add`). Mark a source `dynamic` to automatically watch and hot-reload changes on disk without restarting the server (if a file has invalid syntax, Gymbag retains the last known good ruleset):
+
+```caddyfile
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+In `gymbag.json`, configure `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]` or pass `--rules-file`, `--rules-dir`, `--rules-dynamic`, and `--rules-watch-interval` to `gymbag init`.
+
 ### Controlling Built-In Rules (`default_rules on|off`)
 
 `default_rules` is `on` by default:
@@ -393,21 +417,39 @@ Inspect or trigger an immediate refresh via `GET /api/v1/rules/remote` and `POST
 
 ### CLI Reference
 
-Gymbag automatically loads `.env` from the working directory if present, then resolves `./Gymbagfile` or `./Caddyfile` unless overridden by flags:
+Gymbag automatically loads `.env` from the working directory if present, then resolves `./gymbag.json`, `./Gymbagfile`, or `./Caddyfile` unless overridden by flags (you can also pass a native `nginx.conf` or Apache `httpd.conf`/`apache2.conf` directly with `-c`):
 
 ```bash
-# Generate Gymbagfile via interactive wizard or flags
+# Generate gymbag.json (default) or Gymbagfile via interactive wizard or flags
 ./gymbag init
-./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# Start server using ./Gymbagfile or ./Caddyfile
+# Manage sites, routes, and global settings in gymbag.json or Gymbagfile
+./gymbag config list
+./gymbag config add -d api.example.com -u :8080 -l 1
+./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+./gymbag config route add -d api.example.com --path /static/* --strip-prefix /static --root ./dist
+./gymbag config remove -d api.example.com
+./gymbag config set admin 127.0.0.1:2019
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+
+# Manage dedicated rule files, rules folders, and inline rules
+./gymbag ruleset init ./rules/custom.rules
+./gymbag ruleset add --source ./rules --dynamic --name local-dir
+./gymbag ruleset update local-dir --static
+./gymbag ruleset remove local-dir
+./gymbag ruleset validate ./rules
+./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+
+# Start server using ./gymbag.json, ./Gymbagfile, or ./Caddyfile
 ./gymbag
 
-# Start with an explicit config file and hot-reload on file save (polls every 2s)
-./gymbag run --config Gymbagfile --watch
+# Start with an explicit config file (JSON, Gymbagfile, Caddyfile v2, nginx, Apache) and hot-reload on save
+./gymbag run --config gymbag.json --watch
 
 # Register & manage a system service (systemd, launchd, openrc, supervisor)
-./gymbag service install --config Gymbagfile
+./gymbag service install --config gymbag.json
 ./gymbag service start
 ./gymbag service status
 ./gymbag service render --type systemd   # Preview a systemd unit on any OS
@@ -415,8 +457,8 @@ Gymbag automatically loads `.env` from the working directory if present, then re
 # Ad-hoc reverse proxy without a config file
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 
-# Validate syntax and print the resolved per-site security summary
-./gymbag validate --config Gymbagfile
+# Validate config + local rule sources and print the resolved per-site security summary
+./gymbag validate --config gymbag.json
 
 # Format a Gymbagfile into canonical 4-space layout in place
 ./gymbag fmt --overwrite Gymbagfile
@@ -427,7 +469,7 @@ Gymbag automatically loads `.env` from the working directory if present, then re
 
 | Flag | Description |
 | :--- | :--- |
-| `-c`, `--config <path>` | Path to `Gymbagfile`, `Caddyfile`, or JSON config file |
+| `-c`, `--config <path>` | Path to `gymbag.json`, `Gymbagfile`, `Caddyfile`, `nginx.conf`, or Apache config file |
 | `-d`, `--domain <list>` | Override downstream domain(s), comma-separated |
 | `-u`, `--upstream <url>` | Override upstream URL (e.g. `http://localhost:3000` or `:3000`) |
 | `-l`, `--verify <0-3>` | Override verify level (`0`, `1`, `2`, `3`, or `off`) |
@@ -515,6 +557,7 @@ Precedence order is **Config file -> `GYMBAG_*` environment variables -> CLI fla
 | `GYMBAG_DEFAULT_RULES` | Enable or disable built-in baseline firewall rules (`on` / `off`, default `on`) |
 | `GYMBAG_REMOTE_RULES` | Comma- or whitespace-separated HTTP/HTTPS remote firewall rules URLs |
 | `GYMBAG_REMOTE_RULES_REFRESH` | Remote rules refresh interval in seconds or duration (default `300` / `5m`) |
+| `GYMBAG_RULES_WATCH_INTERVAL` | Polling interval in seconds or duration for dynamic local rule files/folders (default `2` / `2s`) |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW leading-hex-zero difficulty (`1`–`5`, default `4`) |
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Challenge expiry (`300`s / `5m`) and verified status timeout (`86400`s / `24h`; aliases `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`; accepts durations like `30m`, `12h`, `7d`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Clearance cookie name (`waf_clearance`) and `Secure` flag (`true`) |
