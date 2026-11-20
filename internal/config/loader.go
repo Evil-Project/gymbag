@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -25,7 +26,7 @@ type LoadOptions struct {
 	HTTPSPort          int
 }
 
-// ParseFile reads a Gymbagfile, Caddyfile, or JSON configuration file from disk.
+// ParseFile reads a Gymbagfile, Caddyfile, nginx, Apache, or JSON configuration file from disk.
 func ParseFile(path string) (Config, error) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -35,21 +36,45 @@ func ParseFile(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("failed to read config file %s: %w", path, err)
 	}
+	baseDir := filepath.Dir(path)
+	if abs, absErr := filepath.Abs(path); absErr == nil {
+		baseDir = filepath.Dir(abs)
+	}
+	return ParseConfigBytes(raw, path, baseDir)
+}
+
+// ParseConfigBytes parses raw configuration bytes according to file extension and content sniffing
+// (JSON, Apache httpd.conf, nginx.conf, or Gymbagfile/Caddyfile), resolving relative includes from baseDir.
+func ParseConfigBytes(raw []byte, path, baseDir string) (Config, error) {
 	trimmed := strings.TrimSpace(string(raw))
-	if strings.HasSuffix(strings.ToLower(path), ".json") || (strings.HasPrefix(trimmed, "{") && json.Valid(raw)) {
-		cfg := Default()
+	var (
+		cfg Config
+		err error
+	)
+	switch {
+	case strings.HasSuffix(strings.ToLower(path), ".json") || (strings.HasPrefix(trimmed, "{") && json.Valid(raw)):
+		cfg = Default()
 		cfg.Sites = nil
 		dec := json.NewDecoder(strings.NewReader(trimmed))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&cfg); err != nil {
+		if err = dec.Decode(&cfg); err != nil {
 			return Config{}, fmt.Errorf("invalid JSON config file %s: %w", path, err)
 		}
-		if err := cfg.Validate(); err != nil {
+		if err = cfg.Validate(); err != nil {
 			return Config{}, err
 		}
-		return cfg, nil
+	case isApacheConfig(string(raw), path):
+		cfg, err = ParseApacheWithBaseDir(string(raw), baseDir)
+	case isNginxConfig(string(raw), path):
+		cfg, err = ParseNginxWithBaseDir(string(raw), baseDir)
+	default:
+		cfg, err = ParseCaddyfileWithBaseDir(string(raw), baseDir)
 	}
-	return ParseCaddyfile(string(raw))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.BaseDir = baseDir
+	return cfg, nil
 }
 
 // Load resolves configuration from file -> environment variables -> CLI overrides.
@@ -104,13 +129,30 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 			}
 		}
 		sites := make([]SiteConfig, 0, len(domains))
+		var baseRoutes []RouteConfig
+		var baseHeaders map[string]string
+		if upstream == "" && len(cfg.Sites) > 0 && len(cfg.Sites[0].Routes) > 0 {
+			baseRoutes = cfg.Sites[0].Routes
+			baseHeaders = cfg.Sites[0].Headers
+		}
 		for _, d := range domains {
-			sites = append(sites, SiteConfig{
-				Domain:    d,
-				Upstreams: []string{upstream},
-				Protect:   true,
-				WAF:       cloneSiteWAF(cfg.Defaults),
-			})
+			sc := SiteConfig{
+				Domain:  d,
+				Protect: true,
+				WAF:     cloneSiteWAF(cfg.Defaults),
+				Headers: cloneHeaderMap(baseHeaders),
+			}
+			if upstream != "" {
+				sc.Upstreams = []string{upstream}
+			}
+			if len(baseRoutes) > 0 {
+				clonedRoutes := make([]RouteConfig, len(baseRoutes))
+				for i, r := range baseRoutes {
+					clonedRoutes[i] = r.Clone()
+				}
+				sc.Routes = clonedRoutes
+			}
+			sites = append(sites, sc)
 		}
 		cfg.Sites = sites
 		if strings.TrimSpace(getenv("GYMBAG_BIND")) == "" {
@@ -245,10 +287,12 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 		defaultUpstream = norm
-	} else {
+	} else if defaultUpstream != "" {
 		if err := RequireHTTPURL(defaultUpstream, "GYMBAG_UPSTREAM"); err != nil {
 			return Config{}, err
 		}
+	} else {
+		defaultUpstream = "http://localhost:5173"
 	}
 
 	// Parse GYMBAG_UPSTREAMS="host1=url1;host2=url2"
@@ -451,6 +495,12 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	} else if ok {
 		cfg.RemoteRulesRefresh = v
+	}
+
+	if v, ok, err := envDurationSeconds(getenv, "GYMBAG_RULES_WATCH_INTERVAL"); err != nil {
+		return Config{}, err
+	} else if ok {
+		cfg.RulesWatchInterval = v
 	}
 
 	if rawCookie := strings.TrimSpace(getenv("GYMBAG_COOKIE_NAME")); rawCookie != "" {
