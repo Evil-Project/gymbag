@@ -123,18 +123,18 @@ func runServiceAction(action string, args []string, stdout, stderr io.Writer) in
 	resolvedUserScope := resolveUserScope(mgr, userScope, systemScope)
 
 	spec := service.Spec{
-		Name:        name,
-		Label:       label,
-		BinaryPath:  binPath,
-		ConfigPath:  cfgPath,
-		WorkingDir:  workdir,
-		EnvFile:     envFile,
-		LogDir:      logDir,
-		UnitPath:    unitPath,
-		User:        serviceUser,
-		Group:       serviceGroup,
-		UserScope:   resolvedUserScope,
-		Watch:       watch,
+		Name:       name,
+		Label:      label,
+		BinaryPath: binPath,
+		ConfigPath: cfgPath,
+		WorkingDir: workdir,
+		EnvFile:    envFile,
+		LogDir:     logDir,
+		UnitPath:   unitPath,
+		User:       serviceUser,
+		Group:      serviceGroup,
+		UserScope:  resolvedUserScope,
+		Watch:      watch,
 	}
 
 	if action == "render" || action == "install" {
