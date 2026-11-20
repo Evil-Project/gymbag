@@ -2,11 +2,16 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/netip"
+	"os"
+	pathpkg "path"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"gymbag/internal/config"
 	"gymbag/internal/host"
 	"gymbag/internal/proxy"
 	"gymbag/internal/tlsmanager"
@@ -113,14 +118,193 @@ func (g *GatewayHandler) ServeRouted(
 
 	scheme := RequestScheme(r)
 
-	// 3. WebSocket upgrade tunnel
+	// 3. Path-matched routes (proxy, static files, respond, redirect)
+	if matched := route.MatchRoute(path); matched != nil {
+		g.serveCompiledRoute(w, r, route, matched, path, hostName, clientIP, scheme, isWS)
+		return
+	}
+
+	// 4. Fallback when no site-wide upstreams are configured
+	if len(route.Config.Upstreams) == 0 {
+		proxy.ApplyResponseHeaders(w.Header(), route.Config.Headers)
+		http.NotFound(w, r)
+		return
+	}
+
+	// 5. WebSocket upgrade tunnel
 	if isWS {
 		g.wsProxy.Forward(w, r, route, clientIP, scheme)
 		return
 	}
 
-	// 4. Streaming HTTP reverse proxy
+	// 6. Streaming HTTP reverse proxy
 	g.httpProxy.Forward(w, r, route, clientIP, scheme)
+}
+
+func (g *GatewayHandler) serveCompiledRoute(
+	w http.ResponseWriter,
+	r *http.Request,
+	site *proxy.SiteRoute,
+	matched *proxy.CompiledRoute,
+	origPath, hostName, clientIP, scheme string,
+	isWS bool,
+) {
+	rc := matched.Config
+	effPath := config.ApplyStripPrefix(origPath, rc.StripPrefix)
+
+	switch rc.HandlerKind() {
+	case "redirect":
+		target := expandRedirectPlaceholders(rc.Redirect.To, scheme, hostName, effPath, r.URL.RawQuery)
+		proxy.ApplyResponseHeaders(w.Header(), site.Config.Headers)
+		proxy.ApplyResponseHeaders(w.Header(), rc.Headers)
+		http.Redirect(w, r, target, rc.Redirect.Code)
+
+	case "respond":
+		proxy.ApplyResponseHeaders(w.Header(), site.Config.Headers)
+		proxy.ApplyResponseHeaders(w.Header(), rc.Headers)
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		w.WriteHeader(rc.Respond.Status)
+		if r.Method != http.MethodHead && rc.Respond.Body != "" {
+			_, _ = io.WriteString(w, rc.Respond.Body)
+		}
+
+	case "static":
+		serveStaticRoute(w, r, rc, effPath, site.Config.Headers)
+
+	case "proxy":
+		reqPath := effPath
+		if rc.StripPrefix == "" && r.URL.RawPath != "" {
+			reqPath = r.URL.RawPath
+		} else if reqPath != "" && strings.ContainsAny(reqPath, " %?#") {
+			// Escape if needed; leave clean paths untouched.
+			u := *r.URL
+			u.Path = reqPath
+			reqPath = u.EscapedPath()
+		}
+		if isWS {
+			g.wsProxy.ForwardUpstream(w, r, site.Config.Domain, matched.NextUpstream(), reqPath, clientIP, scheme)
+			return
+		}
+		g.httpProxy.ForwardUpstream(w, r, site.Config.Domain, matched.NextParsedUpstream(), reqPath, clientIP, scheme, site.Config.Headers, rc.Headers)
+	}
+}
+
+func expandRedirectPlaceholders(target, scheme, hostName, effPath, rawQuery string) string {
+	uri := effPath
+	if rawQuery != "" {
+		uri += "?" + rawQuery
+	}
+	repl := strings.NewReplacer(
+		"{scheme}", scheme,
+		"{host}", hostName,
+		"{uri}", uri,
+		"{path}", effPath,
+		"{query}", rawQuery,
+	)
+	return repl.Replace(target)
+}
+
+func resolveSafePath(absRoot, urlPath string) (string, string, bool) {
+	if strings.ContainsRune(urlPath, 0) {
+		return "", "", false
+	}
+	cleaned := pathpkg.Clean("/" + urlPath)
+	rel := strings.TrimPrefix(cleaned, "/")
+	full := filepath.Join(absRoot, filepath.FromSlash(rel))
+	if full != absRoot && !strings.HasPrefix(full, absRoot+string(filepath.Separator)) {
+		return "", "", false
+	}
+	return full, cleaned, true
+}
+
+func serveStaticRoute(w http.ResponseWriter, r *http.Request, rc config.RouteConfig, effPath string, siteHeaders map[string]string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	absRoot, err := filepath.Abs(rc.Root)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	full, cleanedURLPath, ok := resolveSafePath(absRoot, effPath)
+	if !ok {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	serveFile := func(filePath string) {
+		f, openErr := os.Open(filePath)
+		if openErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		st, stErr := f.Stat()
+		if stErr != nil || st.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		proxy.ApplyResponseHeaders(w.Header(), siteHeaders)
+		proxy.ApplyResponseHeaders(w.Header(), rc.Headers)
+		http.ServeContent(w, r, st.Name(), st.ModTime(), f)
+	}
+
+	serveFallbackOrNotFound := func() {
+		if rc.Fallback != "" {
+			if fbPath, _, fbOK := resolveSafePath(absRoot, rc.Fallback); fbOK {
+				if st, stErr := os.Stat(fbPath); stErr == nil && !st.IsDir() {
+					serveFile(fbPath)
+					return
+				}
+			}
+		}
+		http.NotFound(w, r)
+	}
+
+	info, statErr := os.Stat(full)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			serveFallbackOrNotFound()
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	if info.IsDir() {
+		indexes := rc.Index
+		if len(indexes) == 0 {
+			indexes = []string{"index.html"}
+		}
+		for _, idx := range indexes {
+			cand := filepath.Join(full, idx)
+			if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+				serveFile(cand)
+				return
+			}
+		}
+		if rc.Browse {
+			proxy.ApplyResponseHeaders(w.Header(), siteHeaders)
+			proxy.ApplyResponseHeaders(w.Header(), rc.Headers)
+			cloneReq := r.Clone(r.Context())
+			u := *r.URL
+			u.Path = cleanedURLPath
+			if !strings.HasSuffix(u.Path, "/") {
+				u.Path += "/"
+			}
+			cloneReq.URL = &u
+			http.FileServer(http.Dir(absRoot)).ServeHTTP(w, cloneReq)
+			return
+		}
+		serveFallbackOrNotFound()
+		return
+	}
+
+	serveFile(full)
 }
 
 func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, path, hostName, clientIP string) {

@@ -29,16 +29,17 @@ import (
 // RuntimeOptions allows dependency injection of custom transports, stores, intelligence managers,
 // remote rules managers, ACME clients, hosts file paths, and loggers.
 type RuntimeOptions struct {
-	Store           store.Store
-	Intel           *intel.Manager
-	IntelHTTP       *http.Client
-	RemoteRules     *waf.RemoteRuleManager
-	RemoteRulesHTTP *http.Client
-	HTTPTransport   http.RoundTripper
-	WSDialer        proxy.DialContextFunc
-	ACMEHTTP        *http.Client
-	HostsFilePath   string
-	Logger          *slog.Logger
+	Store              store.Store
+	Intel              *intel.Manager
+	IntelHTTP          *http.Client
+	RemoteRules        *waf.RemoteRuleManager
+	RemoteRulesHTTP    *http.Client
+	LocalWatchInterval time.Duration
+	HTTPTransport      http.RoundTripper
+	WSDialer           proxy.DialContextFunc
+	ACMEHTTP           *http.Client
+	HostsFilePath      string
+	Logger             *slog.Logger
 }
 
 // Runtime is the composition root wiring configuration, WAF, IP intelligence, remote rules,
@@ -220,15 +221,26 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 	}
 
 	remoteMgr := opts.RemoteRules
+	localWatch := opts.LocalWatchInterval
+	if localWatch <= 0 {
+		localWatch = time.Duration(cfg.RulesWatchInterval) * time.Second
+	}
 	if remoteMgr == nil {
 		remoteMgr = waf.NewRemoteRuleManager(waf.RemoteRuleManagerOptions{
-			CacheDir:        filepath.Join(cfg.TLS.CertDir, "rules-cache"),
-			RefreshInterval: time.Duration(cfg.RemoteRulesRefresh) * time.Second,
-			URLs:            cfg.RemoteRuleURLs(),
-			HTTPClient:      opts.RemoteRulesHTTP,
-			Logger:          logger,
+			CacheDir:           filepath.Join(cfg.TLS.CertDir, "rules-cache"),
+			BaseDir:            cfg.BaseDir,
+			RefreshInterval:    time.Duration(cfg.RemoteRulesRefresh) * time.Second,
+			LocalWatchInterval: localWatch,
+			URLs:               cfg.RemoteRuleURLs(),
+			RuleSources:        cfg.AllRuleSources(),
+			HTTPClient:         opts.RemoteRulesHTTP,
+			Logger:             logger,
 		})
 	} else {
+		if opts.LocalWatchInterval > 0 {
+			remoteMgr.SetLocalWatchInterval(opts.LocalWatchInterval)
+		}
+		remoteMgr.SetRuleSources(cfg.BaseDir, cfg.AllRuleSources())
 		remoteMgr.SetURLs(cfg.RemoteRuleURLs())
 	}
 
@@ -358,6 +370,15 @@ var (
 	wsClearanceBytes  = []byte("WebSocket clearance required")
 )
 
+func containsString(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (rt *Runtime) reloadRouter() {
 	rt.mu.RLock()
 	cfg := rt.cfg
@@ -393,7 +414,15 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	var addedURLs []string
 	if rt.RemoteRules != nil {
 		rt.RemoteRules.SetRefreshInterval(time.Duration(next.RemoteRulesRefresh) * time.Second)
-		addedURLs = rt.RemoteRules.SetURLs(next.RemoteRuleURLs())
+		if next.RulesWatchInterval > 0 {
+			rt.RemoteRules.SetLocalWatchInterval(time.Duration(next.RulesWatchInterval) * time.Second)
+		}
+		addedURLs = rt.RemoteRules.SetRuleSources(next.BaseDir, next.AllRuleSources())
+		for _, u := range rt.RemoteRules.SetURLs(next.RemoteRuleURLs()) {
+			if !containsString(addedURLs, u) {
+				addedURLs = append(addedURLs, u)
+			}
+		}
 	}
 	rt.mu.Lock()
 	rt.cfg = next

@@ -51,21 +51,24 @@ type ConfigController interface {
 
 // SitePatchPayload defines partial update fields for PATCH /api/v1/sites/{domain}.
 type SitePatchPayload struct {
-	Upstreams    *[]string            `json:"upstreams,omitempty"`
-	Protect      *bool                `json:"protect,omitempty"`
-	VerifyLevel  *config.VerifyLevel  `json:"verify_level,omitempty"`
-	Difficulty   *int                 `json:"difficulty,omitempty"`
-	RateLimit    *int                 `json:"rate_limit,omitempty"`
-	RateWindow   *int                 `json:"rate_window,omitempty"`
-	ChallengeTTL *int                 `json:"challenge_ttl,omitempty"`
-	ClearanceTTL *int                 `json:"clearance_ttl,omitempty"`
-	CookieName   *string              `json:"cookie_name,omitempty"`
-	CookieSecure *bool                `json:"cookie_secure,omitempty"`
-	DefaultRules *bool                `json:"default_rules,omitempty"`
-	Rules        *[]config.CustomRule `json:"rules,omitempty"`
-	RemoteRules  *[]string            `json:"remote_rules,omitempty"`
-	CertFile     *string              `json:"cert_file,omitempty"`
-	KeyFile      *string              `json:"key_file,omitempty"`
+	Upstreams    *[]string             `json:"upstreams,omitempty"`
+	Routes       *[]config.RouteConfig `json:"routes,omitempty"`
+	Headers      *map[string]string    `json:"headers,omitempty"`
+	Protect      *bool                 `json:"protect,omitempty"`
+	VerifyLevel  *config.VerifyLevel   `json:"verify_level,omitempty"`
+	Difficulty   *int                  `json:"difficulty,omitempty"`
+	RateLimit    *int                  `json:"rate_limit,omitempty"`
+	RateWindow   *int                  `json:"rate_window,omitempty"`
+	ChallengeTTL *int                  `json:"challenge_ttl,omitempty"`
+	ClearanceTTL *int                  `json:"clearance_ttl,omitempty"`
+	CookieName   *string               `json:"cookie_name,omitempty"`
+	CookieSecure *bool                 `json:"cookie_secure,omitempty"`
+	DefaultRules *bool                 `json:"default_rules,omitempty"`
+	Rules        *[]config.CustomRule  `json:"rules,omitempty"`
+	RemoteRules  *[]string             `json:"remote_rules,omitempty"`
+	RuleSources  *[]config.RuleSource  `json:"rule_sources,omitempty"`
+	CertFile     *string               `json:"cert_file,omitempty"`
+	KeyFile      *string               `json:"key_file,omitempty"`
 }
 
 // NewAdminHandler returns a Caddy-like RESTful management API handler rooted at /api/v1.
@@ -342,6 +345,20 @@ func handleAdminSiteItem(w http.ResponseWriter, r *http.Request, ctrl ConfigCont
 		if patch.Upstreams != nil {
 			target.Upstreams = append([]string(nil), (*patch.Upstreams)...)
 		}
+		if patch.Routes != nil {
+			cloned := make([]config.RouteConfig, len(*patch.Routes))
+			for i, rc := range *patch.Routes {
+				cloned[i] = rc.Clone()
+			}
+			target.Routes = cloned
+		}
+		if patch.Headers != nil {
+			cloned := make(map[string]string, len(*patch.Headers))
+			for k, v := range *patch.Headers {
+				cloned[k] = v
+			}
+			target.Headers = cloned
+		}
 		if patch.Protect != nil {
 			target.Protect = *patch.Protect
 		}
@@ -382,6 +399,9 @@ func handleAdminSiteItem(w http.ResponseWriter, r *http.Request, ctrl ConfigCont
 		}
 		if patch.RemoteRules != nil {
 			target.WAF.RemoteRules = append([]string(nil), (*patch.RemoteRules)...)
+		}
+		if patch.RuleSources != nil {
+			target.WAF.RuleSources = append([]config.RuleSource(nil), (*patch.RuleSources)...)
 		}
 		if patch.CertFile != nil {
 			target.CertFile = *patch.CertFile
