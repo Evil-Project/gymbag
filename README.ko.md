@@ -57,15 +57,17 @@ nix profile install github:Evil-Project/gymbag
 ```
 정적 링크된 `CGO_ENABLED=0` Linux 릴리스 바이너리는 NixOS에서도 `patchelf`나 `nix-ld` 없이 바로 실행되며, `nixosModules.default`는 선언형 `services.gymbag` 설정을 제공합니다.
 
-**단 두 줄의 명령어**로 `Gymbagfile`을 생성하고 서버를 시작할 수 있습니다:
+**단 두 줄의 명령어**로 `gymbag.json`을 생성하고 서버를 시작할 수 있습니다:
 
 ```bash
-# 1. 설정 생성 (대화형 마법사 또는 플래그를 통한 한 줄 설정)
+# 1. JSON 설정 생성 (Caddy 스타일 Gymbagfile을 원하면 --format gymbagfile 전달)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. 서버 시작
+# 2. 서버 시작 (./gymbag.json, ./Gymbagfile, ./Caddyfile 자동 로드)
 ./gymbag
 ```
+
+Gymbag은 기존 **nginx**(`nginx.conf`), **Apache**(`httpd.conf` / `apache2.conf`), **Caddyfile v2** 설정(스니펫, `import`, `@matchers`, `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir`, `header` 포함)도 네이티브로 읽습니다.
 
 또는 시스템 서비스(`systemd`, `launchd`, `openrc`, `supervisor`)로 등록하여 실행할 수 있습니다:
 
@@ -221,6 +223,48 @@ staging.example.com {
 ```
 
 `gymbag init`, `gymbag run`, `gymbag reverse-proxy`에 `--verify-timeout 6h`(또는 `--clearance-ttl 6h`)를 전달하거나, `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL` 환경 변수를 설정하거나, `PATCH /api/v1/sites/{domain}`으로 `clearance_ttl`을 실시간 패치할 수도 있습니다. 인증된 방문자는 `GET /.waf/v1/session`에서 `clearance_ttl`, `expires_at`, 남은 `expires_in` 초를 확인할 수 있습니다.
+
+---
+
+## 경로 라우트, 정적 파일, 리다이렉트 및 설정 가져오기
+
+일반 `reverse_proxy` 외에도 사이트에는 순서가 있는 **경로 라우트**를 둘 수 있습니다. 경로가 처음으로 일치하는 라우트가 요청을 처리하며, 어떤 라우트와도 일치하지 않으면 사이트의 기본 업스트림으로 넘어갑니다(없으면 `404`). 각 라우트에는 리버스 프록시, 정적 파일 서버(`root`), 고정 `respond`, `redir` 중 정확히 하나의 핸들러가 있습니다.
+
+```caddyfile
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+
+    handle_path /static/* {
+        root ./dist
+        file_server browse
+    }
+    @health path /healthz /readyz
+    respond @health "ok" 200
+    redir /old/* https://{host}/new{uri} 301
+    handle /api/* {
+        reverse_proxy http://localhost:8080
+        header X-Served-By gymbag
+    }
+    try_files {path} /index.html          # SPA 폴백
+}
+```
+
+경로 매처는 정확한 경로(`/exact`), 글롭(`/api/*`, `*.php`) 또는 `~`로 시작하는 Go RE2 정규식(`~^/v[0-9]+/`)입니다. 리다이렉트 대상에는 `{scheme}`, `{host}`, `{uri}`, `{path}`, `{query}`를 사용할 수 있습니다. 정적 라우트는 `index`, `browse`(디렉터리 목록), `fallback`(예: SPA용 `/index.html`)을 지원하며, 라우트 `headers`는 헤더를 설정하거나 키 앞에 `-`를 붙이면 삭제합니다. WAF 규칙과 검증은 모든 라우트 핸들러보다 먼저 실행됩니다.
+
+`gymbag.json`에서는 같은 설정이 `routes` 배열입니다:
+
+```json
+{"routes": [
+  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+]}
+```
+
+CLI에서는 `gymbag config route list|add|update|remove`로 라우트를 관리하거나, `PATCH /api/v1/sites/{domain}`(`routes`, `headers`, `rule_sources`)으로 실시간 변경할 수 있습니다.
+
+**기존 설정 가져오기:** `gymbag run -c /etc/nginx/nginx.conf`(또는 `httpd.conf` / `apache2.conf`)는 네이티브 nginx/Apache 설정을 직접 서비스하며, `gymbag config convert -c <file> -o gymbag.json --format json`은 nginx, Apache 또는 Caddyfile v2(스니펫, `import`, `@matchers`, `handle`, `route`)를 Gymbag 고유 형식으로 변환합니다.
 
 ---
 
@@ -380,6 +424,28 @@ app.example.com {
 
 `GET /api/v1/rules/remote`와 `POST /api/v1/rules/remote/refresh`로 상태를 조회하거나 즉시 새로고침할 수 있으며 `--remote-rules` / `GYMBAG_REMOTE_RULES`로도 전달할 수 있습니다.
 
+### 로컬 규칙 파일, 규칙 폴더 및 동적 핫 리로드
+
+규칙을 전용 `.rules`/`.json` 파일이나 규칙 디렉터리 전체에 저장하고 경로로 참조하세요(또는 `gymbag ruleset add`로 연결). 소스를 `dynamic`으로 표시하면 서버 재시작 없이 디스크의 변경 사항을 자동으로 감시하고 핫 리로드합니다(파일 문법이 잘못되면 마지막으로 정상 동작한 규칙 세트를 유지):
+
+```caddyfile
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+`gymbag.json`에서는 `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]`로 설정하거나, `gymbag init`에 `--rules-file`, `--rules-dir`, `--rules-dynamic`, `--rules-watch-interval`을 전달하세요.
+
 ### 내장 규칙 제어 (`default_rules on|off`)
 
 `default_rules`의 기본값은 `on`입니다:
@@ -393,21 +459,39 @@ app.example.com {
 
 ### CLI 레퍼런스
 
-작업 디렉토리에 `.env`가 있으면 자동으로 로드하며, 플래그로 재정의하지 않으면 `./Gymbagfile` 또는 `./Caddyfile`을 사용합니다:
+작업 디렉토리에 `.env`가 있으면 자동으로 로드하며, 플래그로 재정의하지 않으면 `./gymbag.json`, `./Gymbagfile`, `./Caddyfile`을 사용합니다(네이티브 `nginx.conf`나 Apache `httpd.conf`/`apache2.conf`도 `-c`로 직접 전달할 수 있습니다):
 
 ```bash
-# 대화형 마법사 또는 플래그로 Gymbagfile 생성
+# 대화형 마법사 또는 플래그로 gymbag.json(기본) 또는 Gymbagfile 생성
 ./gymbag init
-./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# ./Gymbagfile 또는 ./Caddyfile로 서버 시작
+# gymbag.json 또는 Gymbagfile의 사이트, 라우트, 전역 설정 관리
+./gymbag config list
+./gymbag config add -d api.example.com -u :8080 -l 1
+./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+./gymbag config route add -d api.example.com --path /static/* --strip-prefix /static --root ./dist
+./gymbag config remove -d api.example.com
+./gymbag config set admin 127.0.0.1:2019
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+
+# 전용 규칙 파일, 규칙 폴더, 인라인 규칙 관리
+./gymbag ruleset init ./rules/custom.rules
+./gymbag ruleset add --source ./rules --dynamic --name local-dir
+./gymbag ruleset update local-dir --static
+./gymbag ruleset remove local-dir
+./gymbag ruleset validate ./rules
+./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+
+# ./gymbag.json, ./Gymbagfile, ./Caddyfile로 서버 시작
 ./gymbag
 
-# 명시적 설정 파일 지정 및 저장 시 핫 리로드 (2초마다 폴링)
-./gymbag run --config Gymbagfile --watch
+# 명시적 설정 파일(JSON, Gymbagfile, Caddyfile v2, nginx, Apache) 지정 및 저장 시 핫 리로드
+./gymbag run --config gymbag.json --watch
 
 # 시스템 서비스 등록 및 관리 (systemd, launchd, openrc, supervisor)
-./gymbag service install --config Gymbagfile
+./gymbag service install --config gymbag.json
 ./gymbag service start
 ./gymbag service status
 ./gymbag service render --type systemd   # 모든 OS에서 systemd 유닛 미리보기
@@ -415,8 +499,8 @@ app.example.com {
 # 설정 파일 없는 즉석 리버스 프록시
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 
-# 문법 검증 및 사이트별 보안 요약 출력
-./gymbag validate --config Gymbagfile
+# 설정 및 로컬 규칙 소스 검증 후 사이트별 보안 요약 출력
+./gymbag validate --config gymbag.json
 
 # Gymbagfile을 표준 4칸 들여쓰기로 덮어쓰기 포맷팅
 ./gymbag fmt --overwrite Gymbagfile
@@ -427,7 +511,7 @@ app.example.com {
 
 | 플래그 | 설명 |
 | :--- | :--- |
-| `-c`, `--config <path>` | `Gymbagfile`, `Caddyfile` 또는 JSON 설정 파일 경로 |
+| `-c`, `--config <path>` | `gymbag.json`, `Gymbagfile`, `Caddyfile`, `nginx.conf` 또는 Apache 설정 파일 경로 |
 | `-d`, `--domain <list>` | 도메인 재정의 (쉼표 구분) |
 | `-u`, `--upstream <url>` | 업스트림 URL 재정의 (예: `http://localhost:3000` 또는 `:3000`) |
 | `-l`, `--verify <0-3>` | 검증 레벨 재정의 (`0`, `1`, `2`, `3` 또는 `off`) |
@@ -515,6 +599,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `GYMBAG_DEFAULT_RULES` | 내장 기본 방화벽 규칙 활성화/비활성화 (`on` / `off`, 기본 `on`) |
 | `GYMBAG_REMOTE_RULES` | 쉼표 또는 공백으로 구분된 HTTP/HTTPS 원격 방화벽 규칙 URL |
 | `GYMBAG_REMOTE_RULES_REFRESH` | 원격 규칙 새로고침 간격(초 또는 기간 문자열, 기본 `300` / `5m`) |
+| `GYMBAG_RULES_WATCH_INTERVAL` | 동적 로컬 규칙 파일/폴더의 폴링 간격(초 또는 기간 문자열, 기본 `2` / `2s`) |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW 선행 16진수 0 난이도 (`1`–`5`, 기본 `4`) |
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 챌린지 만료(`300`s / `5m`) 및 검증 유지 시간(`86400`s / `24h`; 별칭 `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`; `30m`, `12h`, `7d` 지원) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | 클리어런스 쿠키 이름(`waf_clearance`) 및 `Secure` 플래그(`true`) |
@@ -570,7 +655,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `POST` | `/api/v1/sites` | 런타임 중 새 웹사이트 추가 (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | 단일 웹사이트 설정 상세 조회 |
 | `PUT` | `/api/v1/sites/{domain}` | 단일 웹사이트 설정 전체 교체 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules` 실시간 패치 |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `rule_sources` 실시간 패치 |
 | `DELETE` | `/api/v1/sites/{domain}` | 웹사이트 제거 (`204 No Content`; 마지막 남은 1개 사이트는 삭제 거부) |
 | `GET` | `/api/v1/sites/{domain}/rules` | 웹사이트의 사용자 지정 방화벽 규칙 조회 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 사용자 지정 방화벽 규칙 실시간 추가 (`201 Created`) |

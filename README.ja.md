@@ -57,15 +57,17 @@ nix profile install github:Evil-Project/gymbag
 ```
 静的リンクされた `CGO_ENABLED=0` の Linux リリースバイナリは NixOS 上でも `patchelf` や `nix-ld` なしでそのまま動作し、`nixosModules.default` による宣言的な `services.gymbag` 設定も提供されています。
 
-**わずか 2 コマンド**で `Gymbagfile` を生成してサーバーを起動できます：
+**わずか 2 コマンド**で `gymbag.json` を生成してサーバーを起動できます：
 
 ```bash
-# 1. 設定を生成（対話ウィザード、またはフラグ指定でワンライナー作成）
+# 1. JSON 設定を生成（Caddy 風の Gymbagfile にしたい場合は --format gymbagfile を指定）
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. サーバーを起動
+# 2. サーバーを起動（./gymbag.json、./Gymbagfile、./Caddyfile を自動で読み込み）
 ./gymbag
 ```
+
+Gymbag は既存の **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）、**Caddyfile v2** 設定もネイティブに読み込めます（スニペット、`import`、`@matchers`、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir`、`header` に対応）。
 
 システムサービス（`systemd`、`launchd`、`openrc`、`supervisor`）として登録して起動することも可能です：
 
@@ -221,6 +223,48 @@ staging.example.com {
 ```
 
 `gymbag init` / `gymbag run` / `gymbag reverse-proxy` に `--verify-timeout 6h`（または `--clearance-ttl 6h`）を渡したり、`GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL` を設定したり、`PATCH /api/v1/sites/{domain}` で `clearance_ttl` をライブ更新することも可能です。認証済みユーザーが `GET /.waf/v1/session` にアクセスすると、`clearance_ttl`、`expires_at`、残り秒数 `expires_in` が返されます。
+
+---
+
+## パスルート、静的ファイル、リダイレクト＆設定インポート
+
+単純な `reverse_proxy` のほかに、サイトには順序付きの**パスルート**を定義できます。パスが最初に一致したルートがリクエストを処理し、どのルートにも一致しないリクエストはサイトのデフォルトアップストリームへ渡されます（無ければ `404`）。各ルートのハンドラは、リバースプロキシ、静的ファイル配信（`root`）、固定 `respond`、`redir` のいずれか 1 つだけです。
+
+```caddyfile
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+
+    handle_path /static/* {
+        root ./dist
+        file_server browse
+    }
+    @health path /healthz /readyz
+    respond @health "ok" 200
+    redir /old/* https://{host}/new{uri} 301
+    handle /api/* {
+        reverse_proxy http://localhost:8080
+        header X-Served-By gymbag
+    }
+    try_files {path} /index.html          # SPA フォールバック
+}
+```
+
+パスマッチャーは、完全一致パス（`/exact`）、グロブ（`/api/*`、`*.php`）、または `~` を前置した Go RE2 正規表現（`~^/v[0-9]+/`）です。リダイレクト先では `{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}` が使えます。静的ルートは `index`、`browse`（ディレクトリ一覧）、`fallback`（SPA 向けの `/index.html` など）をサポートし、ルートの `headers` はヘッダーを設定し、キーの先頭に `-` を付けると削除します。WAF ルールと検証は、どのルートハンドラよりも前に必ず実行されます。
+
+`gymbag.json` では、同じ内容を `routes` 配列で記述します：
+
+```json
+{"routes": [
+  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+]}
+```
+
+ルートは CLI の `gymbag config route list|add|update|remove`、またはライブで `PATCH /api/v1/sites/{domain}`（`routes`、`headers`、`rule_sources`）から管理できます。
+
+**既存設定のインポート：** `gymbag run -c /etc/nginx/nginx.conf`（または `httpd.conf` / `apache2.conf`）でネイティブの nginx/Apache 設定をそのまま起動でき、`gymbag config convert -c <file> -o gymbag.json --format json` で nginx、Apache、Caddyfile v2（スニペット、`import`、`@matchers`、`handle`、`route`）を Gymbag のネイティブ形式へ変換できます。
 
 ---
 
@@ -380,6 +424,28 @@ app.example.com {
 
 `GET /api/v1/rules/remote` で状態確認、`POST /api/v1/rules/remote/refresh` で即時更新が可能なほか、`--remote-rules` / `GYMBAG_REMOTE_RULES` でも指定できます。
 
+### ローカルルールファイル、ルールフォルダ、動的ホットリロード
+
+ルールを専用の `.rules`/`.json` ファイルやルールディレクトリ全体に保存し、パスで参照できます（`gymbag ruleset add` でリンクすることも可能）。ソースを `dynamic` にすると、サーバーを再起動せずにディスク上の変更を自動で監視してホットリロードします（ファイルの構文が不正な場合、Gymbag は直前の正常なルールセットを維持します）：
+
+```caddyfile
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+`gymbag.json` では `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]` を設定するか、`gymbag init` に `--rules-file`、`--rules-dir`、`--rules-dynamic`、`--rules-watch-interval` を渡します。
+
 ### 組み込みルールの制御（`default_rules on|off`）
 
 `default_rules` はデフォルトで `on` です：
@@ -393,21 +459,39 @@ app.example.com {
 
 ### CLI リファレンス
 
-カレントディレクトリに `.env` があれば自動で読み込み、フラグで上書きされない限り `./Gymbagfile` または `./Caddyfile` を参照します：
+カレントディレクトリに `.env` があれば自動で読み込み、フラグで上書きされない限り `./gymbag.json`、`./Gymbagfile`、`./Caddyfile` を参照します（ネイティブの `nginx.conf` や Apache の `httpd.conf`/`apache2.conf` も `-c` で直接指定できます）：
 
 ```bash
-# 対話ウィザードまたはフラグから Gymbagfile を生成
+# 対話ウィザードまたはフラグから gymbag.json（デフォルト）または Gymbagfile を生成
 ./gymbag init
-./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# ./Gymbagfile または ./Caddyfile でサーバーを起動
+# gymbag.json または Gymbagfile のサイト、ルート、グローバル設定を管理
+./gymbag config list
+./gymbag config add -d api.example.com -u :8080 -l 1
+./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+./gymbag config route add -d api.example.com --path /static/* --strip-prefix /static --root ./dist
+./gymbag config remove -d api.example.com
+./gymbag config set admin 127.0.0.1:2019
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+
+# 専用ルールファイル、ルールフォルダ、インラインルールを管理
+./gymbag ruleset init ./rules/custom.rules
+./gymbag ruleset add --source ./rules --dynamic --name local-dir
+./gymbag ruleset update local-dir --static
+./gymbag ruleset remove local-dir
+./gymbag ruleset validate ./rules
+./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+
+# ./gymbag.json、./Gymbagfile、./Caddyfile でサーバーを起動
 ./gymbag
 
-# 設定ファイルを指定し、保存時にホットリロードして起動（2秒間隔で監視）
-./gymbag run --config Gymbagfile --watch
+# 設定ファイル（JSON、Gymbagfile、Caddyfile v2、nginx、Apache）を指定し、保存時にホットリロードして起動
+./gymbag run --config gymbag.json --watch
 
 # システムサービスの登録と管理（systemd, launchd, openrc, supervisor）
-./gymbag service install --config Gymbagfile
+./gymbag service install --config gymbag.json
 ./gymbag service start
 ./gymbag service status
 ./gymbag service render --type systemd   # 任意の OS 上で systemd ユニット定義をプレビュー
@@ -415,8 +499,8 @@ app.example.com {
 # 設定ファイル不要のアドホックなリバースプロキシ
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 
-# 構文検証とサイト別セキュリティ設定サマリーの表示
-./gymbag validate --config Gymbagfile
+# 設定とローカルルールソースを検証し、サイト別セキュリティ設定サマリーを表示
+./gymbag validate --config gymbag.json
 
 # Gymbagfile を標準的な 4 スペースインデントに整形して上書き保存
 ./gymbag fmt --overwrite Gymbagfile
@@ -427,7 +511,7 @@ app.example.com {
 
 | フラグ | 説明 |
 | :--- | :--- |
-| `-c`, `--config <path>` | `Gymbagfile`、`Caddyfile`、または JSON 設定ファイルのパス |
+| `-c`, `--config <path>` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf`、または Apache 設定ファイルのパス |
 | `-d`, `--domain <list>` | ドメインを上書き（カンマ区切り） |
 | `-u`, `--upstream <url>` | アップストリーム URL を上書き（例：`http://localhost:3000` または `:3000`） |
 | `-l`, `--verify <0-3>` | 検証レベルを上書き（`0`、`1`、`2`、`3`、または `off`） |
@@ -515,6 +599,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `GYMBAG_DEFAULT_RULES` | 組み込みベースラインルールの有効/無効（`on` / `off`、デフォルト `on`） |
 | `GYMBAG_REMOTE_RULES` | カンマまたは空白区切りの HTTP/HTTPS リモートルール URL |
 | `GYMBAG_REMOTE_RULES_REFRESH` | リモートルールの更新間隔（秒数または期間表記、デフォルト `300` / `5m`） |
+| `GYMBAG_RULES_WATCH_INTERVAL` | 動的ローカルルールファイル/フォルダのポーリング間隔（秒数または期間表記、デフォルト `2` / `2s`） |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW 先頭ゼロ桁数難易度（`1`–`5`、デフォルト `4`） |
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | チャレンジ有効期限（`300`s / `5m`）と認証済み期限（`86400`s / `24h`；エイリアス `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`；`30m`, `12h`, `7d` 等に対応） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | クリアランス Cookie 名（`waf_clearance`）および `Secure` フラグ（`true`） |
@@ -570,7 +655,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `POST` | `/api/v1/sites` | 実行時に新しいサイトを追加（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 単一サイトの設定詳細を取得 |
 | `PUT` | `/api/v1/sites/{domain}` | 単一サイトの設定を置換 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules` をライブパッチ |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`rule_sources` をライブパッチ |
 | `DELETE` | `/api/v1/sites/{domain}` | サイトを削除（`204 No Content`；最後の 1 サイトは削除不可） |
 | `GET` | `/api/v1/sites/{domain}/rules` | サイトのカスタムファイアウォールルール一覧 |
 | `POST` | `/api/v1/sites/{domain}/rules` | カスタムファイアウォールルールをライブ追加（`201 Created`） |

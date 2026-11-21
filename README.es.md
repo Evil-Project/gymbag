@@ -57,15 +57,17 @@ nix profile install github:Evil-Project/gymbag
 ```
 Los binarios estáticos de Linux con `CGO_ENABLED=0` también se ejecutan directamente en NixOS sin `patchelf` ni `nix-ld`, y `nixosModules.default` ofrece configuración declarativa con `services.gymbag`.
 
-Comienza en **dos comandos** — genera `Gymbagfile` e inicia el servidor:
+Comienza en **dos comandos** — genera `gymbag.json` e inicia el servidor:
 
 ```bash
-# 1. Generar una configuración (asistente interactivo o flags para configuración directa)
+# 1. Generar una configuración JSON (o pasa --format gymbagfile para un Gymbagfile estilo Caddy)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Iniciar el servidor
+# 2. Iniciar el servidor (carga automáticamente ./gymbag.json, ./Gymbagfile o ./Caddyfile)
 ./gymbag
 ```
+
+Gymbag también lee de forma nativa configuraciones existentes de **nginx** (`nginx.conf`), **Apache** (`httpd.conf` / `apache2.conf`) y **Caddyfile v2** (incluyendo snippets, `import`, `@matchers`, `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir` y `header`).
 
 O regístralo como servicio del sistema (`systemd`, `launchd`, `openrc` o `supervisor`) e inícialo:
 
@@ -221,6 +223,48 @@ staging.example.com {
 ```
 
 También puedes pasar `--verify-timeout 6h` (o `--clearance-ttl 6h`) a `gymbag init`, `gymbag run` o `gymbag reverse-proxy`, establecer `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL`, o actualizar `clearance_ttl` en caliente mediante `PATCH /api/v1/sites/{domain}`. `GET /.waf/v1/session` devuelve `clearance_ttl`, `expires_at` y los segundos restantes en `expires_in` para visitantes verificados.
+
+---
+
+## Rutas por Path, Archivos Estáticos, Redirecciones e Importación de Configuraciones
+
+Además de un simple `reverse_proxy`, un sitio puede contener **rutas por path** ordenadas. La primera ruta cuyo path coincida atiende la solicitud; lo que no coincida con ninguna ruta pasa a los upstreams predeterminados del sitio (o `404` si no hay). Cada ruta tiene exactamente un handler: proxy inverso, servidor de archivos estáticos (`root`), `respond` fijo o `redir`.
+
+```caddyfile
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+
+    handle_path /static/* {
+        root ./dist
+        file_server browse
+    }
+    @health path /healthz /readyz
+    respond @health "ok" 200
+    redir /old/* https://{host}/new{uri} 301
+    handle /api/* {
+        reverse_proxy http://localhost:8080
+        header X-Served-By gymbag
+    }
+    try_files {path} /index.html          # Fallback SPA
+}
+```
+
+Los matchers de path son un path exacto (`/exact`), un glob (`/api/*`, `*.php`) o una regex Go RE2 con prefijo `~` (`~^/v[0-9]+/`). Los destinos de redirección admiten `{scheme}`, `{host}`, `{uri}`, `{path}` y `{query}`. Las rutas estáticas admiten `index`, `browse` (listados de directorio) y `fallback` (p. ej. `/index.html` para SPA); los `headers` de ruta establecen una cabecera, o la eliminan cuando la clave lleva el prefijo `-`. Las reglas WAF y la verificación se ejecutan siempre antes de cualquier handler de ruta.
+
+En `gymbag.json` lo mismo es un array `routes`:
+
+```json
+{"routes": [
+  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+]}
+```
+
+Gestiona las rutas desde la CLI con `gymbag config route list|add|update|remove`, o en vivo mediante `PATCH /api/v1/sites/{domain}` (`routes`, `headers`, `rule_sources`).
+
+**Importación de configuraciones existentes:** `gymbag run -c /etc/nginx/nginx.conf` (o `httpd.conf` / `apache2.conf`) sirve directamente una configuración nativa de nginx/Apache, y `gymbag config convert -c <file> -o gymbag.json --format json` convierte nginx, Apache o Caddyfile v2 (snippets, `import`, `@matchers`, `handle`, `route`) al formato nativo de Gymbag.
 
 ---
 
@@ -380,6 +424,28 @@ app.example.com {
 
 Inspecciona o fuerza una actualización inmediata con `GET /api/v1/rules/remote` y `POST /api/v1/rules/remote/refresh`, o mediante `--remote-rules` / `GYMBAG_REMOTE_RULES`.
 
+### Archivos de Reglas Locales, Carpetas de Reglas y Recarga Dinámica en Caliente
+
+Guarda las reglas en un archivo `.rules`/`.json` dedicado o en un directorio completo de reglas y referéncialos por ruta (o enlázalos con `gymbag ruleset add`). Marca una fuente como `dynamic` para vigilarla y recargar en caliente los cambios en disco sin reiniciar el servidor (si un archivo tiene sintaxis inválida, Gymbag conserva el último conjunto válido):
+
+```caddyfile
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+En `gymbag.json`, configura `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]` o pasa `--rules-file`, `--rules-dir`, `--rules-dynamic` y `--rules-watch-interval` a `gymbag init`.
+
 ### Control de Reglas Integradas (`default_rules on|off`)
 
 `default_rules` está activado (`on`) por defecto:
@@ -393,21 +459,39 @@ Inspecciona o fuerza una actualización inmediata con `GET /api/v1/rules/remote`
 
 ### Referencia de CLI
 
-Gymbag carga automáticamente `.env` del directorio de trabajo si existe, y luego resuelve `./Gymbagfile` o `./Caddyfile` salvo que se indique otra ruta por flags:
+Gymbag carga automáticamente `.env` del directorio de trabajo si existe, y luego resuelve `./gymbag.json`, `./Gymbagfile` o `./Caddyfile` salvo que se indique otra ruta por flags (también puedes pasar directamente un `nginx.conf` o un `httpd.conf`/`apache2.conf` de Apache nativos con `-c`):
 
 ```bash
-# Generar Gymbagfile con asistente interactivo o flags
+# Generar gymbag.json (por defecto) o Gymbagfile con asistente interactivo o flags
 ./gymbag init
-./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# Iniciar el servidor usando ./Gymbagfile o ./Caddyfile
+# Gestionar sitios, rutas y ajustes globales en gymbag.json o Gymbagfile
+./gymbag config list
+./gymbag config add -d api.example.com -u :8080 -l 1
+./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+./gymbag config route add -d api.example.com --path /static/* --strip-prefix /static --root ./dist
+./gymbag config remove -d api.example.com
+./gymbag config set admin 127.0.0.1:2019
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+
+# Gestionar archivos de reglas dedicados, carpetas de reglas y reglas en línea
+./gymbag ruleset init ./rules/custom.rules
+./gymbag ruleset add --source ./rules --dynamic --name local-dir
+./gymbag ruleset update local-dir --static
+./gymbag ruleset remove local-dir
+./gymbag ruleset validate ./rules
+./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+
+# Iniciar el servidor usando ./gymbag.json, ./Gymbagfile o ./Caddyfile
 ./gymbag
 
-# Iniciar con archivo explícito y recarga en caliente al guardar (sondea cada 2s)
-./gymbag run --config Gymbagfile --watch
+# Iniciar con archivo explícito (JSON, Gymbagfile, Caddyfile v2, nginx, Apache) y recarga en caliente al guardar
+./gymbag run --config gymbag.json --watch
 
 # Registrar y gestionar como servicio del sistema (systemd, launchd, openrc, supervisor)
-./gymbag service install --config Gymbagfile
+./gymbag service install --config gymbag.json
 ./gymbag service start
 ./gymbag service status
 ./gymbag service render --type systemd   # Previsualizar una unidad systemd en cualquier SO
@@ -415,8 +499,8 @@ Gymbag carga automáticamente `.env` del directorio de trabajo si existe, y lueg
 # Proxy inverso ad-hoc sin archivo de configuración
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 
-# Validar sintaxis e imprimir el resumen de seguridad resuelto por sitio
-./gymbag validate --config Gymbagfile
+# Validar la configuración y las fuentes de reglas locales e imprimir el resumen de seguridad resuelto por sitio
+./gymbag validate --config gymbag.json
 
 # Formatear Gymbagfile en su lugar con sangría canónica de 4 espacios
 ./gymbag fmt --overwrite Gymbagfile
@@ -427,7 +511,7 @@ Gymbag carga automáticamente `.env` del directorio de trabajo si existe, y lueg
 
 | Flag | Descripción |
 | :--- | :--- |
-| `-c`, `--config <path>` | Ruta a `Gymbagfile`, `Caddyfile` o archivo JSON de configuración |
+| `-c`, `--config <path>` | Ruta a `gymbag.json`, `Gymbagfile`, `Caddyfile`, `nginx.conf` o archivo de configuración de Apache |
 | `-d`, `--domain <list>` | Sobrescribir dominio(s), separados por comas |
 | `-u`, `--upstream <url>` | Sobrescribir URL upstream (p. ej. `http://localhost:3000` o `:3000`) |
 | `-l`, `--verify <0-3>` | Sobrescribir nivel de verificación (`0`, `1`, `2`, `3` o `off`) |
@@ -515,6 +599,7 @@ El orden de prioridad es **Archivo de configuración -> Variables de entorno `GY
 | `GYMBAG_DEFAULT_RULES` | Activa o desactiva las reglas base integradas (`on` / `off`, por defecto `on`) |
 | `GYMBAG_REMOTE_RULES` | URLs HTTP/HTTPS de reglas remotas de firewall separadas por comas o espacios |
 | `GYMBAG_REMOTE_RULES_REFRESH` | Intervalo de actualización de reglas remotas en segundos o duración (por defecto `300` / `5m`) |
+| `GYMBAG_RULES_WATCH_INTERVAL` | Intervalo de sondeo en segundos o duración para archivos/carpetas de reglas locales dinámicos (por defecto `2` / `2s`) |
 | `GYMBAG_DIFFICULTY` | Dificultad de ceros hexadecimales iniciales SHA-256 PoW (`1`–`5`, por defecto `4`) |
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Expiración del desafío (`300`s / `5m`) y duración del estado verificado (`86400`s / `24h`; alias `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`; acepta `30m`, `12h`, `7d`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Nombre de cookie de autorización (`waf_clearance`) y flag `Secure` (`true`) |
@@ -570,7 +655,7 @@ Enlaza la API Admin a loopback (`127.0.0.1:2019`) o a una interfaz de gestión U
 | `POST` | `/api/v1/sites` | Añade un nuevo sitio web en tiempo de ejecución (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | Inspecciona la configuración de un único sitio web |
 | `PUT` | `/api/v1/sites/{domain}` | Reemplaza la configuración de un sitio web |
-| `PATCH` | `/api/v1/sites/{domain}` | Parchea en vivo `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules` o `remote_rules` |
+| `PATCH` | `/api/v1/sites/{domain}` | Parchea en vivo `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers` o `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | Elimina un sitio web (`204 No Content`; rechaza borrar el último sitio restante) |
 | `GET` | `/api/v1/sites/{domain}/rules` | Lista reglas de firewall personalizadas en un sitio web |
 | `POST` | `/api/v1/sites/{domain}/rules` | Añade una regla de firewall personalizada en vivo (`201 Created`) |

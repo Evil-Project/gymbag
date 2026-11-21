@@ -57,15 +57,17 @@ nix profile install github:Evil-Project/gymbag
 ```
 静态编译的 `CGO_ENABLED=0` Linux 发行版无需 `patchelf` 或 `nix-ld` 即可在 NixOS 上直接运行，`nixosModules.default` 也提供了声明式的 `services.gymbag` 配置。
 
-**两行命令**即可生成 `Gymbagfile` 并启动服务：
+**两行命令**即可生成 `gymbag.json` 并启动服务：
 
 ```bash
-# 1. 生成配置（交互式向导，或通过参数一键完成配置）
+# 1. 生成 JSON 配置（或传入 --format gymbagfile 生成 Caddy 风格的 Gymbagfile）
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. 启动服务器
+# 2. 启动服务器（自动加载 ./gymbag.json、./Gymbagfile 或 ./Caddyfile）
 ./gymbag
 ```
+
+Gymbag 还能原生读取现有的 **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）以及 **Caddyfile v2** 配置（包括 snippets、`import`、`@matchers`、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir` 和 `header`）。
 
 或者注册为系统服务（`systemd`、`launchd`、`openrc` 或 `supervisor`）并启动：
 
@@ -221,6 +223,48 @@ staging.example.com {
 ```
 
 你也可以向 `gymbag init`、`gymbag run` 或 `gymbag reverse-proxy` 传递 `--verify-timeout 6h`（或 `--clearance-ttl 6h`），设置环境变量 `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL`，或者通过 `PATCH /api/v1/sites/{domain}` 动态热更新 `clearance_ttl`。已通过验证的访客请求 `GET /.waf/v1/session` 将返回 `clearance_ttl`、`expires_at` 以及剩余 `expires_in` 秒数。
+
+---
+
+## 路径路由、静态文件、重定向与配置导入
+
+除了普通的 `reverse_proxy`，站点还可以包含有序的**路径路由（path routes）**。第一个路径匹配的路由负责处理请求；未匹配任何路由的请求会回落到站点的默认上游（若没有则返回 `404`）。每条路由有且仅有一种处理器：反向代理、静态文件服务（`root`）、固定响应 `respond` 或重定向 `redir`。
+
+```caddyfile
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+
+    handle_path /static/* {
+        root ./dist
+        file_server browse
+    }
+    @health path /healthz /readyz
+    respond @health "ok" 200
+    redir /old/* https://{host}/new{uri} 301
+    handle /api/* {
+        reverse_proxy http://localhost:8080
+        header X-Served-By gymbag
+    }
+    try_files {path} /index.html          # SPA 回退
+}
+```
+
+路径匹配器可以是精确路径（`/exact`）、通配符（`/api/*`、`*.php`），或以 `~` 开头的 Go RE2 正则（`~^/v[0-9]+/`）。重定向目标支持 `{scheme}`、`{host}`、`{uri}`、`{path}` 和 `{query}`。静态路由支持 `index`、`browse`（目录列表）和 `fallback`（例如为 SPA 设置 `/index.html`）；路由 `headers` 用于设置响应头，键名以 `-` 为前缀时则删除该响应头。WAF 规则与验证始终先于任何路由处理器执行。
+
+在 `gymbag.json` 中，等价写法是 `routes` 数组：
+
+```json
+{"routes": [
+  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+]}
+```
+
+可通过 CLI 的 `gymbag config route list|add|update|remove` 管理路由，或通过 `PATCH /api/v1/sites/{domain}`（`routes`、`headers`、`rule_sources`）实时修改。
+
+**导入现有配置：** `gymbag run -c /etc/nginx/nginx.conf`（或 `httpd.conf` / `apache2.conf`）可直接运行原生 nginx/Apache 配置；`gymbag config convert -c <file> -o gymbag.json --format json` 可将 nginx、Apache 或 Caddyfile v2（snippets、`import`、`@matchers`、`handle`、`route`）转换为 Gymbag 原生格式。
 
 ---
 
@@ -380,6 +424,28 @@ app.example.com {
 
 你可以通过 `GET /api/v1/rules/remote` 查看状态、通过 `POST /api/v1/rules/remote/refresh` 立即触发刷新，或者使用 `--remote-rules` 与 `GYMBAG_REMOTE_RULES`。
 
+### 本地规则文件、规则目录与动态热重载
+
+可将规则存放在独立的 `.rules`/`.json` 文件或整个规则目录中，并通过路径引用（也可使用 `gymbag ruleset add` 关联）。将某个来源标记为 `dynamic` 后，Gymbag 会自动监听并热重载磁盘上的改动，无需重启服务（若文件语法无效，则保留上一次可用的有效规则集）：
+
+```caddyfile
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+在 `gymbag.json` 中可配置 `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]`，也可向 `gymbag init` 传入 `--rules-file`、`--rules-dir`、`--rules-dynamic` 和 `--rules-watch-interval`。
+
 ### 控制内置规则（`default_rules on|off`）
 
 `default_rules` 默认为 `on`：
@@ -393,21 +459,39 @@ app.example.com {
 
 ### CLI 参考
 
-若当前工作目录存在 `.env`，Gymbag 会自动加载，然后解析 `./Gymbagfile` 或 `./Caddyfile`（除非被命令行参数覆盖）：
+若当前工作目录存在 `.env`，Gymbag 会自动加载，然后解析 `./gymbag.json`、`./Gymbagfile` 或 `./Caddyfile`（除非被命令行参数覆盖；也可通过 `-c` 直接传入原生 `nginx.conf` 或 Apache `httpd.conf`/`apache2.conf`）：
 
 ```bash
-# 通过交互式向导或参数生成 Gymbagfile
+# 通过交互式向导或参数生成 gymbag.json（默认）或 Gymbagfile
 ./gymbag init
-./gymbag init -d app.example.com -u http://localhost:3000 -l 3
+./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# 使用 ./Gymbagfile 或 ./Caddyfile 启动服务器
+# 在 gymbag.json 或 Gymbagfile 中管理站点、路由与全局设置
+./gymbag config list
+./gymbag config add -d api.example.com -u :8080 -l 1
+./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+./gymbag config route add -d api.example.com --path /static/* --strip-prefix /static --root ./dist
+./gymbag config remove -d api.example.com
+./gymbag config set admin 127.0.0.1:2019
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+
+# 管理独立规则文件、规则目录与内联规则
+./gymbag ruleset init ./rules/custom.rules
+./gymbag ruleset add --source ./rules --dynamic --name local-dir
+./gymbag ruleset update local-dir --static
+./gymbag ruleset remove local-dir
+./gymbag ruleset validate ./rules
+./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+
+# 使用 ./gymbag.json、./Gymbagfile 或 ./Caddyfile 启动服务器
 ./gymbag
 
-# 指定配置文件启动并监听文件改动自动热重载（每 2 秒轮询一次）
-./gymbag run --config Gymbagfile --watch
+# 指定配置文件（JSON、Gymbagfile、Caddyfile v2、nginx、Apache）启动并监听文件改动自动热重载
+./gymbag run --config gymbag.json --watch
 
 # 注册并管理系统服务（systemd、launchd、openrc、supervisor）
-./gymbag service install --config Gymbagfile
+./gymbag service install --config gymbag.json
 ./gymbag service start
 ./gymbag service status
 ./gymbag service render --type systemd   # 在任意系统上预览 systemd unit 文件
@@ -415,8 +499,8 @@ app.example.com {
 # 无需配置文件直接启动临时反向代理
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 
-# 校验语法并打印各站点的最终安全策略摘要
-./gymbag validate --config Gymbagfile
+# 校验配置与本地规则来源，并打印各站点的最终安全策略摘要
+./gymbag validate --config gymbag.json
 
 # 原地格式化 Gymbagfile 为规范的 4 空格缩进
 ./gymbag fmt --overwrite Gymbagfile
@@ -427,7 +511,7 @@ app.example.com {
 
 | 参数 | 说明 |
 | :--- | :--- |
-| `-c`, `--config <path>` | 指定 `Gymbagfile`、`Caddyfile` 或 JSON 配置文件路径 |
+| `-c`, `--config <path>` | 指定 `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf` 或 Apache 配置文件路径 |
 | `-d`, `--domain <list>` | 覆盖下游域名，多个域名以逗号分隔 |
 | `-u`, `--upstream <url>` | 覆盖上游目标 URL（如 `http://localhost:3000` 或 `:3000`） |
 | `-l`, `--verify <0-3>` | 覆盖验证等级（`0`、`1`、`2`、`3` 或 `off`） |
@@ -515,6 +599,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `GYMBAG_DEFAULT_RULES` | 开启或关闭内置基线防火墙规则（`on` / `off`，默认 `on`） |
 | `GYMBAG_REMOTE_RULES` | 逗号或空格分隔的 HTTP/HTTPS 远程防火墙规则 URL |
 | `GYMBAG_REMOTE_RULES_REFRESH` | 远程规则刷新间隔（秒数或时长，默认 `300` / `5m`） |
+| `GYMBAG_RULES_WATCH_INTERVAL` | 动态本地规则文件/目录的轮询间隔（秒数或时长，默认 `2` / `2s`） |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW 前导零位数难度（`1`–`5`，默认 `4`） |
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 质询有效期（`300`s / `5m`）与已验证状态超时（`86400`s / `24h`；别名 `GYMBAG_VERIFY_TIMEOUT`、`GYMBAG_VERIFIED_TIMEOUT`；支持 `30m`、`12h`、`7d` 等格式） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | 通行 Cookie 名称（`waf_clearance`）与 `Secure` 标志（`true`） |
@@ -570,7 +655,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 | `POST` | `/api/v1/sites` | 运行时动态新增站点（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 查看单个站点的详细配置 |
 | `PUT` | `/api/v1/sites/{domain}` | 整体替换单个站点配置 |
-| `PATCH` | `/api/v1/sites/{domain}` | 实时热修补 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules` 或 `remote_rules` |
+| `PATCH` | `/api/v1/sites/{domain}` | 实时热修补 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers` 或 `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | 移除站点（`204 No Content`；拒绝删除最后一个剩余站点） |
 | `GET` | `/api/v1/sites/{domain}/rules` | 列出站点的自定义防火墙规则 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 在线追加一条自定义防火墙规则（`201 Created`） |

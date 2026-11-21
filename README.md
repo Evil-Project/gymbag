@@ -27,13 +27,13 @@
   <sub>Online Docs: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
-Gymbag is a single-binary HTTPS reverse proxy with a built-in, Anubis-style proof-of-work Web Application Firewall. It is written in pure Go using only the standard library — zero external Go dependencies, and every HTML template, SHA-256 browser solver script, and mascot PNG is compiled directly into the executable via `go:embed`.
+Gymbag is a single-binary HTTPS reverse proxy with a built-in proof-of-work WAF, in the spirit of Anubis. It uses only the Go standard library, so there are no third-party modules to pull in; templates, the SHA-256 solver script and the mascot images are embedded with `go:embed`.
 
-If you self-host web apps, Gitea/Forgejo instances, documentation sites, or internal tools, you have probably run into the same problem that inspired Anubis: aggressive LLM scrapers ignoring `robots.txt` and vulnerability scanners hammering `/.env` and `/wp-admin` around the clock. Instead of stitching together Nginx/Caddy, a separate PoW sidecar container, fail2ban, and hand-curated CIDR lists, Gymbag puts TLS termination, multi-CA ACME, HTTP/WebSocket proxying, local & remote firewall rules, IP threat intelligence, and per-site PoW policies into one binary configured by a clean `Gymbagfile`.
+It exists for the usual mess. Self-hosted apps, Gitea/Forgejo, docs sites and internal tools get hit by LLM scrapers that ignore `robots.txt` and by scanners walking `/.env` and `/wp-admin` all day. The usual fix is nginx or Caddy plus a PoW sidecar, fail2ban and a hand-maintained CIDR list. Gymbag does TLS, multi-CA ACME, HTTP and WebSocket proxying, local and remote firewall rules, IP threat intel and per-site PoW in one binary, driven by a `Gymbagfile`.
 
 ---
 
-## Quick Start (Open-Box Protection)
+## Quick start
 
 Download a prebuilt static binary from [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) (Linux/macOS/Windows, plus `.pkg.tar.zst` for Arch Linux), install via Nix Flakes, or build from source:
 
@@ -57,7 +57,7 @@ nix profile install github:Evil-Project/gymbag
 ```
 Static `CGO_ENABLED=0` Linux release binaries also execute directly on NixOS without `patchelf` or `nix-ld`, and `nixosModules.default` provides declarative `services.gymbag` configuration.
 
-Get started in **two commands** — generate `gymbag.json` and start the server:
+Getting started takes two commands: generate a config, then start.
 
 ```bash
 # 1. Generate a JSON config (or pass --format gymbagfile for Caddy-style Gymbagfile)
@@ -67,48 +67,48 @@ Get started in **two commands** — generate `gymbag.json` and start the server:
 ./gymbag
 ```
 
-Gymbag also natively reads existing **nginx** (`nginx.conf`), **Apache** (`httpd.conf` / `apache2.conf`), and **Caddyfile v2** configs (including snippets, `import`, `@matchers`, `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir`, and `header`).
+It also reads an existing **nginx** (`nginx.conf`), **Apache** (`httpd.conf` / `apache2.conf`) or **Caddyfile v2** config, including snippets, `import`, `@matchers`, `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir` and `header`.
 
-Or register it as a system service (`systemd`, `launchd`, `openrc`, or `supervisor`) and start it:
+To run it as a service (`systemd`, `launchd`, `openrc` or `supervisor`):
 
 ```bash
 ./gymbag init -d app.example.com -u :3000 --service auto
 ./gymbag service start
 ```
 
-Or skip the config file altogether for quick ad-hoc proxying:
+For a one-off you can skip the config file:
 
 ```bash
 ./gymbag reverse-proxy --from app.internal --to :3000 --verify 3
 ```
 
-### What "Open-Box" Means in Practice
+### What you get with no rules written
 
-You do not need to write a single regex or import any blocklists before putting Gymbag on the public internet. Writing bare `verify` (which turns on verify level `3`: `suspicious & ai`) or bare `block` (which rejects threat-intel IPs with `403 Forbidden` outright instead of challenging them) immediately activates three layers of protection:
+Gymbag can face the public internet without a single regex or imported blocklist. A bare `verify` turns on level `3` (`suspicious & ai`), while a bare `block` answers threat-intel IPs with `403 Forbidden` instead of a challenge. Either one enables three layers:
 
-1. **Built-in baseline firewall rules (`default_rules on`)**
-   - **Sensitive files (`403`)**: Blocks requests for `/.env`, `/.env.*`, `/.git/*`, `/.svn/*`, `/.hg/*`, `/.DS_Store`, `/.aws/*`, `/.ssh/*`, `/docker-compose.yml`, `/docker-compose.yaml`, `*.bak`, `*.sql`, and `*.sqlite`.
-   - **CMS & framework exploit probes (`403`)**: Drops `/wp-admin/*`, `/wp-login.php`, `/xmlrpc.php`, `/phpmyadmin*`, `/vendor/phpunit*`, `/cgi-bin/*`, `/actuator/env*`, and `/actuator/heapdump*`.
-   - **Vulnerability scanners (`403`)**: Rejects `sqlmap`, `nikto`, `nuclei`, `masscan`, `zgrab`, `gobuster`, `dirbuster`, `ffuf`, `wfuzz`, `feroxbuster`, `acunetix`, `nessus`, and `openvas`.
-   - **Injection & traversal queries (`403`)**: Catches `UNION SELECT`, `<script`, `javascript:`, `/etc/passwd`, `information_schema`, `../`, `cmd.exe`, and `/bin/sh` in query strings (on top of strict request-shape checks against null bytes and `%2e%2e` path traversal).
-   - **Automation clients (`PoW challenge`)**: When you haven't defined custom rules yet, CLI HTTP clients (`curl`, `wget`, `python-requests`, `python-httpx`, `go-http-client`, `scrapy`), headless browsers (`headlesschrome`, `playwright`, `puppeteer`, `selenium`), and empty `User-Agent` headers are sent to the proof-of-work screen.
-2. **Auto-updating IP threat intelligence**
-   - Pulls [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt), [Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) & [IPv6](https://www.spamhaus.org/drop/dropv6.txt), and [abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt) on startup and every 6 hours in the background, caching feeds in `<cert_dir>/intel-cache` with conditional `ETag` / `If-Modified-Since` headers.
-   - Runs keyless live IP reputation lookups against **Shodan InternetDB** (`internetdb.shodan.io`) and **StopForumSpam** (`api.stopforumspam.org`) with in-memory TTL caching and fail-open timeouts so an upstream outage never stalls your traffic.
+1. **Built-in baseline rules (`default_rules on`)**
+   - **Sensitive files (`403`)**: `/.env`, `/.env.*`, `/.git/*`, `/.svn/*`, `/.hg/*`, `/.DS_Store`, `/.aws/*`, `/.ssh/*`, `/docker-compose.yml`, `/docker-compose.yaml`, `*.bak`, `*.sql`, `*.sqlite`.
+   - **CMS and framework probes (`403`)**: `/wp-admin/*`, `/wp-login.php`, `/xmlrpc.php`, `/phpmyadmin*`, `/vendor/phpunit*`, `/cgi-bin/*`, `/actuator/env*`, `/actuator/heapdump*`.
+   - **Vulnerability scanners (`403`)**: `sqlmap`, `nikto`, `nuclei`, `masscan`, `zgrab`, `gobuster`, `dirbuster`, `ffuf`, `wfuzz`, `feroxbuster`, `acunetix`, `nessus`, `openvas`.
+   - **Injection and traversal queries (`403`)**: `UNION SELECT`, `<script`, `javascript:`, `/etc/passwd`, `information_schema`, `../`, `cmd.exe`, `/bin/sh` in query strings, on top of strict request-shape checks for null bytes and `%2e%2e` traversal.
+   - **Automation clients (`PoW challenge`)**: while a site has no custom rules, CLI clients (`curl`, `wget`, `python-requests`, `python-httpx`, `go-http-client`, `scrapy`), headless browsers (`headlesschrome`, `playwright`, `puppeteer`, `selenium`) and empty `User-Agent` headers go to the proof-of-work screen.
+2. **Self-updating IP threat intelligence**
+   - [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt), [Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) and [IPv6](https://www.spamhaus.org/drop/dropv6.txt), and [abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt) are fetched at startup and every 6 hours, cached in `<cert_dir>/intel-cache` with conditional `ETag` / `If-Modified-Since` requests.
+   - Keyless live reputation lookups against **Shodan InternetDB** (`internetdb.shodan.io`) and **StopForumSpam** (`api.stopforumspam.org`) with in-memory TTL caching and fail-open timeouts, so an upstream outage never stalls traffic.
 3. **Official AI crawler IP tracking**
-   - Tracks published CIDR lists from **OpenAI** (`gptbot`, `searchbot`, `chatgpt-user`), **Anthropic** (`claude.com/crawling/bots.json`), **Perplexity** (`perplexitybot`, `perplexity-user`), **Google** (`user-triggered-agents`, `user-triggered-fetchers-google`), and **Apple** (`applebot`). Even if a crawler spoofs a normal desktop Chrome `User-Agent`, its source IP still matches the AI range.
+   - Published CIDR lists from **OpenAI** (`gptbot`, `searchbot`, `chatgpt-user`), **Anthropic** (`claude.com/crawling/bots.json`), **Perplexity** (`perplexitybot`, `perplexity-user`), **Google** (`user-triggered-agents`, `user-triggered-fetchers-google`) and **Apple** (`applebot`). A crawler that spoofs a desktop Chrome `User-Agent` still matches by source IP.
 
-> **Operational note on ports 80 and 443:** By default Gymbag binds `:80` (HTTP-to-HTTPS redirect + ACME HTTP-01 responder) and `:443` (HTTPS gateway). On Linux, grant the binary `CAP_NET_BIND_SERVICE` so it never has to run as root:
+> **Ports 80 and 443:** `:80` handles the HTTP-to-HTTPS redirect and ACME HTTP-01, `:443` the HTTPS gateway. On Linux, grant the binary `CAP_NET_BIND_SERVICE` and it never needs root:
 > ```bash
 > sudo setcap 'cap_net_bind_service=+ep' ./gymbag
 > ```
-> For unprivileged local testing without capabilities or `sudo`, pass `--http-port 8080 --https-port 8443` (or `http_port` / `https_port` in `Gymbagfile`).
+> For unprivileged local testing, pass `--http-port 8080 --https-port 8443` (or `http_port` / `https_port` in `Gymbagfile`).
 
 ---
 
-## Local Development (`localhost` & `*.internal`)
+## Local development (`localhost` and `*.internal`)
 
-Testing HTTPS locally with custom hostnames usually means juggling `mkcert`, manual `/etc/hosts` edits, and self-signed browser warnings. Gymbag handles both hostname resolution and local X.509 issuance out of the box whenever a site uses `localhost`, `*.localhost`, `*.internal` (such as `app.internal` or `api.internal`), `*.local`, or `*.test`:
+Local HTTPS on a custom hostname usually means mkcert, hand-edited `/etc/hosts` and a browser warning every day. Gymbag handles the hosts entry and the certificate for any site on `localhost`, `*.localhost`, `*.internal` (`app.internal`, `api.internal`), `*.local` or `*.test`:
 
 ```caddyfile
 app.internal {
@@ -122,28 +122,28 @@ api.internal {
 }
 ```
 
-### Automatic `/etc/hosts` Setup & Cleanup
+### `/etc/hosts` is handled for you
 
-When `auto_hosts` is enabled (the default), Gymbag inspects `/etc/hosts` on startup (or `C:\Windows\System32\drivers\etc\hosts` on Windows). For any concrete local domain like `app.internal` or `api.internal` that doesn't already resolve in `/etc/hosts`, Gymbag appends IPv4 and IPv6 loopback entries tagged with its instance ID:
+With `auto_hosts` on (the default) Gymbag reads `/etc/hosts` at startup (`C:\Windows\System32\drivers\etc\hosts` on Windows). A concrete local domain such as `app.internal` or `api.internal` that doesn't already resolve there gets IPv4 and IPv6 loopback lines tagged with the instance ID:
 
 ```text
 127.0.0.1 app.internal # gymbag-managed:9f3a1c2b
 ::1 app.internal # gymbag-managed:9f3a1c2b
 ```
 
-Already-present `localhost` lines are left untouched. When you stop Gymbag (`Ctrl+C` / `SIGTERM`), it re-reads `/etc/hosts` so any edits you made while it was running are preserved, and removes **only** its own `# gymbag-managed:<instanceID>` lines.
+Existing `localhost` lines are untouched. On shutdown (`Ctrl+C` / `SIGTERM`) Gymbag re-reads the file, so your own edits survive, and removes only its `# gymbag-managed:<instanceID>` lines.
 
-- **Permissions on macOS & Linux:** Writing `/etc/hosts` requires root privileges. If you start `./gymbag` as a normal user without write permission on `/etc/hosts`, Gymbag logs a clear warning and **continues running normally** — it will not crash. Run `sudo ./gymbag` when you want automatic `/etc/hosts` management (and ports `80`/`443`), or set `auto_hosts off` (or `GYMBAG_AUTO_HOSTS=off`) if you resolve `.internal` via `dnsmasq` or manage `/etc/hosts` yourself.
+- **macOS and Linux permissions:** `/etc/hosts` needs root. Run as a normal user, Gymbag logs a warning and keeps going. Use `sudo ./gymbag` for automatic hosts handling (and ports `80`/`443`), or set `auto_hosts off` (`GYMBAG_AUTO_HOSTS=off`) if you resolve `.internal` through `dnsmasq` or manage the file yourself.
 
-### Two-Tier Local PKI & Trusting the Root CA
+### Local CA
 
-Instead of generating disposable self-signed leaf certs that browsers refuse to cache trust for, Gymbag maintains a two-tier ECDSA P-256 Certificate Authority inside `<cert_dir>/ca/` (default `certs/ca/`):
+Self-signed leaves are thrown away on every run, so the browser never learns to trust them. Instead Gymbag keeps a two-tier ECDSA P-256 CA under `<cert_dir>/ca/` (default `certs/ca/`):
 
 1. **Root CA**: **`"Neuro-sama Headquarters Root CA"`** (`certs/ca/neuro-sama-root-ca.pem`, 10-year validity, `MaxPathLen: 1`)
 2. **Intermediate CA**: **`"Gymbag & Swarm SSL Local CA"`** (`certs/ca/gymbag-swarm-local-ca.pem`, 5-year validity, signed by `"Neuro-sama Headquarters Root CA"`, `MaxPathLen: 0`)
 3. **Leaf Certificate**: `certs/local-fullchain.pem` + `certs/local-privkey.pem` (90-day validity, auto-renewed within 30 days, serving the leaf + intermediate chain with DNS SANs and automatic `127.0.0.1` / `::1` IP SANs)
 
-Trust **`"Neuro-sama Headquarters Root CA"`** once in your OS trust store and every `https://localhost` and `https://*.internal` domain served by Gymbag will show a clean green lock in browsers and `curl`:
+Trust **`"Neuro-sama Headquarters Root CA"`** once and every `https://localhost` and `https://*.internal` site validates in browsers and `curl`:
 
 **macOS (System Keychain):**
 ```bash
@@ -160,21 +160,21 @@ sudo cp certs/ca/neuro-sama-root-ca.pem /usr/local/share/ca-certificates/neuro-s
 sudo trust anchor --store certs/ca/neuro-sama-root-ca.pem
 ```
 
-> **Firefox note:** On macOS and Windows, Firefox automatically trusts OS roots when `security.enterprise_roots.enabled` is `true` in `about:config`. On Linux, if Firefox uses its own NSS database rather than p11-kit, either toggle `security.enterprise_roots.enabled` or import `certs/ca/neuro-sama-root-ca.pem` once under *Settings -> Privacy & Security -> Certificates -> View Certificates -> Authorities*.
+> **Firefox:** on macOS and Windows it picks up OS roots when `security.enterprise_roots.enabled` is `true` in `about:config`. On Linux, if Firefox uses its own NSS store rather than p11-kit, set that flag or import `certs/ca/neuro-sama-root-ca.pem` once under *Settings -> Privacy & Security -> Certificates -> View Certificates -> Authorities*.
 
 ---
 
-## Protecting Multiple Websites & Verify Levels (`0`–`3`)
+## Multiple sites and verify levels (`0`–`3`)
 
-A single Gymbag process can host and reverse-proxy dozens of domains at once, including multi-upstream round-robin load balancing and full-duplex RFC 6455 WebSocket upgrades. Each site chooses its own verification policy with `verify <0-3>` (or disables WAF challenges altogether with `protect off`):
+One process proxies dozens of domains, round-robin across upstreams, with full-duplex RFC 6455 WebSocket upgrades. Each site sets its own policy with `verify <0-3>`, or disables challenges with `protect off`:
 
-| Level | Name | Who Gets Challenged | Best Fit |
+| Level | Name | Who gets challenged | Best fit |
 | :---: | :--- | :--- | :--- |
 | `0` | `always` | Every visitor without a valid HMAC clearance cookie. | Private tools, staging servers, or sites under active L7 flood. |
 | `1` | `only suspicious` | Threat-feed / bad-reputation IPs, scanners, CLI HTTP libraries, headless browsers, missing/spoofed browser headers, and exploit probes. | Public web apps and APIs where normal browsers shouldn't see a challenge screen. |
 | `2` | `only ai` | AI crawlers and LLM agents matched by **official AI crawler IP ranges** *or* AI bot `User-Agent` / agent headers. | Docs, blogs, and Git forges that want zero friction for humans and `curl` users, while taxing LLM scrapers. |
 | `3` | `suspicious & ai` | Combines `1` and `2`: challenges both suspicious clients/IPs and AI crawlers; normal human browsers pass straight through. | Recommended default for public production websites (also enabled by bare `verify`). |
-| — | `protect off` | Proof-of-work challenges disabled; acts as a straight HTTPS & WebSocket reverse proxy (explicit custom rules on the site still run if configured). | Static asset hosts, webhooks, and public package mirrors. |
+| n/a | `protect off` | No proof-of-work challenges; a plain HTTPS and WebSocket reverse proxy. Explicit custom rules on the site still run. | Static asset hosts, webhooks, public package mirrors. |
 
 ```caddyfile
 app.example.com, www.example.com {
@@ -204,11 +204,11 @@ static.example.com {
 }
 ```
 
-Once a browser solves a SHA-256 proof-of-work challenge (`difficulty` `1`–`5`, default `4`), Gymbag sets an `HttpOnly`, `SameSite=Lax` HMAC-signed clearance cookie (`waf_clearance`, default TTL `24h` / `86400s`) bound to both the host and client IP.
+When a browser solves the SHA-256 proof-of-work challenge (`difficulty` `1`–`5`, default `4`), Gymbag sets an `HttpOnly`, `SameSite=Lax` clearance cookie signed with HMAC (`waf_clearance`, TTL `24h` / `86400s` by default). The cookie is bound to both host and client IP.
 
-### Custom Verified Status Timeout (`verify_timeout` / `clearance_ttl`)
+### How long clearance lasts (`verify_timeout` / `clearance_ttl`)
 
-Customize how long a visitor remains verified globally or per site using integer seconds **or** human-readable durations (`30m`, `12h`, `1h30m`, `7d`, `2w`):
+Set it globally or per site, in seconds or as a duration (`30m`, `12h`, `1h30m`, `7d`, `2w`):
 
 ```caddyfile
 {
@@ -222,13 +222,55 @@ staging.example.com {
 }
 ```
 
-You can also pass `--verify-timeout 6h` (or `--clearance-ttl 6h`) to `gymbag init`, `gymbag run`, or `gymbag reverse-proxy`, set `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL`, or live-patch `clearance_ttl` via `PATCH /api/v1/sites/{domain}`. `GET /.waf/v1/session` reports `clearance_ttl`, `expires_at`, and remaining `expires_in` seconds for cleared visitors.
+The same value is also `--verify-timeout 6h` (or `--clearance-ttl 6h`) on `gymbag init`, `gymbag run` and `gymbag reverse-proxy`, `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL`, or live through `PATCH /api/v1/sites/{domain}`. `GET /.waf/v1/session` reports `clearance_ttl`, `expires_at` and remaining `expires_in` seconds for cleared visitors.
 
 ---
 
-## Switching SSL Providers, Custom Keys, & Auto-Renewal
+## Path routes, static files, redirects and config imports
 
-For public domains, `tls auto` (the default) automatically obtains certificates over RFC 8555 ACME HTTP-01 using Let's Encrypt. You can switch Certificate Authorities with a single `ssl_provider` directive (aliases: `acme_provider`, `ca`, `cert_issuer`) or `tls <provider>`:
+A site can also define ordered **path routes** next to plain `reverse_proxy`. The first match wins; with no match the request falls through to the site's default upstreams, or `404` if there are none. Each route has exactly one handler: reverse proxy, static file server (`root`), fixed `respond` or `redir`.
+
+```caddyfile
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+
+    handle_path /static/* {
+        root ./dist
+        file_server browse
+    }
+    @health path /healthz /readyz
+    respond @health "ok" 200
+    redir /old/* https://{host}/new{uri} 301
+    handle /api/* {
+        reverse_proxy http://localhost:8080
+        header X-Served-By gymbag
+    }
+    try_files {path} /index.html          # SPA fallback
+}
+```
+
+A matcher is an exact path (`/exact`), a glob (`/api/*`, `*.php`) or a Go RE2 regex after `~` (`~^/v[0-9]+/`). Redirect targets expand `{scheme}`, `{host}`, `{uri}`, `{path}` and `{query}`. Static routes accept `index`, `browse` (directory listing) and `fallback` (`/index.html` for SPAs). A route `header` sets a header, or removes it when the key starts with `-`. WAF rules and verification still run before any route handler.
+
+The same thing as a `routes` array in `gymbag.json`:
+
+```json
+{"routes": [
+  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+]}
+```
+
+Manage them with `gymbag config route list|add|update|remove`, or live via `PATCH /api/v1/sites/{domain}` (`routes`, `headers`, `rule_sources`).
+
+**Importing existing configs:** `gymbag run -c /etc/nginx/nginx.conf` (or `httpd.conf` / `apache2.conf`) serves a native nginx or Apache config as-is. To convert instead, `gymbag config convert -c <file> -o gymbag.json --format json` handles nginx, Apache and Caddyfile v2, including snippets, `import`, `@matchers`, `handle` and `route`.
+
+---
+
+## SSL providers, custom keys and renewal
+
+For public domains, `tls auto` (the default) gets certificates from Let's Encrypt over RFC 8555 ACME HTTP-01. To use another CA, set `ssl_provider` (aliases: `acme_provider`, `ca`, `cert_issuer`) or `tls <provider>`:
 
 | Provider Keyword | Certificate Authority | EAB Requirement |
 | :--- | :--- | :--- |
@@ -242,10 +284,10 @@ For public domains, `tls auto` (the default) automatically obtains certificates 
 | `local` | Local Two-Tier PKI | Local CA (`Neuro-sama Headquarters Root CA` -> `Gymbag & Swarm SSL Local CA`) |
 | `https://...` | Any RFC 8555 ACME v2 CA | Optional `eab <kid> <hmac_key>` (e.g. Smallstep `step-ca`, Pebble) |
 
-### Switching ACME CAs & External Account Binding (EAB)
+### Other CAs and External Account Binding (EAB)
 
-**ZeroSSL with zero-click email EAB:**
-When you select `zerossl` and configure `email`, Gymbag automatically exchanges your email with ZeroSSL's EAB endpoint (`https://api.zerossl.com/acme/eab-credentials-email`) if you haven't supplied explicit EAB keys:
+**ZeroSSL, no EAB setup needed:**
+Pick `zerossl` and set `email`, and Gymbag exchanges the address with ZeroSSL's EAB endpoint (`https://api.zerossl.com/acme/eab-credentials-email`) unless you've supplied EAB keys yourself:
 
 ```caddyfile
 {
@@ -259,8 +301,8 @@ example.com {
 }
 ```
 
-**Google Trust Services, SSL.com, or explicit EAB credentials:**
-Pass your Key ID and HMAC key (both URL-safe unpadded base64 and standard padded base64 are accepted, and `eab_hmac_key` is automatically masked in Admin API outputs):
+**Google Trust Services, SSL.com, or explicit EAB:**
+Pass the Key ID and HMAC key. Both URL-safe unpadded base64 and standard padded base64 work, and `eab_hmac_key` is masked in Admin API output:
 
 ```caddyfile
 {
@@ -270,7 +312,7 @@ Pass your Key ID and HMAC key (both URL-safe unpadded base64 and standard padded
 }
 ```
 
-**LiteSSL by TrustAsia or a custom ACME directory:**
+**LiteSSL (TrustAsia) or a custom ACME directory:**
 
 ```caddyfile
 {
@@ -281,13 +323,13 @@ Pass your Key ID and HMAC key (both URL-safe unpadded base64 and standard padded
 }
 ```
 
-Gymbag scopes cached ACME certificates on disk by provider name (for example `certs/acme-zerossl-fullchain.pem` and `certs/acme-google-fullchain.pem`, while keeping `certs/acme-fullchain.pem` for Let's Encrypt). If you change `ssl_provider` and restart or reload, Gymbag immediately requests a certificate from the new CA rather than serving a leftover cert from the previous issuer.
+Cached ACME certs are stored per provider on disk, e.g. `certs/acme-zerossl-fullchain.pem` and `certs/acme-google-fullchain.pem`, with `certs/acme-fullchain.pem` left for Let's Encrypt. Change `ssl_provider` and restart or reload, and Gymbag requests from the new CA right away instead of serving the old issuer's cert.
 
-### Bringing Your Own Keys or Certificates
+### Your own keys and certificates
 
-- **Custom ACME account key (`account_key`)**: By default Gymbag creates and reuses an ECDSA P-256 account key at `certs/acme-account.pem`. If your organization already has a registered ECDSA (P-256/P-384) or RSA ACME account key, point to it with `account_key /etc/gymbag/account.pem` (or `GYMBAG_ACCOUNT_KEY_FILE`).
-- **Custom CSR private key (`ssl_key`)**: Use `ssl_key /etc/gymbag/domain.key` to sign ACME CSRs with your own ECDSA or RSA private key instead of generating a fresh one.
-- **Custom TLS certificate & key (`tls <cert> <key>`)**: Supply commercial, Cloudflare Origin, or externally managed PEM files either globally or per-site (routed via SNI). Encrypted private keys are supported via `key_password` (or `GYMBAG_KEY_PASSWORD`):
+- **ACME account key (`account_key`)**: Gymbag creates and reuses an ECDSA P-256 key at `certs/acme-account.pem`. If you already have a registered ECDSA (P-256/P-384) or RSA account key, point at it with `account_key /etc/gymbag/account.pem` (or `GYMBAG_ACCOUNT_KEY_FILE`).
+- **CSR private key (`ssl_key`)**: `ssl_key /etc/gymbag/domain.key` signs ACME CSRs with your own ECDSA or RSA key instead of a generated one.
+- **Full certificate and key (`tls <cert> <key>`)**: use commercial, Cloudflare Origin or otherwise externally managed PEM files, globally or per site (matched by SNI). Encrypted keys work via `key_password` (or `GYMBAG_KEY_PASSWORD`):
 
 ```caddyfile
 {
@@ -301,28 +343,28 @@ corp.example.com {
 }
 ```
 
-### Zero-Downtime Background Renewal
+### Renewal without downtime
 
-Gymbag runs a background renewal loop every `renew_interval` seconds (default `43200` = 12 hours). Whenever an ACME certificate, local PKI leaf certificate, or file-backed certificate is within `renew_within_days` of expiration (default `30` days), Gymbag renews or reloads it in the background and swaps the active `tls.Certificate` pointer atomically. Active HTTP streams and WebSocket tunnels stay up without a single dropped TCP connection.
+A background loop runs every `renew_interval` seconds (default `43200`, i.e. 12 hours). When an ACME cert, local PKI leaf or file-backed cert comes within `renew_within_days` of expiry (default `30` days), Gymbag renews or reloads it and swaps the active `tls.Certificate` atomically. Open HTTP streams and WebSocket tunnels stay connected.
 
 ---
 
-## Writing Your Own Firewall Rules
+## Writing your own firewall rules
 
-For each incoming request on a protected site, Gymbag evaluates layers in a predictable order:
+On a protected site every request walks through the layers in a fixed order:
 
 1. **Request shape sanity** (HTTP verb check, max URI length, null-byte and `..` traversal rejection)
 2. **ACME HTTP-01 bypass** (`/.well-known/acme-challenge/*`)
-3. **Your local custom rules** (global rules first, then site rules, top-to-bottom — first match wins)
+3. **Your local custom rules** (global rules first, then site rules, top to bottom; first match wins)
 4. **Remote rules (`remote_rules`)** (auto-refreshed HTTP/HTTPS rulesets in Gymbagfile syntax or JSON)
 5. **Built-in baseline security rules** (unless `default_rules off` is set)
 6. **Per-site per-IP rate limiter** (`rate_limit` / `rate_window`)
 7. **IP threat intelligence** (`ip_security_action verify` or `block`)
 8. **Proof-of-work verification** (`verify` level `0`–`3`)
 
-Because your custom rules run **before** the built-in baseline rules, rate limiter, and threat feeds, putting an `allow` rule at the top of a site block cleanly whitelists trusted office CIDRs, internal health checks, or preview cookies.
+Your custom rules run before the built-in baseline rules, the rate limiter and the threat feeds, so an `allow` at the top of a site block is enough to whitelist an office CIDR, an internal health check or a preview cookie.
 
-### One-Liner Shorthand Rules
+### One-line shorthand rules
 
 Syntax: `<allow | verify | block> <field> <pattern...>` (aliases `bypass`/`pass`, `challenge`/`pow`, and `deny`/`drop` also work).
 
@@ -336,9 +378,9 @@ Syntax: `<allow | verify | block> <field> <pattern...>` (aliases `bypass`/`pass`
 | `header` | `<Header-Name> [pattern]` (`""` = missing/empty, `*` = present) | `verify header Accept-Language ""` |
 | `cookie` | `<cookie_name> [pattern]` (`""` = missing/empty, `*` = present) | `allow cookie vip_session *` |
 
-### Multi-Condition `rule` Blocks
+### Multi-condition `rule` blocks
 
-When a single field isn't specific enough, use a `rule "name" { ... }` block. Multiple values on the **same** field match via **OR**; different fields inside the same rule block match via **AND**:
+When one field isn't specific enough, use `rule "name" { ... }`. Values on the same field are OR'd; different fields in the same block are AND'd:
 
 ```caddyfile
 app.example.com {
@@ -362,9 +404,9 @@ app.example.com {
 }
 ```
 
-### Remote Firewall Rules (`remote_rules`)
+### Remote rules (`remote_rules`)
 
-Pull shared firewall rules from one or more HTTP/HTTPS URLs globally or per site. Gymbag supports both **Gymbagfile rule syntax** (`allow`/`verify`/`block` one-liners and `rule "name" { ... }` blocks) and **JSON** (`[ ... ]` or `{"rules": [ ... ]}`), caches validated payloads under `<cert_dir>/rules-cache` with conditional `ETag` / `If-Modified-Since` requests, and retains the last known good ruleset if a remote source is unreachable or malformed:
+Shared rulesets can live at one or more HTTP/HTTPS URLs, globally or per site. Gymbag reads both **Gymbagfile syntax** (`allow`/`verify`/`block` one-liners and `rule "name" { ... }` blocks) and **JSON** (`[ ... ]` or `{"rules": [ ... ]}`). Validated payloads are cached under `<cert_dir>/rules-cache` with conditional `ETag` / `If-Modified-Since` requests, and if a source is unreachable or malformed the last good ruleset stays active:
 
 ```caddyfile
 {
@@ -380,11 +422,11 @@ app.example.com {
 }
 ```
 
-Inspect or trigger an immediate refresh via `GET /api/v1/rules/remote` and `POST /api/v1/rules/remote/refresh`, or pass `--remote-rules` / `GYMBAG_REMOTE_RULES`.
+Check status or force a refresh with `GET /api/v1/rules/remote` and `POST /api/v1/rules/remote/refresh`, or set `--remote-rules` / `GYMBAG_REMOTE_RULES`.
 
-### Local Rule Files, Rules Folders, & Dynamic Hot-Reload
+### Local rule files, folders and hot reload
 
-Store rules in a dedicated `.rules`/`.json` file or an entire rules directory and reference them by path (or link them via `gymbag ruleset add`). Mark a source `dynamic` to automatically watch and hot-reload changes on disk without restarting the server (if a file has invalid syntax, Gymbag retains the last known good ruleset):
+Rules can live in a `.rules`/`.json` file or a whole directory, referenced by path or linked with `gymbag ruleset add`. Mark a source `dynamic` and it is watched and reloaded on change, no restart needed. Invalid syntax keeps the previous ruleset in place:
 
 ```caddyfile
 {
@@ -402,22 +444,22 @@ app.example.com {
 }
 ```
 
-In `gymbag.json`, configure `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]` or pass `--rules-file`, `--rules-dir`, `--rules-dynamic`, and `--rules-watch-interval` to `gymbag init`.
+In `gymbag.json` that's `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]`, or pass `--rules-file`, `--rules-dir`, `--rules-dynamic` and `--rules-watch-interval` to `gymbag init`.
 
-### Controlling Built-In Rules (`default_rules on|off`)
+### Built-in rules (`default_rules on|off`)
 
 `default_rules` is `on` by default:
-- When a protected site has **no** custom rules, Gymbag enforces both the built-in block presets (`/.env`, `/wp-admin`, scanners, SQLi/XSS queries) and the built-in automation verify presets.
-- When you add your own custom rules, your rules run first and the built-in **block** presets remain appended after them so you don't accidentally expose `/.git` or `/.env` just because you added one `verify path` rule.
-- If you want complete manual control with zero built-in rules on a site (or globally), set `default_rules off` (or `GYMBAG_DEFAULT_RULES=off`).
+- With **no** custom rules on a site, Gymbag enforces both the built-in block presets (`/.env`, `/wp-admin`, scanners, SQLi/XSS queries) and the automation verify presets.
+- Once you add your own rules, they run first and the built-in **block** presets stay appended, so adding one `verify path` rule doesn't expose `/.git` or `/.env`.
+- For full manual control, set `default_rules off` (or `GYMBAG_DEFAULT_RULES=off`) on a site or globally.
 
 ---
 
-## CLI, Docker Compose, Environment Variables, & REST APIs
+## CLI, Docker Compose, environment variables and REST APIs
 
-### CLI Reference
+### CLI reference
 
-Gymbag automatically loads `.env` from the working directory if present, then resolves `./gymbag.json`, `./Gymbagfile`, or `./Caddyfile` unless overridden by flags (you can also pass a native `nginx.conf` or Apache `httpd.conf`/`apache2.conf` directly with `-c`):
+Gymbag loads `.env` from the working directory if there is one, then picks up `./gymbag.json`, `./Gymbagfile` or `./Caddyfile` unless a flag overrides it. A native `nginx.conf` or Apache `httpd.conf`/`apache2.conf` can also be passed straight in with `-c`:
 
 ```bash
 # Generate gymbag.json (default) or Gymbagfile via interactive wizard or flags
@@ -483,9 +525,9 @@ Gymbag automatically loads `.env` from the working directory if present, then re
 | `--https-port <port>` | HTTPS gateway port (default `443`) |
 | `--watch` | Watch config file and hot-reload site routes, rules, & SNI certs |
 
-### Docker & Docker Compose
+### Docker and Docker Compose
 
-Official multi-arch (`linux/amd64`, `linux/arm64`) Alpine container images are published to GitHub Container Registry (`ghcr.io/evil-project/gymbag`) as non-root UID `10001` with `cap_net_bind_service=+ep`.
+Official multi-arch Alpine images (`linux/amd64`, `linux/arm64`) live on GitHub Container Registry (`ghcr.io/evil-project/gymbag`), running as non-root UID `10001` with `cap_net_bind_service=+ep`.
 
 **Quick `docker run` with a mounted `Gymbagfile`:**
 
@@ -539,9 +581,9 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
 
 See the full [Docker & Docker Compose Guide](docs/guide/docker.md) for bind-mount permissions (`chown 10001:10001`), `--watch` hot-reloading, multi-container proxying, and local builds.
 
-### Environment Variables (`GYMBAG_*`)
+### Environment variables (`GYMBAG_*`)
 
-Precedence order is **Config file -> `GYMBAG_*` environment variables -> CLI flags**.
+Precedence is **config file -> `GYMBAG_*` environment variables -> CLI flags**.
 
 | Variable | Description |
 | :--- | :--- |
@@ -584,7 +626,7 @@ Precedence order is **Config file -> `GYMBAG_*` environment variables -> CLI fla
 
 ### REST APIs
 
-#### Public WAF Endpoints (Served on Protected Sites)
+#### Public WAF endpoints (served on protected sites)
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
@@ -594,9 +636,9 @@ Precedence order is **Config file -> `GYMBAG_*` environment variables -> CLI fla
 | `POST` | `/.waf/v1/verifications` | Verifies a PoW solution, sets the signed clearance cookie, and returns `expires_in` (`/.waf/verify` alias supported) |
 | `GET` | `/.waf/assets/{name}` | Serves embedded PNG challenge assets (`/.waf/v1/assets/{name}` alias, cached via `ETag`) |
 
-#### Local Admin API (Enabled via `admin 127.0.0.1:2019` or `--admin`)
+#### Local Admin API (`admin 127.0.0.1:2019` or `--admin`)
 
-Bind the Admin API to loopback (`127.0.0.1:2019`) or a Unix/WireGuard management interface — it requires no auth token and can mutate live routing and firewall rules without restarting the server.
+Bind the Admin API to loopback (`127.0.0.1:2019`) or a Unix/WireGuard management interface. It needs no auth token, and can change live routing and firewall rules without a restart.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
@@ -639,9 +681,9 @@ curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
 
 ---
 
-## Benchmarks vs Caddy & Nginx
+## Benchmarks against Caddy and Nginx
 
-Benchmarked on Apple M4 (10-core, macOS, Go `1.27.0`), terminating TLS 1.3 with the same ECDSA P-256 certificate, 64 concurrent workers, `1 KiB` response payload, and `1024` upstream keep-alive connections across all three proxies (`0` errors on every run):
+Apple M4 (10-core, macOS, Go `1.27.0`), TLS 1.3 with the same ECDSA P-256 certificate, 64 concurrent workers, `1 KiB` response payload, `1024` upstream keep-alive connections, `0` errors on every run:
 
 | Server & Mode | HTTP/1.1 TLS (RPS) | H1 p50 / p99 | HTTP/2 TLS (RPS) | H2 p50 / p99 | Binary Size | RSS (Under Load) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -651,15 +693,15 @@ Benchmarked on Apple M4 (10-core, macOS, Go `1.27.0`), terminating TLS 1.3 with 
 | **Gymbag `v0.1.0`** (`verify 0`, cleared cookie) | **65,490** | 0.79 / 3.93 ms | **62,108** | 0.84 / 4.27 ms | 12.9 MB (static) | ~54 MiB |
 | **Caddy `v2.11.9`** (Go, tuned keep-alive) | **54,741** | 0.90 / 4.90 ms | **39,207** | 1.30 / 6.18 ms | 49.0 MB | 76.8 MiB |
 
-- **+32% faster than Caddy on HTTP/1.1** and **+63% to +69% faster on HTTP/2**, using ~30% less memory and a 3.8x smaller binary — even with Gymbag's full WAF active.
-- **85% of C-based Nginx's HTTP/1.1 throughput** with nearly **2x lower p99 tail latency** (`3.14 ms` vs `6.20 ms`).
-- **140,680 req/s** edge WAF blocking on `/.env` probes over TLS (`0.35 ms` p50, zero upstream traffic).
+- **+32% over Caddy on HTTP/1.1** and **+63% to +69% on HTTP/2**, with about 30% less memory and a 3.8x smaller binary, full WAF included.
+- **85% of C-based Nginx's HTTP/1.1 throughput** with nearly **half the p99 tail** (`3.14 ms` vs `6.20 ms`).
+- **140,680 req/s** blocking `/.env` probes at the edge over TLS (`0.35 ms` p50, no upstream traffic).
 
-See [Benchmarks & Performance](docs/guide/benchmarks.md) for full methodology, Go microbenchmarks (`go test -bench`), and exact configs.
+Full methodology, Go microbenchmarks (`go test -bench`) and exact configs are in [Benchmarks & Performance](docs/guide/benchmarks.md).
 
 ---
 
-## Project Layout
+## Project layout
 
 ```text
 .
@@ -686,7 +728,7 @@ See [Benchmarks & Performance](docs/guide/benchmarks.md) for full methodology, G
 
 ---
 
-## Star History
+## Star history
 
 <a href="https://www.star-history.com/#Evil-Project/gymbag&Date">
  <picture>
