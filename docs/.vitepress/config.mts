@@ -31,7 +31,8 @@ const enTheme: DefaultTheme.Config = {
         { text: 'Two-Command Quick Start', link: '/guide/getting-started' },
         { text: 'Docker & Docker Compose', link: '/guide/docker' },
         { text: 'System Service Setup', link: '/guide/system-service' },
-        { text: 'Local Dev & PKI (.internal)', link: '/guide/local-dev' }
+        { text: 'Local Dev & PKI (.internal)', link: '/guide/local-dev' },
+        { text: 'Routes & Config Import', link: '/guide/routes-and-imports' }
       ]
     },
     {
@@ -96,7 +97,8 @@ const zhTheme: DefaultTheme.Config = {
         { text: '两条命令快速开始', link: '/zh/guide/getting-started' },
         { text: 'Docker 与 Compose 部署', link: '/zh/guide/docker' },
         { text: '系统服务安装与管理', link: '/zh/guide/system-service' },
-        { text: '本地开发与 PKI (.internal)', link: '/zh/guide/local-dev' }
+        { text: '本地开发与 PKI (.internal)', link: '/zh/guide/local-dev' },
+        { text: '路由与配置导入', link: '/zh/guide/routes-and-imports' }
       ]
     },
     {
@@ -170,7 +172,8 @@ const jaTheme: DefaultTheme.Config = {
         { text: '2コマンド クイックスタート', link: '/ja/guide/getting-started' },
         { text: 'Docker & Docker Compose', link: '/ja/guide/docker' },
         { text: 'システムサービス設定', link: '/ja/guide/system-service' },
-        { text: 'ローカル開発 & PKI (.internal)', link: '/ja/guide/local-dev' }
+        { text: 'ローカル開発 & PKI (.internal)', link: '/ja/guide/local-dev' },
+        { text: 'ルーティングと設定インポート', link: '/ja/guide/routes-and-imports' }
       ]
     },
     {
@@ -244,7 +247,8 @@ const koTheme: DefaultTheme.Config = {
         { text: '두 줄 명령어 빠른 시작', link: '/ko/guide/getting-started' },
         { text: 'Docker & Docker Compose', link: '/ko/guide/docker' },
         { text: '시스템 서비스 설정', link: '/ko/guide/system-service' },
-        { text: '로컬 개발 & PKI (.internal)', link: '/ko/guide/local-dev' }
+        { text: '로컬 개발 & PKI (.internal)', link: '/ko/guide/local-dev' },
+        { text: '라우트 및 설정 가져오기', link: '/ko/guide/routes-and-imports' }
       ]
     },
     {
@@ -318,7 +322,8 @@ const esTheme: DefaultTheme.Config = {
         { text: 'Inicio Rápido en 2 Comandos', link: '/es/guide/getting-started' },
         { text: 'Docker y Docker Compose', link: '/es/guide/docker' },
         { text: 'Servicio del Sistema', link: '/es/guide/system-service' },
-        { text: 'Desarrollo Local y PKI (.internal)', link: '/es/guide/local-dev' }
+        { text: 'Desarrollo Local y PKI (.internal)', link: '/es/guide/local-dev' },
+        { text: 'Rutas e importación de configuración', link: '/es/guide/routes-and-imports' }
       ]
     },
     {
