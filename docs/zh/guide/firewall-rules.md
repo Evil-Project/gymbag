@@ -160,6 +160,60 @@ rule "challenge-xml-posts" {
 
 ---
 
+## 本地规则文件、规则目录与动态热重载
+
+您可以将规则存放在独立的 `.rules` / `.json` 文件或整个规则目录中并按路径引用。将规则源标记为 `dynamic`，即可在磁盘文件变更时自动监听并热重载，无需重启服务（若文件语法有误，Gymbag 会保留上一份有效的规则集）。本地规则与内联规则一同在远程规则之前评估。
+
+::: code-group
+```caddyfile [Gymbagfile]
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+```json [gymbag.json]
+{
+  "sites": [
+    {
+      "domains": ["app.example.com"],
+      "rule_sources": [
+        {"source": "./rules.d", "dynamic": true, "name": "shared"}
+      ]
+    }
+  ]
+}
+```
+
+```bash [CLI]
+# 生成并关联本地规则源的配置
+gymbag init -d app.example.com -u :3000 \
+  --rules-file ./rules/custom.rules --rules-dir ./rules.d \
+  --rules-dynamic --rules-watch-interval 2s
+
+# 管理规则文件与关联规则源
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+gymbag ruleset remove local-dir
+```
+:::
+
+轮询间隔由 `rules_watch_interval` 控制（默认 `2s`；可通过 `GYMBAG_RULES_WATCH_INTERVAL` 或 `gymbag config set rules_watch_interval 2s` 设置）。`rule_sources` 条目也可通过 `PATCH /api/v1/sites/{domain}` 实时更新。所有 `ruleset` 子命令请参阅 [CLI 与环境变量](/zh/reference/cli-env)。
+
+---
+
 ## 内置规则开关 (`default_rules on|off`)
 
 `default_rules` 默认为 `on`：

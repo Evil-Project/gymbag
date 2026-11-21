@@ -37,7 +37,7 @@ Admin API 无需认证令牌即可在不重启进程的情况下修改实时路�
 | `POST` | `/api/v1/sites` | 运行时动态添加新站点（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 查看单个站点配置 |
 | `PUT` | `/api/v1/sites/{domain}` | 替换单个站点配置 |
-| `PATCH` | `/api/v1/sites/{domain}` | 实时局部更新 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules` 或 `remote_rules` |
+| `PATCH` | `/api/v1/sites/{domain}` | 实时局部更新 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers` 或 `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | 移除站点（`204 No Content`；禁止删除最后一个站点） |
 | `GET` | `/api/v1/sites/{domain}/rules` | 列出站点本地自定义规则 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 实时追加一条自定义防火墙规则（`201 Created`） |
@@ -51,6 +51,11 @@ Admin API 无需认证令牌即可在不重启进程的情况下修改实时路�
 curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
   -H "Content-Type: application/json" \
   -d '{"verify_level": 0, "difficulty": 5, "clearance_ttl": 1800}'
+
+# 实时替换路径路由、响应头与本地规则源
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"routes": [{"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true}], "headers": {"X-Served-By": "gymbag"}, "rule_sources": [{"source": "./rules.d", "dynamic": true}]}'
 
 # 无需修改 Gymbagfile 立即封禁恶意网段
 curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \

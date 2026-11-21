@@ -50,10 +50,10 @@ go build -o gymbag ./cmd/gymbag
 ### 方式 A：命令行参数驱动（非交互式）
 
 ```bash
-# 1. 生成 Gymbagfile
+# 1. 生成 gymbag.json（添加 --format gymbagfile 可生成 Caddy 风格的 Gymbagfile）
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. 启动 Gymbag
+# 2. 启动 Gymbag（依次自动加载 ./gymbag.json、./Gymbagfile、./Caddyfile）
 ./gymbag
 ```
 
@@ -82,7 +82,7 @@ go build -o gymbag ./cmd/gymbag
 ### 方式 D：注册为系统服务
 
 ```bash
-# 1. 生成 Gymbagfile 并注册 systemd / launchd / openrc / supervisor
+# 1. 生成 gymbag.json 并注册 systemd / launchd / openrc / supervisor
 ./gymbag init -d app.example.com -u :3000 --service auto
 
 # 2. 启动已注册的服务
@@ -90,6 +90,19 @@ go build -o gymbag ./cmd/gymbag
 ```
 
 详见 [系统服务安装与管理](/zh/guide/system-service)。
+
+---
+
+## 导入现有 nginx / Apache / Caddyfile 配置
+
+Gymbag 原生支持读取 `nginx.conf`、Apache `httpd.conf` / `apache2.conf` 与 Caddyfile v2 文件，您可以直接基于现有配置启动：
+
+```bash
+./gymbag run -c /etc/nginx/nginx.conf
+./gymbag config convert -c Caddyfile -o gymbag.json --format json
+```
+
+有关路径路由、静态文件、重定向与配置转换的详情，请参阅 [路径路由与配置导入](/zh/guide/routes-and-imports)。
 
 ---
 
@@ -109,8 +122,8 @@ go build -o gymbag ./cmd/gymbag
 
 | 参数 | 说明 |
 | :--- | :--- |
-| `-o`, `--output <path>` | 输出路径（默认 `Gymbagfile`，指定 `--format json` 时默认 `gymbag.json`） |
-| `--format <fmt>` | `gymbagfile`（默认）或 `json` |
+| `-o`, `--output <path>` | 输出路径（默认 `gymbag.json`，指定 `--format gymbagfile` 时默认 `Gymbagfile`） |
+| `--format <fmt>` | `json`（默认）或 `gymbagfile` |
 | `--preset <name>` | `standard`、`local`、`public`、`strict`、`ai-only`、`suspicious` 或 `proxy-only` |
 | `-d`, `--domain <domains>` | 下游域名，多个域名以逗号分隔 |
 | `-u`, `--upstream <url>` | 上游目标 URL（如 `http://localhost:3000` 或 `:3000`） |
@@ -120,6 +133,10 @@ go build -o gymbag ./cmd/gymbag
 | `--verify-timeout <dur>` | 自定义已验证状态有效期（如 `30m`、`12h`、`7d` 或秒数；别名 `--clearance-ttl`） |
 | `--remote-rules <url>` | 远程防火墙规则 URL（可重复或逗号分隔） |
 | `--remote-rules-refresh <dur>` | 远程规则刷新间隔（默认 `5m`） |
+| `--rules-file <path>` | 指定独立的本地防火墙规则文件路径（可重复） |
+| `--rules-dir <path>` | 指定本地防火墙规则目录（可重复） |
+| `--rules-dynamic` | 当 `--rules-file` / `--rules-dir` 文件变更时自动热重载 |
+| `--rules-watch-interval <dur>` | 动态本地规则文件/目录的轮询间隔（默认 `2s`） |
 | `--no-protect` | 关闭 WAF 验证（`protect off`） |
 | `--no-default-rules` | 关闭内置基础防火墙规则（`default_rules off`） |
 | `--ssl-provider <name>` | `letsencrypt`、`zerossl`、`google`、`ssl.com`、`litessl`、`buypass`、`local` 或自定义 ACME URL |

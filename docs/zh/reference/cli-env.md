@@ -9,10 +9,11 @@
 ## CLI 子命令
 
 ```bash
-# 生成配置文件（交互向导或参数驱动）
+# 生成配置文件（交互向导或参数驱动）；默认写入 gymbag.json
 gymbag init [flags] [output_path]
+gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# 使用 ./Gymbagfile 或 ./Caddyfile 启动服务
+# 按顺序使用 ./gymbag.json、./Gymbagfile 或 ./Caddyfile 启动服务
 gymbag
 
 # 指定配置文件并开启自动热重载（每 2 秒轮询变化）
@@ -20,6 +21,12 @@ gymbag run --config Gymbagfile --watch
 
 # 管理系统服务（systemd、launchd、openrc、supervisor）
 gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
+
+# 管理 gymbag.json 或 Gymbagfile 中的站点、路由与全局设置
+gymbag config <list|show|add|update|remove|route|set|unset|convert> [flags]
+
+# 管理规则文件、规则目录与内联规则
+gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 
 # 无配置文件临时反向代理
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
@@ -38,7 +45,7 @@ gymbag version
 
 | 参数 | 说明 |
 | :--- | :--- |
-| `-c`, `--config <path>` | `Gymbagfile`、`Caddyfile` 或 `.json` 配置文件路径 |
+| `-c`, `--config <path>` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、原生 `nginx.conf` 或 Apache `httpd.conf` / `apache2.conf` 配置文件路径 |
 | `-d`, `--domain <list>` | 覆盖下游域名，多个以逗号分隔（`reverse-proxy` 中为 `--from`） |
 | `-u`, `--upstream <url>` | 覆盖上游 URL（`http://localhost:3000` 或 `:3000`；`reverse-proxy` 中为 `--to`） |
 | `-l`, `--verify <0-3\|off>` | 覆盖验证级别（`0`、`1`、`2`、`3` 或 `off`） |
@@ -54,11 +61,60 @@ gymbag version
 
 ---
 
+## 配置管理 (`gymbag config`)
+
+所有 `config` 子命令均支持 `-c`、`--config <path>`（默认使用自动探测到的配置文件）。
+
+```bash
+gymbag config list
+gymbag config add -d api.example.com -u :8080 -l 1
+gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+gymbag config remove -d api.example.com
+gymbag config set admin 127.0.0.1:2019
+gymbag config unset admin
+gymbag config route add -d app.example.com --path '/static/*' --strip-prefix /static --root ./dist --browse
+gymbag config route list -d app.example.com
+gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
+
+| 子命令 | 说明 |
+| :--- | :--- |
+| `list` / `show` | 列出站点 / 打印格式化后的配置 |
+| `add` | 添加站点：`-d`、`-u`、`-l`、`--difficulty`、`--verify-timeout`、`--no-protect`、`--no-default-rules`、`--cert`、`--key`、`--root`、`--browse`、`--fallback`、`--respond`、`--status`、`--redir`、`--code`、`--header Name=Value\|-Name`、`-f` |
+| `update` | 更新站点：`-d`、`-u`、`-l`、`--difficulty`、`--verify-timeout`、`--protect on\|off`、`--default-rules on\|off`、`--cert`、`--key`、`--clear-tls`、`--header`、`--remove-header` |
+| `remove` | 移除站点（`-d`） |
+| `route list\|add\|update\|remove` | 管理路径路由：`-d`、`--path`、`--strip-prefix`、`-u`、`--root`、`--browse`、`--fallback`、`--respond`、`--status`、`--redir`、`--code`、`--header`、`--index`（用于 `update` / `remove` 的从 0 开始的路由索引） |
+| `set <key> <value>` / `unset <key>` | 修改或重置全局选项（`email`、`ssl_provider`、`admin`、`http_port`、`https_port`、`rules_watch_interval`、`remote_rules_refresh` 等） |
+| `convert` | 转换 nginx、Apache、Caddyfile、Gymbagfile 或 JSON：`-c <in>`、`-o <out>`（省略则输出到标准输出）、`--format json\|gymbagfile`（默认 `json`）、`-f` |
+
+## 规则集管理 (`gymbag ruleset`)
+
+```bash
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset remove local-dir
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+```
+
+| 子命令 | 说明 |
+| :--- | :--- |
+| `list` | 列出已关联的规则源（`-c`、`-d`） |
+| `add` | 关联规则文件、目录或 URL：`--source`、`--name`、`--dynamic` / `--static`、`-d <domain>` 或 `--global`、`-c` |
+| `update` | 修改已关联的规则集：`--target`（或位置参数 source/name）、`--source`、`--name`、`--dynamic` / `--static`、`-d` / `--global`、`-c` |
+| `remove` | 取消关联规则集：`--source <source-or-name>`、`-d` / `--global`、`-c` |
+| `validate <path>` | 校验规则文件或规则目录 |
+| `init <path>` | 创建初始规则集（`-o`、`--format rules\|json`、`-f`） |
+| `rule list\|add\|update\|remove` | 管理 `--file` 中（或通过 `-c` / `-d` 内联在配置中）的单条规则：`--name`、`--index`、`--action allow\|verify\|block`、`--ip`、`--ua`、`--path`、`--query`、`--method`、`--header`、`--cookie` |
+
+---
+
 ## 环境变量 (`GYMBAG_*`)
 
 | 变量名 | 说明 |
 | :--- | :--- |
-| `GYMBAG_CONFIG` | `Gymbagfile`、`Caddyfile` 或 `.json` 配置文件路径 |
+| `GYMBAG_CONFIG` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf` 或 Apache `httpd.conf` 配置文件路径 |
 | `GYMBAG_BIND` | 绑定监听地址（本地域名默认 `127.0.0.1`，公网域名默认 `0.0.0.0`） |
 | `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP 与 HTTPS 监听端口（默认 `80` 与 `443`） |
 | `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | 逗号分隔的下游域名 |
@@ -69,6 +125,7 @@ gymbag version
 | `GYMBAG_VERIFY_LEVEL` | 验证级别：`0`、`1`、`2` 或 `3`（别名：`GYMBAG_VERIFY`、`GYMBAG_VERIFY_MODE`、`GYMBAG_MODE`、`GYMBAG_TRIGGER`） |
 | `GYMBAG_DEFAULT_RULES` | 开关内置基础防火墙规则（`on` / `off`） |
 | `GYMBAG_REMOTE_RULES` | 逗号或空格分隔的 HTTP/HTTPS 远程规则 URL 列表 |
+| `GYMBAG_RULES_WATCH_INTERVAL` | 动态本地规则文件/目录的轮询间隔，支持秒数或时长（默认 `2` / `2s`） |
 | `GYMBAG_REMOTE_RULES_REFRESH` | 远程规则刷新间隔，支持秒数或时长（默认 `300` / `5m`） |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW 难度（`1`–`5`，默认 `4`） |
 | `GYMBAG_CHALLENGE_TTL` | 质询过期时间（秒数或时长，默认 `300` / `5m`） |

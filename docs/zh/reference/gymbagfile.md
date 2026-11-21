@@ -1,6 +1,6 @@
 # `Gymbagfile` 与 JSON 配置参考
 
-默认情况下，Gymbag 会自动读取当前目录的 `./Gymbagfile` 或 `./Caddyfile`（也可通过 `--config <path>` 或 `GYMBAG_CONFIG` 指定），同时也原生支持 `.json` 格式配置。
+默认情况下，Gymbag 会自动探测当前目录的 `./gymbag.json`、`./Gymbagfile` 或 `./Caddyfile`（也可通过 `--config <path>` 或 `GYMBAG_CONFIG` 指定），并原生解析 `gymbag.json`、`Gymbagfile` / `Caddyfile v2`、`nginx.conf` 以及 Apache（`httpd.conf` / `apache2.conf`）配置。
 
 ## 全局配置块 `{ ... }`
 
@@ -75,6 +75,10 @@
 | `threat_feed` / `ai_ip_feed` | 追加自定义威胁或 AI IP 订阅 URL | — |
 | `remote_rules` | 所有站点继承的远程防火墙规则 URL（支持一个或多个） | — |
 | `remote_rules_refresh` | 远程规则刷新间隔（秒数或时长如 `5m`、`1h`；别名 `rules_refresh`） | `300` (`5m`) |
+| `rules_file` | 所有站点继承的本地 `.rules`/`.json` 规则文件（`rules_file <path> [dynamic\|static]`） | — |
+| `rules_dir` | 所有站点继承的本地规则目录（`rules_dir <path> [dynamic\|static]`） | — |
+| `ruleset <name> { ... }` | 命名本地或远程规则源块（`source`/`file`/`dir`/`url`、`dynamic on\|off`） | — |
+| `rules_watch_interval` | `dynamic` 本地规则文件与目录的轮询间隔 | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | 默认已验证状态有效期（秒数或时长如 `30m`、`12h`、`7d`） | `86400` (`24h`) |
 
 ---
@@ -112,6 +116,12 @@ app.example.com, www.example.com {
 | `cookie_secure <bool>` | Cookie 是否设置 `Secure` 属性 |
 | `default_rules <on\|off>` | 开关内置基础规则 |
 | `remote_rules <urls...>` | 一个或多个远程规则 URL（Gymbagfile 语法或 JSON；别名 `remote_rule`、`rules_url`、`rule_url`、`remote_rules_url`） |
+| `rules_file <path> [dynamic\|static]` | 挂载本地 `.rules` 或 `.json` 规则文件（可选在磁盘变更时热重载） |
+| `rules_dir <path> [dynamic\|static]` | 挂载目录中的所有 `.rules`/`.json` 规则文件（可选热重载） |
+| `ruleset <name> { ... }` | 命名规则源块（`source`/`file`/`dir`/`url`、`dynamic on\|off`） |
+| `handle` / `handle_path` / `route` | 有序的路径匹配路由块（`reverse_proxy`、`root` + `file_server`、`respond`、`redir`、`header`） |
+| `root` / `file_server` / `try_files` | 静态文件服务、目录浏览（`browse`）与 SPA 回退 |
+| `respond` / `redir` / `header` | 固定响应、HTTP 重定向（`{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}`）与响应头修改 |
 | `ai_bots <patterns...>` | 额外识别为 AI 爬虫的 User-Agent 子串 |
 | `suspicious_uas <patterns...>` | 额外识别为可疑客户端的 User-Agent 子串 |
 | `suspicious_paths <prefixes...>` | 额外识别为可疑探测的路径前缀 |
@@ -142,10 +152,16 @@ app.example.com, www.example.com {
 
 ## JSON 配置
 
-可通过以下命令直接生成 `.json` 配置：
+`gymbag init` 默认生成 `gymbag.json`（使用 `--format gymbagfile` 可生成 Caddy 风格语法）：
 
 ```bash
-./gymbag init --format json -d app.example.com -u :3000 --verify-timeout 12h
+./gymbag init -d app.example.com -u :3000 --verify-timeout 12h --rules-dir ./rules.d --rules-dynamic
 ```
 
-JSON 结构字段与配置模型一一对应（`sites`、`bind_host`、`http_port`、`https_port`、`admin_addr`、`tls`、`intel`、`remote_rules_refresh`、`redis_url`、`secret`、`trusted_proxies`、`defaults`），站点内包含 `waf.clearance_ttl`（整数秒）与 `waf.remote_rules`（`[]string`）。
+所有字段与 JSON Schema 一一对应（`sites`、`bind_host`、`http_port`、`https_port`、`admin_addr`、`tls`、`intel`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`、`defaults`），每个站点内包含 `routes`（`path`、`strip_prefix`、`upstreams`、`root`、`index`、`browse`、`fallback`、`respond`、`redirect`、`headers`）、`headers`、`waf.clearance_ttl`（整数秒）、`waf.remote_rules`（`[]string`）以及 `waf.rule_sources`（`[{"source", "dynamic", "name"}]`）。
+
+您也可以将现有的 `nginx.conf`、Apache `httpd.conf`/`apache2.conf` 或 `Caddyfile` 转换为 `gymbag.json`：
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
