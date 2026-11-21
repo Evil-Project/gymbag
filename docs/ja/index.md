@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Gymbag
   text: HTTPS リバースプロキシ & Proof-of-Work WAF
-  tagline: 外部依存ゼロの純粋な Go 単一バイナリゲートウェイ — マルチ CA ACME、2層ローカル PKI、リモート＆組み込み WAF ルール、自動更新脅威インテリジェンス、Anubis スタイルの SHA-256 検証を統合。
+  tagline: HTTPS を終端し、複数の CA で ACME を回し、SHA-256 の proof-of-work でスクレイパーを止める 1 本の Go バイナリ。
   image:
     src: /mascot-happy.png
     alt: Gymbag マスコット
@@ -21,29 +21,29 @@ hero:
 
 features:
   - icon: ⚡
-    title: 高スループット純 Go エンジン
-    details: Aho-Corasick DFA パターンマッチング、シャーディングされたレート制限、プール化されたプロキシバッファを備えたゼロアロケーション WAF パイプラインにより、フル WAF 有効時で約 72.5k RPS（Caddy 比 +32〜69% 高速）と 140k+ RPS のエッジブロックを実現。
+    title: 速いプロキシ経路
+    details: Aho-Corasick のマッチング、シャード化したレート制限、再利用バッファで WAF を邪魔にしない構成。TLS 経由で約 72.5k RPS、エッジでの探査ブロックは 140k+ RPS。
   - icon: 🛡️
-    title: すぐ使える WAF・PoW (0–3)・カスタムタイムアウト
-    details: 組み込みルールが /.env、/wp-admin、スキャナー、SQLi/XSS プローブを遮断し、SHA-256 PoW が AI クローラーを検証。認証済み有効期限（30m、12h、7d など）も柔軟に設定可能。
+    title: 最初から WAF が効く
+    details: /.env、/wp-admin、スキャナー、SQLi/XSS 探査のルールを同梱。4 段階の検証レベルで SHA-256 チャレンジを出す相手を決め、許可は 30m・12h・7d から選べます。
   - icon: 🌐
-    title: リモートルール & 自動脅威インテリジェンス
-    details: HTTP/HTTPS 経由でリモートのファイアウォールルール（Gymbagfile 形式または JSON）を ETag キャッシュ付きで同期し、IPsum、Spamhaus DROP、Feodo、公式 AI クローラー CIDR を自動更新。
+    title: リモートルールと脅威フィード
+    details: HTTP 越しにファイアウォールルールを取り込み ETag でキャッシュ。IPsum、Spamhaus DROP、Feodo、公開されている AI クローラーの CIDR をタイマーで更新します。
   - icon: 🔒
-    title: マルチ CA ACME + ローカル PKI
-    details: Let's Encrypt、ZeroSSL（自動 EAB）、Google、SSL.com、LiteSSL、Buypass に対応した RFC 8555 HTTP-01 自動証明書発行、および *.internal ローカル CA と /etc/hosts 自動管理を提供。
+    title: 証明書の手間を減らす
+    details: Let's Encrypt、ZeroSSL、Google、SSL.com、LiteSSL、Buypass に対する ACME HTTP-01。*.internal なら自前の CA を作り /etc/hosts も書き込みます。
   - icon: 🐳
-    title: Docker & ネイティブシステムサービス
-    details: マルチアーキテクチャ GHCR コンテナイメージ（linux/amd64・arm64）と Docker Compose + Redis に加え、systemd、launchd、OpenRC、Supervisor、Arch、NixOS をネイティブサポート。
+    title: いつもの方法でデプロイ
+    details: GHCR のマルチアーキテクチャイメージ（amd64・arm64）、共有状態用の Redis 入り compose、Arch 向けパッケージ、systemd・launchd・OpenRC・Supervisor のユニット。
   - icon: 🔌
-    title: ライブ REST 管理 API & ホットリロード
-    details: --watch による Gymbagfile の自動ホットリロードや、HTTP API 経由での検証レベル・タイムアウト・ローカル/リモートルールの無停止動的変更に対応。
+    title: 動かしたまま設定を変える
+    details: --watch で Gymbagfile を編集するか、Admin API から検証レベル・タイムアウト・ローカルルール・リモート URL を変更。既存の接続は切れません。
 ---
 
 <QuickStartBuilder />
 
 ## インタラクティブ検証レベル
 
-下のボタンを切り替えて、通常のブラウザ、AI クローラー、自動化ツール、脅威 IP、攻撃プローブに対する Gymbag の挙動を確認できます：
+下のボタンを切り替えると、普通のブラウザ、AI クローラー、自動化ツール、脅威 IP、攻撃プローブに対して Gymbag がどう動くか確認できます：
 
 <VerifyLevelMatrix />

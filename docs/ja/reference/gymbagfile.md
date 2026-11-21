@@ -1,6 +1,6 @@
 # `Gymbagfile` & JSON スキーマ リファレンス
 
-Gymbag は既定で作業ディレクトリの `./Gymbagfile` または `./Caddyfile`（あるいは `--config <path>` / `GYMBAG_CONFIG`）を読み込み、`.json` ファイルにも対応しています。
+Gymbag は既定で作業ディレクトリの `./gymbag.json`、`./Gymbagfile`、または `./Caddyfile`（あるいは `--config <path>` / `GYMBAG_CONFIG`）を探索し、`gymbag.json`、`Gymbagfile` / `Caddyfile v2`、`nginx.conf`、Apache（`httpd.conf` / `apache2.conf`）をネイティブにパースします。
 
 ## グローバルオプションブロック `{ ... }`
 
@@ -75,6 +75,10 @@ Gymbag は既定で作業ディレクトリの `./Gymbagfile` または `./Caddy
 | `threat_feed` / `ai_ip_feed` | 追加カスタム IP フィード URL | — |
 | `remote_rules` | 全サイトに継承されるリモートファイアウォールルール URL | — |
 | `remote_rules_refresh` | リモートルールの更新間隔（秒または `5m`, `1h`；別名 `rules_refresh`） | `300` (`5m`) |
+| `rules_file` | 全サイトに継承されるローカル `.rules`/`.json` ルールファイル（`rules_file <path> [dynamic\|static]`） | — |
+| `rules_dir` | 全サイトに継承されるローカルルールディレクトリ（`rules_dir <path> [dynamic\|static]`） | — |
+| `ruleset <name> { ... }` | 名前付きローカルまたはリモートルールソースブロック（`source`/`file`/`dir`/`url`、`dynamic on\|off`） | — |
+| `rules_watch_interval` | `dynamic` なローカルルールファイルおよびディレクトリのポーリング間隔 | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | 認証済みクリアランスの既定タイムアウト（秒または `30m`, `12h`, `7d`） | `86400` (`24h`) |
 
 ---
@@ -111,7 +115,13 @@ app.example.com, www.example.com {
 | `cookie_name <name>` | クリアランス Cookie 名 |
 | `cookie_secure <bool>` | `Secure` 属性を付与するか |
 | `default_rules <on\|off>` | 組み込みベースラインルールの有効/無効 |
-| `remote_rules <urls...>` | リモートファイアウォールルール URL（別名 `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`） |
+| `remote_rules <urls...>` | リモートファイアウォールルール URL（Gymbagfile 構文または JSON；別名 `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`） |
+| `rules_file <path> [dynamic\|static]` | ローカルの `.rules` または `.json` ファイルを紐付け（ディスク変更時のホットリロード対応） |
+| `rules_dir <path> [dynamic\|static]` | ディレクトリ内のすべての `.rules`/`.json` ファイルを紐付け（ホットリロード対応） |
+| `ruleset <name> { ... }` | 名前付きルールソースブロック（`source`/`file`/`dir`/`url`、`dynamic on\|off`） |
+| `handle` / `handle_path` / `route` | 順序付きパスマッチルートブロック（`reverse_proxy`、`root` + `file_server`、`respond`、`redir`、`header`） |
+| `root` / `file_server` / `try_files` | 静的ファイル配信、ディレクトリ一覧表示（`browse`）、SPA フォールバック |
+| `respond` / `redir` / `header` | 固定レスポンス、HTTP リダイレクト（`{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}`）、レスポンスヘッダー変更 |
 | `ai_bots <patterns...>` | AI クローラーとみなす追加 User-Agent パターン |
 | `suspicious_uas <patterns...>` | 不審クライアントとみなす追加 User-Agent パターン |
 | `suspicious_paths <prefixes...>` | 不審プローブとみなす追加パスプレフィックス |
@@ -142,10 +152,16 @@ app.example.com, www.example.com {
 
 ## JSON 設定
 
-以下のコマンドで直接 `.json` 設定を生成できます：
+`gymbag init` は既定で `gymbag.json` を生成します（Caddy 風の構文にする場合は `--format gymbagfile` を指定してください）：
 
 ```bash
-./gymbag init --format json -d app.example.com -u :3000 --verify-timeout 12h
+./gymbag init -d app.example.com -u :3000 --verify-timeout 12h --rules-dir ./rules.d --rules-dynamic
 ```
 
-すべてのフィールドは JSON スキーマ（`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `redis_url`, `secret`, `trusted_proxies`, `defaults`）にそのまま対応し、サイト内には `waf.clearance_ttl`（秒）と `waf.remote_rules`（`[]string`）を含みます。
+すべてのフィールドは JSON スキーマ（`sites`、`bind_host`、`http_port`、`https_port`、`admin_addr`、`tls`、`intel`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`、`defaults`）にそのまま対応し、サイト内には `routes`（`path`、`strip_prefix`、`upstreams`、`root`、`index`、`browse`、`fallback`、`respond`、`redirect`、`headers`）、`headers`、`waf.clearance_ttl`（整数秒）、`waf.remote_rules`（`[]string`）、`waf.rule_sources`（`[{"source", "dynamic", "name"}]`）を含みます。
+
+既存の `nginx.conf`、Apache の `httpd.conf`/`apache2.conf`、または `Caddyfile` を `gymbag.json` に変換することもできます：
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```

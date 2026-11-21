@@ -37,7 +37,7 @@ Admin API は認証トークンなしで実行中のルーティングやファ�
 | `POST` | `/api/v1/sites` | 実行時に新しいサイトを追加（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 単一サイトの設定を取得 |
 | `PUT` | `/api/v1/sites/{domain}` | 単一サイトの設定を置換 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules` を部分更新 |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`rule_sources` を部分更新 |
 | `DELETE` | `/api/v1/sites/{domain}` | サイトを削除（`204 No Content`；最後の1サイトは削除不可） |
 | `GET` | `/api/v1/sites/{domain}/rules` | サイトのローカルカスタムルール一覧 |
 | `POST` | `/api/v1/sites/{domain}/rules` | カスタムルールを末尾に追加（`201 Created`） |
@@ -51,6 +51,11 @@ Admin API は認証トークンなしで実行中のルーティングやファ�
 curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
   -H "Content-Type: application/json" \
   -d '{"verify_level": 0, "difficulty": 5, "clearance_ttl": 1800}'
+
+# パスルート・レスポンスヘッダー・ローカルルールソースをライブで置換
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"routes": [{"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true}], "headers": {"X-Served-By": "gymbag"}, "rule_sources": [{"source": "./rules.d", "dynamic": true}]}'
 
 # Gymbagfile を編集せず即座に攻撃元 CIDR をブロック
 curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \

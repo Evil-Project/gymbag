@@ -50,10 +50,10 @@ go build -o gymbag ./cmd/gymbag
 ### 方法 A：フラグ指定（非対話モード）
 
 ```bash
-# 1. Gymbagfile を生成
+# 1. gymbag.json を生成（Caddy 風にしたい場合は --format gymbagfile を指定）
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Gymbag を起動
+# 2. Gymbag を起動（./gymbag.json、./Gymbagfile、./Caddyfile の順に自動読み込み）
 ./gymbag
 ```
 
@@ -82,7 +82,7 @@ go build -o gymbag ./cmd/gymbag
 ### 方法 D：システムサービスとして登録
 
 ```bash
-# 1. Gymbagfile を生成し systemd / launchd / openrc / supervisor に登録
+# 1. gymbag.json を生成し systemd / launchd / openrc / supervisor に登録
 ./gymbag init -d app.example.com -u :3000 --service auto
 
 # 2. 登録したサービスを起動
@@ -90,6 +90,19 @@ go build -o gymbag ./cmd/gymbag
 ```
 
 詳細は [システムサービス設定](/ja/guide/system-service) をご覧ください。
+
+---
+
+## 既存の nginx / Apache / Caddyfile 設定
+
+Gymbag は `nginx.conf`、Apache の `httpd.conf` / `apache2.conf`、Caddyfile v2 ファイルをネイティブに読み込めるため、既存の設定からそのまま移行できます：
+
+```bash
+./gymbag run -c /etc/nginx/nginx.conf
+./gymbag config convert -c Caddyfile -o gymbag.json --format json
+```
+
+パスルート、静的ファイル、リダイレクト、変換の詳細は [パスルートと設定インポート](/ja/guide/routes-and-imports) を参照してください。
 
 ---
 
@@ -109,17 +122,21 @@ go build -o gymbag ./cmd/gymbag
 
 | フラグ | 説明 |
 | :--- | :--- |
-| `-o`, `--output <path>` | 出力先パス（既定は `Gymbagfile`、`--format json` 時は `gymbag.json`） |
-| `--format <fmt>` | `gymbagfile`（既定）または `json` |
+| `-o`, `--output <path>` | 出力先パス（既定は `gymbag.json`、`--format gymbagfile` 時は `Gymbagfile`） |
+| `--format <fmt>` | `json`（既定）または `gymbagfile`（Caddy 風） |
 | `--preset <name>` | `standard`、`local`、`public`、`strict`、`ai-only`、`suspicious`、`proxy-only` |
 | `-d`, `--domain <domains>` | 公開ドメイン（カンマ区切り） |
 | `-u`, `--upstream <url>` | アップストリーム URL（例：`http://localhost:3000` や `:3000`） |
-| `--site <domain=url>` | 複数サイトブロックを追加（複数指定可） |
+| `--site <domain=url>` | 複数サイトブロックを追加（複数指定可、例：`--site app.example.com=:3000 --site api.example.com=:8080`） |
 | `-l`, `--verify <0-3\|off>` | 検証レベル（`0`、`1`、`2`、`3`、または `off`） |
 | `--difficulty <1-5>` | SHA-256 PoW の先頭ゼロ桁数難易度（既定 `4`） |
 | `--verify-timeout <dur>` | 認証済み有効期限（例：`30m`、`12h`、`7d`、または秒数；別名 `--clearance-ttl`） |
 | `--remote-rules <url>` | リモートファイアウォールルール URL（複数またはカンマ区切り） |
 | `--remote-rules-refresh <dur>` | リモートルールの更新間隔（既定 `5m`） |
+| `--rules-file <path>` | 専用ファイアウォールルールファイルのパス（複数指定可） |
+| `--rules-dir <path>` | ファイアウォールルールファイルのディレクトリ（複数指定可） |
+| `--rules-dynamic` | `--rules-file` / `--rules-dir` の変更時に自動リロード |
+| `--rules-watch-interval <dur>` | 動的ローカルルールファイル/フォルダのポーリング間隔（既定 `2s`） |
 | `--no-protect` | WAF 検証を無効化（`protect off`） |
 | `--no-default-rules` | 組み込みベースラインルールを無効化（`default_rules off`） |
 | `--ssl-provider <name>` | `letsencrypt`、`zerossl`、`google`、`ssl.com`、`litessl`、`buypass`、`local`、または URL |
@@ -137,6 +154,18 @@ go build -o gymbag ./cmd/gymbag
 | `--dry-run` | ファイルに書かず標準出力へ生成結果を出力 |
 | `-f`, `--force` | 既存の設定ファイルを上書き |
 | `--service <type>` | システムサービスを同時登録（`auto`、`systemd`、`launchd`、`openrc`、`supervisor`） |
+
+---
+
+## 既存設定のインポートと設定管理
+
+Gymbag は既存の **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）、**Caddyfile v2** 設定をネイティブに読み込めます（スニペット、`import`、`@matchers`、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir`、`header` に対応）。`gymbag run -c /etc/nginx/nginx.conf` でそのまま起動するか、ネイティブ形式へ変換します：
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
+
+サイト、パスルート、グローバル設定は `gymbag config list|add|update|remove|set|route` で管理できます。詳細は [パスルートと設定インポート](/ja/guide/routes-and-imports) と [CLI & 環境変数](/ja/reference/cli-env) を参照してください。
 
 ---
 
