@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Gymbag
   text: HTTPS 리버스 프록시 & Proof-of-Work WAF
-  tagline: 외부 Go 의존성이 전혀 없는 순수 Go 단일 바이너리 게이트웨이 — 멀티 CA ACME, 2단계 로컬 PKI, 원격 및 내장 WAF 규칙, 자동 업데이트 위협 인텔리전스, Anubis 스타일 SHA-256 검증을 하나로 제공합니다.
+  tagline: HTTPS를 종료하고 여러 CA로 ACME를 돌리며 SHA-256 proof-of-work로 스크레이퍼를 막는 Go 바이너리 하나.
   image:
     src: /mascot-happy.png
     alt: Gymbag 마스코트
@@ -21,29 +21,29 @@ hero:
 
 features:
   - icon: ⚡
-    title: 고성능 순수 Go 엔진
-    details: Aho-Corasick DFA 패턴 매칭, 샤딩된 속도 제한, 풀링된 프록시 버퍼 기반의 제로 할당 WAF 파이프라인으로 전체 WAF 활성화 상태에서도 ~72.5k RPS(Caddy 대비 +32~69% 빠름) 및 140k+ RPS 엣지 차단을 제공합니다.
+    title: 빠른 프록시 경로
+    details: Aho-Corasick 매칭, 샤드 단위 속도 제한, 재사용 버퍼로 WAF가 길을 막지 않습니다. TLS를 거쳐 약 72.5k RPS, 엣지에서 프로브를 막을 때는 140k+ RPS.
   - icon: 🛡️
-    title: 즉시 사용 가능한 WAF, PoW (0–3) & 커스텀 타임아웃
-    details: 내장 규칙이 /.env, /wp-admin, 스캐너, SQLi/XSS 프로브를 차단하며 SHA-256 PoW로 AI 크롤러를 검증합니다. 인증 완료 유효 시간(30m, 12h, 7d 등)도 자유롭게 설정할 수 있습니다.
+    title: 기본으로 켜지는 WAF
+    details: /.env, /wp-admin, 스캐너, SQLi/XSS 프로브 규칙이 들어 있습니다. 네 단계 검증 레벨이 SHA-256 챌린지를 받을 대상을 정하고, 통과 후 허용 시간은 30m, 12h, 7d 중에 고를 수 있습니다.
   - icon: 🌐
-    title: 원격 규칙 & 자동 위협 인텔리전스
-    details: HTTP/HTTPS로 원격 방화벽 규칙(Gymbagfile 구문 또는 JSON)을 ETag 캐싱과 함께 동기화하며 IPsum, Spamhaus DROP, Feodo, 공식 AI 크롤러 CIDR 목록을 자동 갱신합니다.
+    title: 원격 규칙과 위협 피드
+    details: HTTP로 방화벽 규칙을 받아 ETag로 캐시하고, IPsum, Spamhaus DROP, Feodo, 공개된 AI 크롤러 CIDR 목록을 타이머로 갱신합니다.
   - icon: 🔒
-    title: 멀티 CA ACME + 로컬 PKI
-    details: Let's Encrypt, ZeroSSL(자동 EAB), Google, SSL.com, LiteSSL, Buypass를 지원하는 RFC 8555 HTTP-01 자동 인증서 발급 및 *.internal 로컬 CA와 /etc/hosts 자동 관리를 제공합니다.
+    title: 인증서는 알아서
+    details: Let's Encrypt, ZeroSSL, Google, SSL.com, LiteSSL, Buypass를 대상으로 ACME HTTP-01을 돌립니다. *.internal 이름은 자체 CA를 만들고 /etc/hosts 항목까지 써 줍니다.
   - icon: 🐳
-    title: Docker & 네이티브 시스템 서비스
-    details: 멀티 아키텍처 GHCR 컨테이너 이미지(linux/amd64, arm64) 및 Docker Compose + Redis를 제공하며 systemd, launchd, OpenRC, Supervisor, Arch, NixOS를 지원합니다.
+    title: 익숙한 방식으로 배포
+    details: GHCR 멀티 아키텍처 이미지(amd64, arm64), 공유 상태용 Redis가 들어간 compose, Arch 패키지, systemd·launchd·OpenRC·Supervisor 유닛.
   - icon: 🔌
-    title: 실시간 REST 관리 API & 핫 리로드
-    details: --watch로 Gymbagfile을 자동 리로드하거나 HTTP API를 통해 연결을 끊지 않고 검증 레벨, 타임아웃, 로컬 및 원격 규칙을 실시간으로 수정할 수 있습니다.
+    title: 실행 중에 설정 변경
+    details: --watch로 Gymbagfile을 고치거나 Admin API로 검증 레벨, 타임아웃, 로컬 규칙, 원격 URL을 바꿉니다. 열려 있는 연결은 그대로 둡니다.
 ---
 
 <QuickStartBuilder />
 
 ## 대화형 검증 레벨
 
-아래 버튼을 클릭해 일반 브라우저, AI 크롤러, 자동화 도구, 위협 IP 및 공격 프로브에 대한 Gymbag의 동작을 확인해 보세요:
+아래 버튼을 눌러 일반 브라우저, AI 크롤러, 자동화 도구, 위협 IP, 공격 프로브에 Gymbag이 어떻게 반응하는지 확인해 보세요:
 
 <VerifyLevelMatrix />

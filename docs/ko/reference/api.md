@@ -37,7 +37,7 @@ Admin API는 인증 토큰 없이 실시간 라우팅과 방화벽 규칙을 변
 | `POST` | `/api/v1/sites` | 런타임에 새 웹사이트 추가 (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | 단일 웹사이트 설정 조회 |
 | `PUT` | `/api/v1/sites/{domain}` | 단일 웹사이트 설정 교체 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules` 부분 수정 |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, 또는 `rule_sources` 실시간 수정 |
 | `DELETE` | `/api/v1/sites/{domain}` | 웹사이트 제거 (`204 No Content`; 마지막 사이트는 삭제 불가) |
 | `GET` | `/api/v1/sites/{domain}/rules` | 사이트의 로컬 사용자 지정 규칙 목록 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 사용자 지정 방화벽 규칙 실시간 추가 (`201 Created`) |
@@ -51,6 +51,11 @@ Admin API는 인증 토큰 없이 실시간 라우팅과 방화벽 규칙을 변
 curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
   -H "Content-Type: application/json" \
   -d '{"verify_level": 0, "difficulty": 5, "clearance_ttl": 1800}'
+
+# 경로 라우트, 응답 헤더 및 로컬 규칙 소스를 실시간으로 교체
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"routes": [{"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true}], "headers": {"X-Served-By": "gymbag"}, "rule_sources": [{"source": "./rules.d", "dynamic": true}]}'
 
 # Gymbagfile 수정 없이 악성 CIDR 즉시 차단
 curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \

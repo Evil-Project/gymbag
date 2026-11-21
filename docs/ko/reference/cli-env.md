@@ -9,10 +9,11 @@
 ## CLI 하위 명령어
 
 ```bash
-# 설정 생성 (대화형 마법사 또는 플래그 기반)
+# 설정 생성 (대화형 마법사 또는 플래그 기반; 기본적으로 gymbag.json 작성)
 gymbag init [flags] [output_path]
+gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# ./Gymbagfile 또는 ./Caddyfile로 서버 시작
+# ./gymbag.json, ./Gymbagfile, 또는 ./Caddyfile 순으로 서버 시작
 gymbag
 
 # 명시적 설정 및 파일 변경 감지 핫 리로드 (2초 간격)
@@ -20,6 +21,12 @@ gymbag run --config Gymbagfile --watch
 
 # OS 시스템 서비스 관리 (systemd, launchd, openrc, supervisor)
 gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
+
+# gymbag.json 또는 Gymbagfile의 사이트, 라우트 및 전역 설정 관리
+gymbag config <list|show|add|update|remove|route|set|unset|convert> [flags]
+
+# 규칙 파일, 규칙 폴더 및 인라인 규칙 관리
+gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 
 # 설정 파일 없는 임시 리버스 프록시
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
@@ -38,7 +45,7 @@ gymbag version
 
 | 플래그 | 설명 |
 | :--- | :--- |
-| `-c`, `--config <path>` | `Gymbagfile`, `Caddyfile`, `.json` 설정 파일 경로 |
+| `-c`, `--config <path>` | `gymbag.json`, `Gymbagfile`, `Caddyfile`, 기본 `nginx.conf`, 또는 Apache `httpd.conf` / `apache2.conf` 경로 |
 | `-d`, `--domain <list>` | 도메인 목록 (`reverse-proxy`에서는 `--from`) |
 | `-u`, `--upstream <url>` | 업스트림 URL (`http://localhost:3000` 또는 `:3000`; `reverse-proxy`에서는 `--to`) |
 | `-l`, `--verify <0-3\|off>` | 검증 레벨 (`0`, `1`, `2`, `3` 또는 `off`) |
@@ -54,11 +61,60 @@ gymbag version
 
 ---
 
+## 설정 관리 (`gymbag config`)
+
+모든 `config` 하위 명령어는 `-c`, `--config <path>`를 지원합니다(기본값: 자동 감지된 설정 파일).
+
+```bash
+gymbag config list
+gymbag config add -d api.example.com -u :8080 -l 1
+gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+gymbag config remove -d api.example.com
+gymbag config set admin 127.0.0.1:2019
+gymbag config unset admin
+gymbag config route add -d app.example.com --path '/static/*' --strip-prefix /static --root ./dist --browse
+gymbag config route list -d app.example.com
+gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
+
+| 하위 명령어 | 설명 |
+| :--- | :--- |
+| `list` / `show` | 사이트 목록 조회 / 포맷된 설정 출력 |
+| `add` | 사이트 추가: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--no-protect`, `--no-default-rules`, `--cert`, `--key`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header Name=Value\|-Name`, `-f` |
+| `update` | 사이트 수정: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--protect on\|off`, `--default-rules on\|off`, `--cert`, `--key`, `--clear-tls`, `--header`, `--remove-header` |
+| `remove` | 사이트 제거 (`-d`) |
+| `route list\|add\|update\|remove` | 경로 라우트 관리: `-d`, `--path`, `--strip-prefix`, `-u`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header`, `--index` (`update` / `remove`용 0 기반 라우트 인덱스) |
+| `set <key> <value>` / `unset <key>` | 전역 옵션 변경 또는 초기화 (`email`, `ssl_provider`, `admin`, `http_port`, `https_port`, `rules_watch_interval`, `remote_rules_refresh`, …) |
+| `convert` | nginx, Apache, Caddyfile, Gymbagfile 또는 JSON 변환: `-c <in>`, `-o <out>` (생략 시 stdout), `--format json\|gymbagfile` (기본 `json`), `-f` |
+
+## 규칙 세트 관리 (`gymbag ruleset`)
+
+```bash
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset remove local-dir
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+```
+
+| 하위 명령어 | 설명 |
+| :--- | :--- |
+| `list` | 연결된 규칙 소스 목록 조회 (`-c`, `-d`) |
+| `add` | 규칙 파일, 폴더 또는 URL 연결: `--source`, `--name`, `--dynamic` / `--static`, `-d <domain>` 또는 `--global`, `-c` |
+| `update` | 연결된 규칙 세트 변경: `--target` (또는 위치 인자 source/name), `--source`, `--name`, `--dynamic` / `--static`, `-d` / `--global`, `-c` |
+| `remove` | 규칙 세트 연결 해제: `--source <source-or-name>`, `-d` / `--global`, `-c` |
+| `validate <path>` | 규칙 파일 또는 규칙 디렉터리 검증 |
+| `init <path>` | 시작용 규칙 세트 생성 (`-o`, `--format rules\|json`, `-f`) |
+| `rule list\|add\|update\|remove` | `--file` 내 단일 규칙 관리 (또는 `-c` / `-d`로 설정 파일 인라인 관리): `--name`, `--index`, `--action allow\|verify\|block`, `--ip`, `--ua`, `--path`, `--query`, `--method`, `--header`, `--cookie` |
+
+---
+
 ## 환경 변수 (`GYMBAG_*`)
 
 | 변수명 | 설명 |
 | :--- | :--- |
-| `GYMBAG_CONFIG` | `Gymbagfile`, `Caddyfile`, `.json` 설정 경로 |
+| `GYMBAG_CONFIG` | `gymbag.json`, `Gymbagfile`, `Caddyfile`, `nginx.conf`, 또는 Apache `httpd.conf` 경로 |
 | `GYMBAG_BIND` | 바인딩 주소 (로컬 `127.0.0.1`, 공인 도메인 포함 시 `0.0.0.0`) |
 | `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP / HTTPS 수신 포트 (기본 `80`, `443`) |
 | `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | 쉼표로 구분된 도메인 목록 |
@@ -69,6 +125,7 @@ gymbag version
 | `GYMBAG_VERIFY_LEVEL` | 검증 레벨: `0`–`3` (별칭: `GYMBAG_VERIFY`, `GYMBAG_VERIFY_MODE`, `GYMBAG_MODE`, `GYMBAG_TRIGGER`) |
 | `GYMBAG_DEFAULT_RULES` | 내장 기본 방화벽 규칙 활성화/비활성화 (`on` / `off`) |
 | `GYMBAG_REMOTE_RULES` | 쉼표/공백 구분 HTTP/HTTPS 원격 방화벽 규칙 URL |
+| `GYMBAG_RULES_WATCH_INTERVAL` | 동적 로컬 규칙 파일/폴더 폴링 주기 (초 또는 기간; 기본 `2` / `2s`) |
 | `GYMBAG_REMOTE_RULES_REFRESH` | 원격 규칙 갱신 주기 (초 또는 기간; 기본 `300` / `5m`) |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW 난이도 (`1`–`5`, 기본 `4`) |
 | `GYMBAG_CHALLENGE_TTL` | 챌린지 논스 만료 시간 (초 또는 기간; 기본 `300` / `5m`) |

@@ -50,10 +50,10 @@ go build -o gymbag ./cmd/gymbag
 ### 옵션 A: 플래그 기반 (비대화형)
 
 ```bash
-# 1. Gymbagfile 생성
+# 1. gymbag.json 생성 (Caddy 스타일 Gymbagfile을 원하면 --format gymbagfile 추가)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Gymbag 실행
+# 2. Gymbag 실행 (./gymbag.json, ./Gymbagfile, ./Caddyfile 순으로 자동 로드)
 ./gymbag
 ```
 
@@ -82,7 +82,7 @@ go build -o gymbag ./cmd/gymbag
 ### 옵션 D: 시스템 서비스 등록
 
 ```bash
-# 1. Gymbagfile 생성 및 systemd / launchd / openrc / supervisor 등록
+# 1. gymbag.json 생성 및 systemd / launchd / openrc / supervisor 등록
 ./gymbag init -d app.example.com -u :3000 --service auto
 
 # 2. 등록된 서비스 시작
@@ -90,6 +90,19 @@ go build -o gymbag ./cmd/gymbag
 ```
 
 자세한 내용은 [시스템 서비스 설정](/ko/guide/system-service)을 참고하세요.
+
+---
+
+## 기존 nginx / Apache / Caddyfile 설정
+
+Gymbag은 `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, Caddyfile v2 파일을 기본으로 읽을 수 있어 기존 설정에서 바로 시작할 수 있습니다:
+
+```bash
+./gymbag run -c /etc/nginx/nginx.conf
+./gymbag config convert -c Caddyfile -o gymbag.json --format json
+```
+
+경로 라우트, 정적 파일, 리디렉션 및 변환에 대한 자세한 내용은 [경로 라우트 및 설정 가져오기](/ko/guide/routes-and-imports)를 참고하세요.
 
 ---
 
@@ -109,17 +122,21 @@ go build -o gymbag ./cmd/gymbag
 
 | 플래그 | 설명 |
 | :--- | :--- |
-| `-o`, `--output <path>` | 출력 경로 (기본 `Gymbagfile`, `--format json` 시 `gymbag.json`) |
-| `--format <fmt>` | `gymbagfile` (기본값) 또는 `json` |
+| `-o`, `--output <path>` | 출력 경로 (기본값 `gymbag.json`, `--format gymbagfile` 사용 시 `Gymbagfile`) |
+| `--format <fmt>` | `json` (기본값) 또는 `gymbagfile` |
 | `--preset <name>` | `standard`, `local`, `public`, `strict`, `ai-only`, `suspicious`, `proxy-only` |
 | `-d`, `--domain <domains>` | 도메인 (쉼표로 구분) |
 | `-u`, `--upstream <url>` | 업스트림 URL (`http://localhost:3000` 또는 `:3000`) |
-| `--site <domain=url>` | 여러 사이트 블록 추가 (반복 사용 가능) |
+| `--site <domain=url>` | 여러 사이트 블록 추가 (반복 사용 가능, 예: `--site app.example.com=:3000 --site api.example.com=:8080`) |
 | `-l`, `--verify <0-3\|off>` | 검증 레벨 (`0`, `1`, `2`, `3` 또는 `off`) |
 | `--difficulty <1-5>` | SHA-256 PoW 선행 0 개수 난이도 (기본 `4`) |
 | `--verify-timeout <dur>` | 인증 완료 유효 시간 (`30m`, `12h`, `7d` 또는 초; 별칭 `--clearance-ttl`) |
 | `--remote-rules <url>` | 원격 방화벽 규칙 URL (반복 또는 쉼표 구분) |
 | `--remote-rules-refresh <dur>` | 원격 규칙 갱신 주기 (기본 `5m`) |
+| `--rules-file <path>` | 전용 방화벽 규칙 파일 경로 (반복 사용 가능) |
+| `--rules-dir <path>` | 방화벽 규칙 파일이 포함된 디렉터리 (반복 사용 가능) |
+| `--rules-dynamic` | 파일 변경 시 `--rules-file` / `--rules-dir` 자동 리로드 |
+| `--rules-watch-interval <dur>` | 동적 로컬 규칙 파일/폴더 폴링 주기 (기본 `2s`) |
 | `--no-protect` | WAF 검증 비활성화 (`protect off`) |
 | `--no-default-rules` | 내장 기본 방화벽 규칙 비활성화 (`default_rules off`) |
 | `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, 또는 사용자 지정 URL |

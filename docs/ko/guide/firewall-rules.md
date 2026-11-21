@@ -160,6 +160,60 @@ rule "challenge-xml-posts" {
 
 ---
 
+## 로컬 규칙 파일, 규칙 폴더 및 동적 핫 리로드
+
+전용 `.rules` / `.json` 파일이나 전체 규칙 디렉터리에 규칙을 저장하고 경로로 참조할 수 있습니다. 소스에 `dynamic`을 지정하면 서버를 재시작하지 않고도 디스크의 변경 사항을 감시하여 핫 리로드합니다(파일 구문이 잘못된 경우 Gymbag은 마지막으로 정상 작동한 규칙 세트를 유지합니다). 로컬 규칙은 인라인 규칙과 함께 원격 규칙보다 먼저 평가됩니다.
+
+::: code-group
+```caddyfile [Gymbagfile]
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+```json [gymbag.json]
+{
+  "sites": [
+    {
+      "domains": ["app.example.com"],
+      "rule_sources": [
+        {"source": "./rules.d", "dynamic": true, "name": "shared"}
+      ]
+    }
+  ]
+}
+```
+
+```bash [CLI]
+# 로컬 규칙 소스를 연결하는 설정 생성
+gymbag init -d app.example.com -u :3000 \
+  --rules-file ./rules/custom.rules --rules-dir ./rules.d \
+  --rules-dynamic --rules-watch-interval 2s
+
+# 규칙 파일 및 연결 관리
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+gymbag ruleset remove local-dir
+```
+:::
+
+폴링 주기는 `rules_watch_interval`입니다(기본 `2s`; `GYMBAG_RULES_WATCH_INTERVAL` 또는 `gymbag config set rules_watch_interval 2s`). `rule_sources` 항목은 `PATCH /api/v1/sites/{domain}`을 통해 실시간으로 수정할 수도 있습니다. 모든 `ruleset` 하위 명령어는 [CLI & 환경 변수](/ko/reference/cli-env)를 참고하세요.
+
+---
+
 ## 내장 규칙 제어 (`default_rules on|off`)
 
 `default_rules`는 기본값이 `on`입니다:

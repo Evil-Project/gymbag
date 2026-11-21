@@ -1,6 +1,6 @@
 # `Gymbagfile` & JSON 스키마 레퍼런스
 
-Gymbag은 기본적으로 작업 디렉터리의 `./Gymbagfile` 또는 `./Caddyfile`(또는 `--config <path>` / `GYMBAG_CONFIG`)을 읽으며 `.json` 형식도 지원합니다.
+Gymbag은 기본적으로 작업 디렉터리의 `./gymbag.json`, `./Gymbagfile` 또는 `./Caddyfile`(또는 `--config <path>` / `GYMBAG_CONFIG`)을 탐색하며 `gymbag.json`, `Gymbagfile` / `Caddyfile v2`, `nginx.conf`, Apache (`httpd.conf` / `apache2.conf`)를 기본으로 파싱합니다.
 
 ## 전역 옵션 블록 `{ ... }`
 
@@ -75,6 +75,10 @@ Gymbag은 기본적으로 작업 디렉터리의 `./Gymbagfile` 또는 `./Caddyf
 | `threat_feed` / `ai_ip_feed` | 추가 사용자 지정 IP 피드 URL | — |
 | `remote_rules` | 모든 사이트가 상속하는 원격 방화벽 규칙 URL | — |
 | `remote_rules_refresh` | 원격 규칙 갱신 주기 (초 또는 `5m`, `1h`; 별칭 `rules_refresh`) | `300` (`5m`) |
+| `rules_file` | 모든 사이트가 상속하는 로컬 `.rules`/`.json` 규칙 파일 (`rules_file <path> [dynamic\|static]`) | — |
+| `rules_dir` | 모든 사이트가 상속하는 로컬 규칙 디렉터리 (`rules_dir <path> [dynamic\|static]`) | — |
+| `ruleset <name> { ... }` | 이름이 지정된 로컬 또는 원격 규칙 소스 블록 (`source`/`file`/`dir`/`url`, `dynamic on\|off`) | — |
+| `rules_watch_interval` | `dynamic` 로컬 규칙 파일 및 디렉터리 폴링 주기 | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | 기본 인증 완료 쿠키 타임아웃 (초 또는 `30m`, `12h`, `7d`) | `86400` (`24h`) |
 
 ---
@@ -112,6 +116,12 @@ app.example.com, www.example.com {
 | `cookie_secure <bool>` | `Secure` 플래그 설정 여부 |
 | `default_rules <on\|off>` | 내장 기본 규칙 토글 |
 | `remote_rules <urls...>` | 원격 방화벽 규칙 URL (별칭 `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`) |
+| `rules_file <path> [dynamic\|static]` | 로컬 `.rules` 또는 `.json` 파일 연결 (디스크 변경 시 선택적 핫 리로드) |
+| `rules_dir <path> [dynamic\|static]` | 디렉터리 내 모든 `.rules`/`.json` 파일 연결 (선택적 핫 리로드) |
+| `ruleset <name> { ... }` | 이름이 지정된 규칙 소스 블록 (`source`/`file`/`dir`/`url`, `dynamic on\|off`) |
+| `handle` / `handle_path` / `route` | 순서대로 평가되는 경로 매칭 라우트 블록 (`reverse_proxy`, `root` + `file_server`, `respond`, `redir`, `header`) |
+| `root` / `file_server` / `try_files` | 정적 파일 제공, 디렉터리 목록(`browse`), SPA 폴백 |
+| `respond` / `redir` / `header` | 고정 응답, HTTP 리디렉션(`{scheme}`, `{host}`, `{uri}`, `{path}`, `{query}`), 응답 헤더 변경 |
 | `ai_bots <patterns...>` | AI 크롤러로 취급할 추가 User-Agent 패턴 |
 | `suspicious_uas <patterns...>` | 의심 클라이언트로 취급할 추가 User-Agent 패턴 |
 | `suspicious_paths <prefixes...>` | 의심 프로브로 취급할 추가 경로 접두사 |
@@ -142,8 +152,16 @@ app.example.com, www.example.com {
 
 ## JSON 구성
 
+`gymbag init`은 기본적으로 `gymbag.json`을 생성합니다(Caddy 스타일 구문을 원하면 `--format gymbagfile` 사용):
+
 ```bash
-./gymbag init --format json -d app.example.com -u :3000 --verify-timeout 12h
+./gymbag init -d app.example.com -u :3000 --verify-timeout 12h --rules-dir ./rules.d --rules-dynamic
 ```
 
-모든 필드는 JSON 스키마(`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `redis_url`, `secret`, `trusted_proxies`, `defaults`)에 1:1 대응하며 사이트별 `waf.clearance_ttl`(초) 및 `waf.remote_rules`(`[]string`)를 포함합니다.
+모든 필드는 JSON 스키마(`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `defaults`)에 직접 매핑되며 사이트별 `routes`(`path`, `strip_prefix`, `upstreams`, `root`, `index`, `browse`, `fallback`, `respond`, `redirect`, `headers`), `headers`, `waf.clearance_ttl`(정수 초), `waf.remote_rules`(`[]string`), `waf.rule_sources`(`[{"source", "dynamic", "name"}]`)를 포함합니다.
+
+기존 `nginx.conf`, Apache `httpd.conf`/`apache2.conf`, 또는 `Caddyfile`을 `gymbag.json`으로 변환할 수도 있습니다:
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
