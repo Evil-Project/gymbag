@@ -1,10 +1,10 @@
 # Multi-CA ACME, Custom Certificates & Renewal
 
-For public domains, `tls auto` (the default) automatically provisions and renews TLS certificates over RFC 8555 ACME HTTP-01.
+For public domains, `tls auto` (the default) gets and renews certificates over RFC 8555 ACME HTTP-01.
 
 ## Supported Certificate Authorities
 
-Switch Certificate Authorities with `ssl_provider` (aliases: `acme_provider`, `ca`, `cert_issuer`) or `--ssl-provider`:
+Pick a CA with `ssl_provider` (aliases: `acme_provider`, `ca`, `cert_issuer`) or `--ssl-provider`:
 
 | Provider Keyword | Certificate Authority | EAB Requirement |
 | :--- | :--- | :--- |
@@ -23,7 +23,6 @@ Switch Certificate Authorities with `ssl_provider` (aliases: `acme_provider`, `c
 ## Provider Configuration Examples
 
 ### ZeroSSL with Automatic Email EAB
-
 ```caddyfile
 {
     email ops@example.com
@@ -38,7 +37,7 @@ example.com {
 
 ### Google Trust Services / SSL.com (Explicit EAB)
 
-Both standard padded base64 and URL-safe unpadded base64 HMAC keys are accepted. `eab_hmac_key` is automatically redacted in Admin API responses.
+Both padded base64 and URL-safe unpadded base64 HMAC keys work. `eab_hmac_key` is redacted in Admin API responses.
 
 ```caddyfile
 {
@@ -57,7 +56,7 @@ Both standard padded base64 and URL-safe unpadded base64 HMAC keys are accepted.
 }
 ```
 
-ACME certificates are cached under `<cert_dir>` scoped by provider name (for example `certs/acme-zerossl-fullchain.pem`), so switching `ssl_provider` immediately provisions a cert from the new CA.
+Certificates are cached under `<cert_dir>` keyed by provider name (e.g. `certs/acme-zerossl-fullchain.pem`), so switching `ssl_provider` immediately issues from the new CA.
 
 ---
 
@@ -82,4 +81,4 @@ corp.example.com {
 
 ## Zero-Downtime Background Renewal
 
-Gymbag checks certificates every `renew_interval` seconds (default `43200` = 12 hours). When a certificate is within `renew_within_days` of expiration (default `30` days), it renews or reloads in the background and swaps the active `tls.Certificate` pointer atomically without dropping active HTTP streams or WebSocket connections.
+Gymbag checks certificates every `renew_interval` seconds (default `43200`, i.e. 12 hours). Within `renew_within_days` of expiry (default `30` days) it renews or reloads in the background and swaps the active `tls.Certificate` pointer atomically, so HTTP streams and WebSocket connections stay up.

@@ -160,6 +160,60 @@ rule "challenge-xml-posts" {
 
 ---
 
+## Local Rule Files, Rules Folders & Dynamic Hot-Reload
+
+Store rules in a dedicated `.rules` / `.json` file or an entire rules directory and reference them by path. Mark a source `dynamic` to watch it and hot-reload changes on disk without restarting the server (if a file has invalid syntax, Gymbag retains the last known good ruleset). Local rules evaluate alongside your inline rules, before remote rules.
+
+::: code-group
+```caddyfile [Gymbagfile]
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+```json [gymbag.json]
+{
+  "sites": [
+    {
+      "domains": ["app.example.com"],
+      "rule_sources": [
+        {"source": "./rules.d", "dynamic": true, "name": "shared"}
+      ]
+    }
+  ]
+}
+```
+
+```bash [CLI]
+# Generate a config that links local rule sources
+gymbag init -d app.example.com -u :3000 \
+  --rules-file ./rules/custom.rules --rules-dir ./rules.d \
+  --rules-dynamic --rules-watch-interval 2s
+
+# Manage rule files and links
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+gymbag ruleset remove local-dir
+```
+:::
+
+The polling interval is `rules_watch_interval` (default `2s`; `GYMBAG_RULES_WATCH_INTERVAL` or `gymbag config set rules_watch_interval 2s`). `rule_sources` entries can also be patched live via `PATCH /api/v1/sites/{domain}`. See [CLI & Environment](/reference/cli-env) for all `ruleset` subcommands.
+
+---
+
 ## Built-In Rules (`default_rules on|off`)
 
 `default_rules` is `on` by default:

@@ -1,6 +1,6 @@
 # `Gymbagfile` & JSON Schema Reference
 
-By default, Gymbag probes `./Gymbagfile` or `./Caddyfile` in the working directory (or `--config <path>` / `GYMBAG_CONFIG`), and also accepts `.json` files.
+By default, Gymbag probes `./gymbag.json`, `./Gymbagfile`, or `./Caddyfile` in the working directory (or `--config <path>` / `GYMBAG_CONFIG`), and natively parses `gymbag.json`, `Gymbagfile` / `Caddyfile v2`, `nginx.conf`, and Apache (`httpd.conf` / `apache2.conf`).
 
 ## Global Options Block `{ ... }`
 
@@ -75,6 +75,10 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
 | `threat_feed` / `ai_ip_feed` | Additional custom IP feed URLs | — |
 | `remote_rules` | One or more HTTP/HTTPS remote firewall rule URLs inherited by all sites | — |
 | `remote_rules_refresh` | Refresh interval for remote rule URLs (seconds or duration like `5m`, `1h`; alias `rules_refresh`) | `300` (`5m`) |
+| `rules_file` | Local `.rules`/`.json` rule file (`rules_file <path> [dynamic\|static]`) inherited by all sites | — |
+| `rules_dir` | Local rules directory (`rules_dir <path> [dynamic\|static]`) inherited by all sites | — |
+| `ruleset <name> { ... }` | Named local or remote rule source block (`source`/`file`/`dir`/`url`, `dynamic on\|off`) | — |
+| `rules_watch_interval` | Polling interval for `dynamic` local rule files and directories | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | Default verified clearance cookie timeout (seconds or duration like `30m`, `12h`, `7d`) | `86400` (`24h`) |
 
 ---
@@ -112,6 +116,12 @@ app.example.com, www.example.com {
 | `cookie_secure <bool>` | Whether clearance cookie sets `Secure` |
 | `default_rules <on\|off>` | Toggle built-in baseline rules |
 | `remote_rules <urls...>` | One or more remote firewall rules URLs (Gymbagfile syntax or JSON; aliases: `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`) |
+| `rules_file <path> [dynamic\|static]` | Attach a local `.rules` or `.json` file (optionally hot-reloaded on disk changes) |
+| `rules_dir <path> [dynamic\|static]` | Attach all `.rules`/`.json` files in a directory (optionally hot-reloaded) |
+| `ruleset <name> { ... }` | Named rule source block (`source`/`file`/`dir`/`url`, `dynamic on\|off`) |
+| `handle` / `handle_path` / `route` | Ordered path-matched route blocks (`reverse_proxy`, `root` + `file_server`, `respond`, `redir`, `header`) |
+| `root` / `file_server` / `try_files` | Static file serving, directory browsing (`browse`), and SPA fallback |
+| `respond` / `redir` / `header` | Fixed responses, HTTP redirects (`{scheme}`, `{host}`, `{uri}`, `{path}`, `{query}`), and response header mutations |
 | `ai_bots <patterns...>` | Additional User-Agent substrings treated as AI crawlers |
 | `suspicious_uas <patterns...>` | Additional User-Agent substrings treated as suspicious clients |
 | `suspicious_paths <prefixes...>` | Additional path prefixes treated as suspicious probes |
@@ -142,10 +152,16 @@ Time directives (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, `rate_wind
 
 ## JSON Configuration
 
-You can generate a `.json` config directly with:
+`gymbag init` generates `gymbag.json` by default (use `--format gymbagfile` for Caddy-style syntax):
 
 ```bash
-./gymbag init --format json -d app.example.com -u :3000 --verify-timeout 12h
+./gymbag init -d app.example.com -u :3000 --verify-timeout 12h --rules-dir ./rules.d --rules-dynamic
 ```
 
-All fields map directly to the JSON schema (`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `redis_url`, `secret`, `trusted_proxies`, `defaults`), with per-site `waf.clearance_ttl` (integer seconds) and `waf.remote_rules` (`[]string`).
+All fields map directly to the JSON schema (`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `defaults`), with per-site `routes` (`path`, `strip_prefix`, `upstreams`, `root`, `index`, `browse`, `fallback`, `respond`, `redirect`, `headers`), `headers`, `waf.clearance_ttl` (integer seconds), `waf.remote_rules` (`[]string`), and `waf.rule_sources` (`[{"source", "dynamic", "name"}]`).
+
+You can also convert an existing `nginx.conf`, Apache `httpd.conf`/`apache2.conf`, or `Caddyfile` into `gymbag.json`:
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```

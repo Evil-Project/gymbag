@@ -1,6 +1,6 @@
 # Local Development & Two-Tier PKI
 
-Testing HTTPS locally with custom hostnames usually means juggling `mkcert`, manual `/etc/hosts` edits, and browser warnings. Gymbag handles both local hostname resolution and local X.509 issuance automatically whenever a site uses:
+Doing HTTPS locally with custom hostnames usually means `mkcert`, hand-edited `/etc/hosts`, and a browser warning or two. Gymbag handles both the hostname and the certificate on its own whenever a site uses:
 
 - `localhost` or `*.localhost`
 - `*.internal` (e.g. `app.internal`, `api.internal`)
@@ -20,20 +20,20 @@ api.internal {
 
 ## Automatic `/etc/hosts` Management
 
-When `auto_hosts` is enabled (the default), Gymbag inspects `/etc/hosts` (or `C:\Windows\System32\drivers\etc\hosts` on Windows) on startup. For any concrete local domain not already present, it appends IPv4 and IPv6 loopback entries tagged with its instance ID:
+With `auto_hosts` on (the default), Gymbag reads `/etc/hosts` (or `C:\Windows\System32\drivers\etc\hosts` on Windows) at startup. Any local domain that is not there yet gets IPv4 and IPv6 loopback entries tagged with the instance ID:
 
 ```text
 127.0.0.1 app.internal # gymbag-managed:9f3a1c2b
 ::1 app.internal # gymbag-managed:9f3a1c2b
 ```
 
-- Existing `localhost` entries are left untouched.
-- On shutdown (`Ctrl+C` / `SIGTERM`), Gymbag re-reads `/etc/hosts` to preserve any edits you made while it was running and removes **only** its own `# gymbag-managed:<instanceID>` lines.
-- If Gymbag starts without root privileges to write `/etc/hosts`, it logs a warning and **continues running normally**. Set `auto_hosts off` (or `GYMBAG_AUTO_HOSTS=off`) if you resolve `.internal` via `dnsmasq` or manage `/etc/hosts` manually.
+- `localhost` entries are left alone.
+- On shutdown (`Ctrl+C` / `SIGTERM`), Gymbag re-reads `/etc/hosts` so edits you made while it ran survive, and removes **only** its own `# gymbag-managed:<instanceID>` lines.
+- If Gymbag cannot write `/etc/hosts` (no root), it logs a warning and **keeps running**. Set `auto_hosts off` (or `GYMBAG_AUTO_HOSTS=off`) if you resolve `.internal` through `dnsmasq` or edit `/etc/hosts` yourself.
 
 ## Two-Tier Local Certificate Authority
 
-Inside `<cert_dir>/ca/` (default `certs/ca/`), Gymbag maintains a two-tier ECDSA P-256 PKI:
+Under `<cert_dir>/ca/` (default `certs/ca/`) Gymbag keeps a two-tier ECDSA P-256 PKI:
 
 1. **Root CA**: `"Neuro-sama Headquarters Root CA"` (`certs/ca/neuro-sama-root-ca.pem`, 10-year validity, `MaxPathLen: 1`)
 2. **Intermediate CA**: `"Gymbag & Swarm SSL Local CA"` (`certs/ca/gymbag-swarm-local-ca.pem`, 5-year validity, `MaxPathLen: 0`)
@@ -41,7 +41,7 @@ Inside `<cert_dir>/ca/` (default `certs/ca/`), Gymbag maintains a two-tier ECDSA
 
 ### Trusting the Root CA Once
 
-Trust `certs/ca/neuro-sama-root-ca.pem` once in your OS keychain for a clean green lock across browsers and `curl`:
+Add `certs/ca/neuro-sama-root-ca.pem` to your OS keychain once and browsers plus `curl` go green:
 
 ::: code-group
 ```bash [macOS]

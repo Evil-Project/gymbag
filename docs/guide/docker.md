@@ -1,12 +1,12 @@
 # Docker & Docker Compose
 
-Gymbag publishes official multi-architecture (`linux/amd64` and `linux/arm64`) Alpine-based container images to GitHub Container Registry (`GHCR`) on every release and push to `main`:
+Every release, and every push to `main`, publishes multi-arch (`linux/amd64`, `linux/arm64`) Alpine images to GitHub Container Registry (`GHCR`):
 
 - **Image**: `ghcr.io/evil-project/gymbag`
 - **Tags**: `latest`, `<semver>` (e.g. `0.1.0`), `<major>.<minor>`, `<major>`, `main`, and commit SHAs
 - **Runtime user**: non-root `gymbag` (UID `10001`) with `cap_net_bind_service=+ep`
-- **Exposed ports**: `80` (HTTP redirect + ACME HTTP-01) and `443` (HTTPS gateway)
-- **Built-in healthcheck**: TCP probe against `127.0.0.1:80` every 30 seconds
+- **Ports**: `80` (HTTP redirect + ACME HTTP-01) and `443` (HTTPS gateway)
+- **Healthcheck**: TCP probe against `127.0.0.1:80` every 30 seconds
 
 ---
 
@@ -46,9 +46,9 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### Option B: Zero-Config Environment Variables
+### Option B: Environment Variables Only
 
-You can run Gymbag without mounting any config file by configuring sites and policies via `GYMBAG_*` environment variables:
+If you would rather not mount a config file, set up sites and policies with `GYMBAG_*` variables:
 
 ```bash
 docker run -d \
@@ -68,9 +68,9 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### Option C: Enable Hot-Reload (`--watch`)
+### Option C: Hot Reload (`--watch`)
 
-Override the container `CMD` to pass `--watch` so editing your mounted `Gymbagfile` reloads routes, firewall rules, and SNI certificates automatically without restarting the container:
+Override the container `CMD` to pass `--watch`. Editing the mounted `Gymbagfile` then reloads routes, firewall rules, and SNI certificates without a restart:
 
 ```bash
 docker run -d \
@@ -91,7 +91,7 @@ When mounting a single file (`./Gymbagfile:/app/Gymbagfile:ro`), editors that wr
 
 ## Docker Compose with Redis (Production Multi-Container Setup)
 
-The repository ships with a production-ready `compose.yaml` running Gymbag alongside `redis:8-alpine`. When `GYMBAG_REDIS_URL` is configured, Gymbag uses its built-in pure-Go RESP2 Redis client so single-use PoW challenges and per-IP rate-limit windows persist across container restarts and scale across multiple replicas.
+The repo has a `compose.yaml` that runs Gymbag next to `redis:8-alpine`. Once `GYMBAG_REDIS_URL` is set, Gymbag talks to Redis through its own small pure-Go RESP2 client, so single-use PoW challenges and per-IP rate-limit windows survive container restarts and work across replicas.
 
 ```yaml
 services:
@@ -145,7 +145,7 @@ volumes:
   gymbag-redis:
 ```
 
-Inside `Gymbagfile`, point `reverse_proxy` directly at the Compose service name (`http://app:3000`), or use `http://host.docker.internal:3000` for services running directly on the Docker host:
+In `Gymbagfile`, either point `reverse_proxy` at the Compose service name (`http://app:3000`) or use `http://host.docker.internal:3000` for things running on the host itself:
 
 ```caddyfile
 app.example.com {
@@ -155,7 +155,7 @@ app.example.com {
 }
 ```
 
-Start the stack (or build locally from the repository):
+Start the stack, or build it from your working copy:
 
 ```bash
 # Using prebuilt GHCR image
@@ -165,7 +165,7 @@ docker compose up -d
 docker compose up -d --build
 ```
 
-Any `GYMBAG_*` variables in a `.env` file next to `compose.yaml` are automatically picked up:
+A `.env` file sitting next to `compose.yaml` gets picked up automatically:
 
 ```dotenv
 GYMBAG_ACME_EMAIL=ops@example.com
@@ -179,7 +179,7 @@ GYMBAG_REMOTE_RULES=https://rules.example.com/waf.rules
 
 ## Proxying Multiple Containers Without a `Gymbagfile`
 
-You can map multiple domains to different container services purely via `GYMBAG_UPSTREAMS`:
+If you just want domains mapped to services, `GYMBAG_UPSTREAMS` does the whole job:
 
 ```yaml
 environment:
@@ -193,15 +193,15 @@ environment:
 
 ## Volumes, Permissions & Security Notes
 
-- **Persistent `/app/certs` volume**: Stores ACME account keys, issued certificates, local PKI CA files, the auto-generated HMAC clearance secret (`/app/certs/secret`), IP threat-intel cache (`/app/certs/intel-cache`), and remote rules cache (`/app/certs/rules-cache`). Always mount a persistent named volume or host directory here so container recreations do not trigger redundant ACME issuances or invalidate active visitor clearance cookies.
-- **Host bind mount permissions**: The container runs as UID/GID `10001`. If you bind-mount a host directory (`./certs:/app/certs`) instead of a Docker named volume, ensure UID `10001` can write to it:
+- **Persistent `/app/certs` volume**: Holds ACME account keys, issued certificates, local PKI CA files, the generated HMAC clearance secret (`/app/certs/secret`), the IP threat-intel cache (`/app/certs/intel-cache`), and the remote rules cache (`/app/certs/rules-cache`). Keep it on a named volume or host directory, otherwise every container recreation re-issues certificates and logs visitors out.
+- **Host bind mount permissions**: The container runs as UID/GID `10001`. With a host bind mount (`./certs:/app/certs`) instead of a named volume, let that UID write to it:
   ```bash
   mkdir -p ./certs
   sudo chown -R 10001:10001 ./certs
   ```
-- **ACME HTTP-01 requires ports `80` and `443`**: Public ACME CAs validate ownership over port `80` (`/.well-known/acme-challenge/*`). Map host ports `80:80` and `443:443` directly to the container.
-- **Local `*.internal` development in Docker**: Set `GYMBAG_AUTO_HOSTS=off` (containers cannot edit the host's `/etc/hosts`), map unprivileged ports if desired (`-p 8080:80 -p 8443:443`), and copy `/app/certs/ca/neuro-sama-root-ca.pem` out of the volume to trust once on your host OS.
-- **Admin REST API**: If you enable `GYMBAG_ADMIN=0.0.0.0:2019` inside a container, bind the published port strictly to host loopback (`-p 127.0.0.1:2019:2019`) so it is never exposed publicly.
+- **ACME HTTP-01 needs ports `80` and `443`**: Public CAs check ownership on port `80` (`/.well-known/acme-challenge/*`), so map `80:80` and `443:443` straight through.
+- **Local `*.internal` development in Docker**: Set `GYMBAG_AUTO_HOSTS=off` (a container cannot edit the host's `/etc/hosts`), map unprivileged ports if you like (`-p 8080:80 -p 8443:443`), and copy `/app/certs/ca/neuro-sama-root-ca.pem` out of the volume so you can trust it on the host.
+- **Admin REST API**: If you turn on `GYMBAG_ADMIN=0.0.0.0:2019` in a container, publish it only on host loopback (`-p 127.0.0.1:2019:2019`) so it never faces the internet.
 
 ---
 
@@ -213,4 +213,4 @@ docker build \
   -t gymbag:local .
 ```
 
-The multi-stage `Dockerfile` compiles a static `CGO_ENABLED=0` binary on `golang:1.27-alpine` and copies it into a minimal `alpine:3.21` runtime image with `ca-certificates` and `libcap`.
+The multi-stage `Dockerfile` builds a static `CGO_ENABLED=0` binary on `golang:1.27-alpine` and copies it into a small `alpine:3.21` runtime with `ca-certificates` and `libcap`.

@@ -1,6 +1,6 @@
 # Benchmarks & Performance
 
-Gymbag is engineered to act as a high-throughput HTTPS reverse proxy **without** sacrificing speed when its built-in Proof-of-Work WAF, custom/remote firewall rules, and AI/suspicion detectors are enabled.
+These numbers answer one question: how much throughput do you lose by running Gymbag with the WAF, firewall rules and AI/suspicion detection switched on, rather than a plain TLS proxy?
 
 ## Test Environment & Methodology
 
@@ -66,12 +66,12 @@ Measuring malicious requests dropped directly at the Gymbag edge (`403 Forbidden
 
 ---
 
-## Key Takeaways
+## What the numbers say
 
-1. **Faster than Caddy across both HTTP/1.1 and HTTP/2**: Gymbag delivers **+32% higher RPS on HTTP/1.1** (`72.5k` vs `54.7k`) and **+63% to +69% higher RPS on HTTP/2** (`64.0k–66.1k` vs `39.2k`) with **30% lower memory usage** and a **3.8x smaller binary** — even with Gymbag's full WAF active.
-2. **Competitive with C-based Nginx**: Gymbag achieves **85% of Nginx's HTTP/1.1 throughput** with **nearly 2x lower p99 tail latency** (`3.14 ms` vs `6.20 ms`) and **74% of Nginx's HTTP/2 throughput**, while written in memory-safe pure Go stdlib with built-in PoW WAF, multi-CA ACME, local PKI, and threat intelligence.
-3. **Negligible WAF inspection overhead**: Enabling `verify 3` (request-shape checks, built-in block rules, sharded rate limiting, and AI/suspicion detection) stays within measurement noise of `protect off` (`72.5k` vs `72.5k` RPS on HTTP/1.1).
-4. **High-speed edge mitigation**: Malicious probes like `/.env`, `/wp-admin`, and vulnerability scanners are rejected at **140,680 req/s over TLS**, shielding upstream applications completely.
+1. **Gymbag vs Caddy**: about **32% more RPS over HTTP/1.1** (`72.5k` vs `54.7k`) and **63–69% more over HTTP/2** (`64.0k–66.1k` vs `39.2k`), using roughly **30% less memory** and a **3.8x smaller binary**. All of that is with the WAF enabled.
+2. **Gymbag vs Nginx**: Nginx is still ahead. Gymbag reaches **85% of Nginx's HTTP/1.1 throughput** and **74% of its HTTP/2 throughput**, but p99 latency is better (`3.14 ms` vs `6.20 ms`) and you get the WAF, ACME and threat feeds in the same binary.
+3. **The WAF costs almost nothing**: `verify 3` (shape checks, built-in rules, sharded rate limiting, AI/suspicion detection) lands within noise of `protect off` (`72.5k` vs `72.5k` RPS on HTTP/1.1).
+4. **Blocking is cheap**: `/.env`, `/wp-admin` and known scanner probes are dropped at **140,680 req/s over TLS**, so they never reach the upstream.
 
 ---
 

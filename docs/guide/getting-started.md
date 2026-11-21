@@ -50,10 +50,10 @@ See the [Docker & Docker Compose guide](/guide/docker) for full container deploy
 ### Option A: Flag-driven (Non-interactive)
 
 ```bash
-# 1. Generate Gymbagfile
+# 1. Generate gymbag.json (add --format gymbagfile for a Caddy-style Gymbagfile)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Start Gymbag
+# 2. Start Gymbag (auto-loads ./gymbag.json, ./Gymbagfile, then ./Caddyfile)
 ./gymbag
 ```
 
@@ -82,7 +82,7 @@ Run `gymbag init` without flags to walk through domains, upstream URL, verify le
 ### Option D: Register as a System Service
 
 ```bash
-# 1. Generate Gymbagfile and register systemd / launchd / openrc / supervisor
+# 1. Generate gymbag.json and register systemd / launchd / openrc / supervisor
 ./gymbag init -d app.example.com -u :3000 --service auto
 
 # 2. Start the registered service
@@ -90,6 +90,19 @@ Run `gymbag init` without flags to walk through domains, upstream URL, verify le
 ```
 
 See [System Service Setup](/guide/system-service) for `systemd`, `launchd`, `openrc`, and `supervisor` options.
+
+---
+
+## Existing nginx / Apache / Caddyfile Configs
+
+Gymbag natively reads `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, and Caddyfile v2 files, so you can start from an existing setup:
+
+```bash
+./gymbag run -c /etc/nginx/nginx.conf
+./gymbag config convert -c Caddyfile -o gymbag.json --format json
+```
+
+See [Routes & Config Import](/guide/routes-and-imports) for path routes, static files, redirects, and conversion details.
 
 ---
 
@@ -109,8 +122,8 @@ For quick one-off testing without creating any file on disk:
 
 | Flag | Description |
 | :--- | :--- |
-| `-o`, `--output <path>` | Output path (`Gymbagfile` by default, or `gymbag.json` with `--format json`) |
-| `--format <fmt>` | `gymbagfile` (default) or `json` |
+| `-o`, `--output <path>` | Output path (`gymbag.json` by default, or `Gymbagfile` with `--format gymbagfile`) |
+| `--format <fmt>` | `json` (default) or `gymbagfile` |
 | `--preset <name>` | `standard`, `local`, `public`, `strict`, `ai-only`, `suspicious`, or `proxy-only` |
 | `-d`, `--domain <domains>` | Downstream domain(s), comma-separated |
 | `-u`, `--upstream <url>` | Upstream URL (e.g. `http://localhost:3000` or `:3000`) |
@@ -120,6 +133,10 @@ For quick one-off testing without creating any file on disk:
 | `--verify-timeout <dur>` | Verified clearance timeout (e.g. `30m`, `12h`, `7d`, or seconds; alias `--clearance-ttl`) |
 | `--remote-rules <url>` | Remote firewall rules URL (repeatable or comma-separated) |
 | `--remote-rules-refresh <dur>` | Refresh interval for remote rules (default `5m`) |
+| `--rules-file <path>` | Dedicated firewall rules file path (repeatable) |
+| `--rules-dir <path>` | Directory of firewall rule files (repeatable) |
+| `--rules-dynamic` | Auto-reload `--rules-file` / `--rules-dir` when files change |
+| `--rules-watch-interval <dur>` | Polling interval for dynamic local rule files/folders (default `2s`) |
 | `--no-protect` | Disable WAF verification (`protect off`) |
 | `--no-default-rules` | Disable built-in baseline firewall rules (`default_rules off`) |
 | `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or custom URL |

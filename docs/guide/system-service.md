@@ -1,6 +1,6 @@
 # System Service Setup
 
-Gymbag includes a built-in service manager (`gymbag service`) that generates, registers, starts, stops, restarts, inspects, and uninstalls background services across:
+Gymbag ships a small service manager (`gymbag service`) that writes, registers, starts, stops, restarts, inspects, and uninstalls background services for:
 
 | Manager | Target OS / Init | Default Unit Path |
 | :--- | :--- | :--- |
@@ -13,7 +13,7 @@ Gymbag includes a built-in service manager (`gymbag service`) that generates, re
 
 ## Two-Command Service Workflow
 
-Once you have a `Gymbagfile` (from `gymbag init`):
+With a `Gymbagfile` in hand (from `gymbag init`):
 
 ```bash
 # 1. Register the system service (auto-detects systemd / launchd / openrc / supervisor)
@@ -31,9 +31,9 @@ sudo ./gymbag service start --system
 ```
 
 ::: tip Automatic `--watch` and `CAP_NET_BIND_SERVICE`
-- By default, `gymbag service install` configures `gymbag run --config <path> --watch`, so editing `Gymbagfile` hot-reloads routes, WAF policies, and rules without restarting the process.
-- When registering a system-wide `systemd` unit with a non-root `--service-user` and privileged ports (`80`/`443`), Gymbag automatically adds `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, and `NoNewPrivileges=true`.
-- OpenRC units automatically include `capabilities="^cap_net_bind_service"` when `--service-user` is non-root.
+- By default `gymbag service install` sets up `gymbag run --config <path> --watch`, so editing `Gymbagfile` reloads routes, WAF policies, and rules without a restart.
+- For a system-wide `systemd` unit with a non-root `--service-user` on ports `80`/`443`, Gymbag adds `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, and `NoNewPrivileges=true`.
+- OpenRC units get `capabilities="^cap_net_bind_service"` when `--service-user` is non-root.
 :::
 
 ---
@@ -53,15 +53,15 @@ sudo ./gymbag service start --system
 
 ### User-Level vs System-Wide Scope
 
-- When running without `sudo` (`euid != 0`), `gymbag service` defaults to `--user` scope (`systemd --user` or `~/Library/LaunchAgents`) for `systemd`, `launchd`, and `supervisor`.
-- When running as `root` (`sudo`), it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`).
-- Pass `--user` or `--system` explicitly to override the default scope.
+- Without `sudo` (`euid != 0`), `gymbag service` defaults to `--user` scope (`systemd --user`, `~/Library/LaunchAgents`) for `systemd`, `launchd`, and `supervisor`.
+- As `root` (`sudo`), it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`).
+- Pass `--user` or `--system` to override.
 
 ---
 
 ## NixOS Declarative Module (`services.gymbag`)
 
-On NixOS, `/etc/systemd/system` is managed declaratively. Add the flake input and import `nixosModules.default`:
+On NixOS, `/etc/systemd/system` is declarative. Add the flake input and import `nixosModules.default`:
 
 ```nix
 {
@@ -90,13 +90,13 @@ On NixOS, `/etc/systemd/system` is managed declaratively. Add the flake input an
 }
 ```
 
-The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, and `CAP_NET_BIND_SERVICE` so it binds ports `80`/`443` safely without root.
+The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, and `CAP_NET_BIND_SERVICE`, so ports `80`/`443` work without root.
 
 ---
 
 ## Arch Linux (`pacman` + `systemd`)
 
-When installed via the Arch Linux `.pkg.tar.zst` package (or `packaging/arch/PKGBUILD`), Gymbag installs `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile`, and `/usr/lib/systemd/system/gymbag.service`:
+Installed from the Arch `.pkg.tar.zst` package (or `packaging/arch/PKGBUILD`), Gymbag puts `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile`, and `/usr/lib/systemd/system/gymbag.service` in place:
 
 ```bash
 sudo gymbag init -o /etc/gymbag/Gymbagfile
@@ -107,7 +107,7 @@ sudo systemctl enable --now gymbag
 
 ## Previewing or Generating Unit Files Cross-Platform (`render`)
 
-You can render a service file for **any** supported manager from **any** OS (for example, generating a Linux `systemd` unit on macOS before deploying to a VPS):
+`render` writes a service file for any supported manager from any OS. Handy when you generate a Linux `systemd` unit on macOS before shipping to a VPS:
 
 ```bash
 # Preview systemd unit on stdout

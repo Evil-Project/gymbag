@@ -9,10 +9,11 @@ Gymbag automatically loads `.env` from the current working directory if present 
 ## CLI Subcommands
 
 ```bash
-# Generate config (interactive wizard or flag-driven)
+# Generate config (interactive wizard or flag-driven); writes gymbag.json by default
 gymbag init [flags] [output_path]
+gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# Start server using ./Gymbagfile or ./Caddyfile
+# Start server using ./gymbag.json, ./Gymbagfile, or ./Caddyfile (in that order)
 gymbag
 
 # Start with explicit config and hot-reload on file changes (polls every 2s)
@@ -20,6 +21,12 @@ gymbag run --config Gymbagfile --watch
 
 # Manage OS system services (systemd, launchd, openrc, supervisor)
 gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
+
+# Manage sites, routes, and global settings in gymbag.json or Gymbagfile
+gymbag config <list|show|add|update|remove|route|set|unset|convert> [flags]
+
+# Manage rule files, rules folders, and inline rules
+gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 
 # Ad-hoc reverse proxy without a config file
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
@@ -38,7 +45,7 @@ gymbag version
 
 | Flag | Description |
 | :--- | :--- |
-| `-c`, `--config <path>` | Path to `Gymbagfile`, `Caddyfile`, or `.json` config |
+| `-c`, `--config <path>` | Path to `gymbag.json`, `Gymbagfile`, `Caddyfile`, native `nginx.conf`, or Apache `httpd.conf` / `apache2.conf` |
 | `-d`, `--domain <list>` | Override downstream domain(s), comma-separated (`--from` on `reverse-proxy`) |
 | `-u`, `--upstream <url>` | Override upstream URL (`http://localhost:3000` or `:3000`; `--to` on `reverse-proxy`) |
 | `-l`, `--verify <0-3\|off>` | Override verify level (`0`, `1`, `2`, `3`, or `off`) |
@@ -54,11 +61,60 @@ gymbag version
 
 ---
 
+## Config Management (`gymbag config`)
+
+All `config` subcommands accept `-c`, `--config <path>` (default: auto-detected config file).
+
+```bash
+gymbag config list
+gymbag config add -d api.example.com -u :8080 -l 1
+gymbag config update -d api.example.com -l 3 --verify-timeout 6h
+gymbag config remove -d api.example.com
+gymbag config set admin 127.0.0.1:2019
+gymbag config unset admin
+gymbag config route add -d app.example.com --path '/static/*' --strip-prefix /static --root ./dist --browse
+gymbag config route list -d app.example.com
+gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```
+
+| Subcommand | Description |
+| :--- | :--- |
+| `list` / `show` | List sites / print the formatted config |
+| `add` | Add a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--no-protect`, `--no-default-rules`, `--cert`, `--key`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header Name=Value\|-Name`, `-f` |
+| `update` | Update a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--protect on\|off`, `--default-rules on\|off`, `--cert`, `--key`, `--clear-tls`, `--header`, `--remove-header` |
+| `remove` | Remove a site (`-d`) |
+| `route list\|add\|update\|remove` | Manage path routes: `-d`, `--path`, `--strip-prefix`, `-u`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header`, `--index` (0-based route index for `update` / `remove`) |
+| `set <key> <value>` / `unset <key>` | Change or reset a global option (`email`, `ssl_provider`, `admin`, `http_port`, `https_port`, `rules_watch_interval`, `remote_rules_refresh`, …) |
+| `convert` | Convert nginx, Apache, Caddyfile, Gymbagfile, or JSON: `-c <in>`, `-o <out>` (stdout if omitted), `--format json\|gymbagfile` (default `json`), `-f` |
+
+## Ruleset Management (`gymbag ruleset`)
+
+```bash
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset remove local-dir
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+```
+
+| Subcommand | Description |
+| :--- | :--- |
+| `list` | List linked rule sources (`-c`, `-d`) |
+| `add` | Link a rule file, folder, or URL: `--source`, `--name`, `--dynamic` / `--static`, `-d <domain>` or `--global`, `-c` |
+| `update` | Change a linked ruleset: `--target` (or positional source/name), `--source`, `--name`, `--dynamic` / `--static`, `-d` / `--global`, `-c` |
+| `remove` | Unlink a ruleset: `--source <source-or-name>`, `-d` / `--global`, `-c` |
+| `validate <path>` | Validate a rule file or rules directory |
+| `init <path>` | Create a starter ruleset (`-o`, `--format rules\|json`, `-f`) |
+| `rule list\|add\|update\|remove` | Manage single rules in `--file` (or inline in the config via `-c` / `-d`): `--name`, `--index`, `--action allow\|verify\|block`, `--ip`, `--ua`, `--path`, `--query`, `--method`, `--header`, `--cookie` |
+
+---
+
 ## Environment Variables (`GYMBAG_*`)
 
 | Variable | Description |
 | :--- | :--- |
-| `GYMBAG_CONFIG` | Path to `Gymbagfile`, `Caddyfile`, or `.json` config |
+| `GYMBAG_CONFIG` | Path to `gymbag.json`, `Gymbagfile`, `Caddyfile`, `nginx.conf`, or Apache `httpd.conf` |
 | `GYMBAG_BIND` | Bind address (`127.0.0.1` for local, `0.0.0.0` when public domains exist) |
 | `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP and HTTPS listen ports (defaults `80` and `443`) |
 | `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | Comma-separated downstream domain(s) |
@@ -69,6 +125,7 @@ gymbag version
 | `GYMBAG_VERIFY_LEVEL` | Verify level: `0`, `1`, `2`, or `3` (aliases: `GYMBAG_VERIFY`, `GYMBAG_VERIFY_MODE`, `GYMBAG_MODE`, `GYMBAG_TRIGGER`) |
 | `GYMBAG_DEFAULT_RULES` | Enable or disable built-in baseline firewall rules (`on` / `off`) |
 | `GYMBAG_REMOTE_RULES` | Comma- or whitespace-separated HTTP/HTTPS remote firewall rules URLs |
+| `GYMBAG_RULES_WATCH_INTERVAL` | Polling interval in seconds or duration for dynamic local rule files/folders (default `2` / `2s`) |
 | `GYMBAG_REMOTE_RULES_REFRESH` | Remote rules refresh interval in seconds or duration (default `300` / `5m`) |
 | `GYMBAG_DIFFICULTY` | SHA-256 PoW difficulty (`1`–`5`, default `4`) |
 | `GYMBAG_CHALLENGE_TTL` | Challenge nonce expiry in seconds or duration (default `300` / `5m`) |

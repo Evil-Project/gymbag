@@ -1,6 +1,6 @@
 # Verify Levels (`0`–`3`) & Proof-of-Work
 
-A single Gymbag process can serve and protect dozens of domains simultaneously with round-robin multi-upstream load balancing and full-duplex RFC 6455 WebSocket proxying. Each site configures its own verification policy via `verify <0-3>` or `protect off`.
+One Gymbag process can front a pile of domains at once, round-robin across several upstreams, and pass WebSocket upgrades (RFC 6455) straight through. Each site picks its own policy with `verify <0-3>`, or opts out with `protect off`.
 
 <VerifyLevelMatrix />
 
