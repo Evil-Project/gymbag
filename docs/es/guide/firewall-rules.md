@@ -100,6 +100,60 @@ curl -X POST http://127.0.0.1:2019/api/v1/rules/remote/refresh
 
 ---
 
+## Archivos de Reglas Locales, Carpetas de Reglas y Recarga Dinámica en Caliente
+
+Guarda reglas en un archivo `.rules` / `.json` dedicado o en un directorio completo de reglas y referéncialos por ruta. Marca una fuente como `dynamic` para observarla y recargar en caliente los cambios en disco sin reiniciar el servidor (si un archivo tiene sintaxis inválida, Gymbag conserva el último conjunto de reglas válido). Las reglas locales se evalúan junto con tus reglas en línea, antes que las reglas remotas.
+
+::: code-group
+```caddyfile [Gymbagfile]
+{
+    rules_watch_interval 2s
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    rules_file ./rules/custom.rules dynamic
+    rules_dir ./rules.d dynamic
+    ruleset static-corp {
+        source ./rules/corp.json
+        dynamic off
+    }
+}
+```
+
+```json [gymbag.json]
+{
+  "sites": [
+    {
+      "domains": ["app.example.com"],
+      "rule_sources": [
+        {"source": "./rules.d", "dynamic": true, "name": "shared"}
+      ]
+    }
+  ]
+}
+```
+
+```bash [CLI]
+# Generar una configuración que enlace fuentes de reglas locales
+gymbag init -d app.example.com -u :3000 \
+  --rules-file ./rules/custom.rules --rules-dir ./rules.d \
+  --rules-dynamic --rules-watch-interval 2s
+
+# Gestionar archivos de reglas y enlaces
+gymbag ruleset init ./rules/custom.rules
+gymbag ruleset add --source ./rules --dynamic --name local-dir
+gymbag ruleset update local-dir --static
+gymbag ruleset validate ./rules
+gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
+gymbag ruleset remove local-dir
+```
+:::
+
+El intervalo de sondeo es `rules_watch_interval` (por defecto `2s`; `GYMBAG_RULES_WATCH_INTERVAL` o `gymbag config set rules_watch_interval 2s`). Las entradas de `rule_sources` también se pueden parchear en vivo mediante `PATCH /api/v1/sites/{domain}`. Consulta [CLI y Entorno](/es/reference/cli-env) para ver todos los subcomandos `ruleset`.
+
+---
+
 ## Reglas Integradas (`default_rules on|off`) y Feeds de Amenazas
 
 - `default_rules` está en `on` por defecto (si añades reglas locales o remotas, las reglas base de bloqueo siguen protegiendo `/.env`, `/.git`, `/wp-admin`, escáneres e inyecciones).

@@ -24,8 +24,31 @@ Actívala con `admin 127.0.0.1:2019`, `--admin 127.0.0.1:2019` o `GYMBAG_ADMIN=1
 | `GET` / `POST` | `/api/v1/rules/remote`, `/api/v1/rules/remote/refresh` | Estado de reglas remotas y recarga atómica inmediata |
 | `GET` / `PUT` | `/api/v1/config` | Inspeccionar o reemplazar atómicamente la configuración completa |
 | `GET` / `POST` | `/api/v1/sites` | Listar o añadir sitios en tiempo de ejecución |
-| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspeccionar, reemplazar, parchear (`verify_level`, `clearance_ttl`, `remote_rules`, etc.) o eliminar un sitio |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspeccionar, reemplazar, parchear en vivo (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers` o `rule_sources`) o eliminar un sitio |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules[/id]` | Gestionar reglas personalizadas en vivo |
+
+### Ejemplos de Mitigación de Emergencia en Vivo
+
+```bash
+# Endurecer app.example.com al nivel de verificación 0 con un timeout de 30 minutos
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"verify_level": 0, "difficulty": 5, "clearance_ttl": 1800}'
+
+# Reemplazar rutas por path, cabeceras de respuesta y fuentes de reglas locales en vivo
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"routes": [{"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true}], "headers": {"X-Served-By": "gymbag"}, "rule_sources": [{"source": "./rules.d", "dynamic": true}]}'
+
+# Bloquear de inmediato un CIDR abusivo sin editar Gymbagfile
+curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \
+  -H "Content-Type: application/json" \
+  -d '{"name": "drop-abusive-subnet", "action": "block", "ips": ["198.51.100.0/24"]}'
+
+# Forzar una actualización inmediata de reglas remotas y feeds de inteligencia de amenazas
+curl -X POST http://127.0.0.1:2019/api/v1/rules/remote/refresh
+curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
+```
 
 ## Redis Compartido
 

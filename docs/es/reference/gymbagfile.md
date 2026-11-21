@@ -1,6 +1,6 @@
 # Referencia de `Gymbagfile` y Esquema JSON
 
-Por defecto, Gymbag busca `./Gymbagfile` o `./Caddyfile` (o `--config <path>` / `GYMBAG_CONFIG`), y también acepta archivos `.json`.
+Por defecto, Gymbag busca `./gymbag.json`, `./Gymbagfile` o `./Caddyfile` en el directorio de trabajo (o `--config <path>` / `GYMBAG_CONFIG`), y analiza de forma nativa `gymbag.json`, `Gymbagfile` / `Caddyfile v2`, `nginx.conf` y Apache (`httpd.conf` / `apache2.conf`).
 
 ## Bloque Global `{ ... }`
 
@@ -45,6 +45,10 @@ Por defecto, Gymbag busca `./Gymbagfile` o `./Caddyfile` (o `--config <path>` / 
 | `redis` / `secret` / `trusted_proxies` | Almacén Redis RESP2, secreto HMAC y proxies confiables | memoria / `<cert_dir>/secret` |
 | `ip_security` / `ip_security_action` / `ip_reputation` / `ai_ip_list` / `intel_refresh` | Feeds de amenazas, reputación en vivo y listas de IA | `on` / `verify` / `6h` |
 | `remote_rules` / `remote_rules_refresh` | URLs de reglas remotas e intervalo de actualización | `300` (`5m`) |
+| `rules_file` | Archivo local de reglas `.rules`/`.json` (`rules_file <path> [dynamic\|static]`) heredado por todos los sitios | — |
+| `rules_dir` | Directorio local de reglas (`rules_dir <path> [dynamic\|static]`) heredado por todos los sitios | — |
+| `ruleset <name> { ... }` | Bloque de fuente de reglas local o remota con nombre (`source`/`file`/`dir`/`url`, `dynamic on\|off`) | — |
+| `rules_watch_interval` | Intervalo de sondeo para archivos y directorios de reglas locales `dynamic` | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | Timeout predeterminado del estado verificado (`30m`, `12h`, `7d` o segundos) | `86400` (`24h`) |
 
 ---
@@ -61,9 +65,29 @@ Por defecto, Gymbag busca `./Gymbagfile` o `./Caddyfile` (o `--config <path>` / 
 | `clearance_ttl <sec\|dur>` | Tiempo de validez verificado (`86400`, `30m`, `12h`, `7d`; alias `verify_timeout`, `verified_timeout`, `clearance_timeout`) |
 | `cookie_name` / `cookie_secure` / `default_rules` | Nombre de cookie, bandera `Secure` y reglas base integradas |
 | `remote_rules <urls...>` | URLs de reglas remotas del sitio (alias `remote_rule`, `rules_url`, `rule_url`, `remote_rules_url`) |
+| `rules_file <path> [dynamic\|static]` | Adjunta un archivo local `.rules` o `.json` (opcionalmente recargado en caliente ante cambios en disco) |
+| `rules_dir <path> [dynamic\|static]` | Adjunta todos los archivos `.rules`/`.json` de un directorio (opcionalmente recargados en caliente) |
+| `ruleset <name> { ... }` | Bloque de fuente de reglas con nombre (`source`/`file`/`dir`/`url`, `dynamic on\|off`) |
+| `handle` / `handle_path` / `route` | Bloques de rutas por path ordenadas (`reverse_proxy`, `root` + `file_server`, `respond`, `redir`, `header`) |
+| `root` / `file_server` / `try_files` | Servicio de archivos estáticos, listado de directorios (`browse`) y fallback para SPA |
+| `respond` / `redir` / `header` | Respuestas fijas, redirecciones HTTP (`{scheme}`, `{host}`, `{uri}`, `{path}`, `{query}`) y modificaciones de cabeceras de respuesta |
 | `tls <cert> <key>` | Certificados SNI por sitio |
 | `allow \| verify \| block ...` / `rule "name" { ... }` | Reglas de firewall personalizadas |
 
-## Sintaxis de Duración y JSON
+## Sintaxis de Duración y Configuración JSON
 
-Acepta segundos enteros (`3600`), duraciones Go (`30m`, `12h`, `1h30m`) y días/semanas (`7d`, `2w`). Usa `gymbag init --format json` para exportar el esquema JSON completo.
+Acepta segundos enteros (`3600`), duraciones Go (`30m`, `12h`, `1h30m`) y días/semanas (`7d`, `2w`).
+
+`gymbag init` genera `gymbag.json` por defecto (usa `--format gymbagfile` para sintaxis estilo Caddy):
+
+```bash
+./gymbag init -d app.example.com -u :3000 --verify-timeout 12h --rules-dir ./rules.d --rules-dynamic
+```
+
+Todos los campos se corresponden directamente con el esquema JSON (`sites`, `bind_host`, `http_port`, `https_port`, `admin_addr`, `tls`, `intel`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `defaults`), con `routes` por sitio (`path`, `strip_prefix`, `upstreams`, `root`, `index`, `browse`, `fallback`, `respond`, `redirect`, `headers`), `headers`, `waf.clearance_ttl` (segundos enteros), `waf.remote_rules` (`[]string`) y `waf.rule_sources` (`[{"source", "dynamic", "name"}]`).
+
+También puedes convertir un archivo existente `nginx.conf`, Apache `httpd.conf`/`apache2.conf` o `Caddyfile` a `gymbag.json`:
+
+```bash
+./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
+```

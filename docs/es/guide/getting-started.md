@@ -50,10 +50,10 @@ Consulta la [Guía de Docker y Docker Compose](/es/guide/docker) para despliegue
 ### Opción A: Por Flags (No interactivo)
 
 ```bash
-# 1. Generar Gymbagfile
+# 1. Generar gymbag.json (añade --format gymbagfile para un Gymbagfile estilo Caddy)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
-# 2. Iniciar Gymbag
+# 2. Iniciar Gymbag (carga automáticamente ./gymbag.json, ./Gymbagfile y luego ./Caddyfile)
 ./gymbag
 ```
 
@@ -82,7 +82,7 @@ Ejecuta `gymbag init` sin flags para configurar de forma guiada dominios, URL up
 ### Opción D: Registrar como Servicio del Sistema
 
 ```bash
-# 1. Generar Gymbagfile y registrar systemd / launchd / openrc / supervisor
+# 1. Generar gymbag.json y registrar systemd / launchd / openrc / supervisor
 ./gymbag init -d app.example.com -u :3000 --service auto
 
 # 2. Iniciar el servicio registrado
@@ -90,6 +90,19 @@ Ejecuta `gymbag init` sin flags para configurar de forma guiada dominios, URL up
 ```
 
 Consulta [Servicio del Sistema](/es/guide/system-service) para más detalles.
+
+---
+
+## Configuraciones Existentes de nginx / Apache / Caddyfile
+
+Gymbag lee de forma nativa archivos `nginx.conf`, Apache `httpd.conf` / `apache2.conf` y Caddyfile v2, por lo que puedes partir de una configuración existente:
+
+```bash
+./gymbag run -c /etc/nginx/nginx.conf
+./gymbag config convert -c Caddyfile -o gymbag.json --format json
+```
+
+Consulta [Rutas e Importación de Configuración](/es/guide/routes-and-imports) para detalles sobre rutas por path, archivos estáticos, redirecciones y conversión.
 
 ---
 
@@ -109,8 +122,8 @@ Para pruebas rápidas sin crear ningún archivo en disco:
 
 | Flag | Descripción |
 | :--- | :--- |
-| `-o`, `--output <path>` | Ruta de salida (`Gymbagfile` por defecto, o `gymbag.json` con `--format json`) |
-| `--format <fmt>` | `gymbagfile` (predeterminado) o `json` |
+| `-o`, `--output <path>` | Ruta de salida (`gymbag.json` por defecto, o `Gymbagfile` con `--format gymbagfile`) |
+| `--format <fmt>` | `json` (predeterminado) o `gymbagfile` |
 | `--preset <name>` | `standard`, `local`, `public`, `strict`, `ai-only`, `suspicious`, o `proxy-only` |
 | `-d`, `--domain <domains>` | Dominio(s) públicos, separados por comas |
 | `-u`, `--upstream <url>` | URL upstream (p. ej. `http://localhost:3000` o `:3000`) |
@@ -120,6 +133,10 @@ Para pruebas rápidas sin crear ningún archivo en disco:
 | `--verify-timeout <dur>` | Tiempo de validez de verificación (ej. `30m`, `12h`, `7d` o segundos; alias `--clearance-ttl`) |
 | `--remote-rules <url>` | URL de reglas remotas de firewall (repetible o separada por comas) |
 | `--remote-rules-refresh <dur>` | Intervalo de refresco de reglas remotas (por defecto `5m`) |
+| `--rules-file <path>` | Ruta a archivo dedicado de reglas de firewall (repetible) |
+| `--rules-dir <path>` | Directorio de archivos de reglas de firewall (repetible) |
+| `--rules-dynamic` | Recargar automáticamente `--rules-file` / `--rules-dir` cuando cambian los archivos |
+| `--rules-watch-interval <dur>` | Intervalo de sondeo para archivos/carpetas de reglas locales dinámicas (por defecto `2s`) |
 | `--no-protect` | Desactivar verificación WAF (`protect off`) |
 | `--no-default-rules` | Desactivar reglas base integradas (`default_rules off`) |
 | `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local` o URL personalizada |
