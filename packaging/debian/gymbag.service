@@ -1,0 +1,24 @@
+[Unit]
+Description=Gymbag HTTPS Reverse Proxy & Proof-of-Work WAF
+Documentation=https://github.com/Evil-Project/gymbag
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=gymbag
+ConfigurationDirectory=gymbag
+WorkingDirectory=/var/lib/gymbag
+Environment=GYMBAG_CERT_DIR=/var/lib/gymbag/certs
+EnvironmentFile=-/etc/gymbag/.env
+ExecStart=/usr/bin/gymbag run --config /etc/gymbag/Gymbagfile --watch
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

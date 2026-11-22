@@ -1,10 +1,8 @@
 name: Release binaries
 
 on:
-  push:
-    tags:
-      - "v*"
-      - "[0-9]+.[0-9]+.[0-9]+*"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -16,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +24,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -74,7 +72,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -85,7 +83,7 @@ jobs:
         id: meta
         shell: bash
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag || github.event.release.tag_name || github.ref_name }}"
           VERSION="${TAG#v}"
           ARCHIVE_NAME="gymbag_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive }}"
           echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
@@ -132,7 +130,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
 
       - name: Download Linux binary archive
         uses: actions/download-artifact@v4
@@ -144,7 +142,7 @@ jobs:
         id: pkg
         shell: bash
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag || github.event.release.tag_name || github.ref_name }}"
           VERSION="${TAG#v}"
           PKGVER="${VERSION//-/.}"
           ARCHIVE="input/gymbag_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
@@ -204,14 +202,135 @@ jobs:
           path: dist-arch/*.pkg.tar.zst
           if-no-files-found: error
 
-  release:
-    needs: [build, package-arch]
+  package-debian:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
+
+      - name: Download Linux binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.goarch }}
+          path: input
+
+      - name: Build Debian .deb package
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name || github.ref_name }}"
+          VERSION="${TAG#v}"
+          DEB_VERSION="${VERSION//-/\~}"
+          ARCHIVE="input/gymbag_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
+
+          mkdir -p staging debroot/DEBIAN \
+            debroot/usr/bin \
+            debroot/etc/gymbag \
+            debroot/lib/systemd/system \
+            debroot/usr/share/doc/gymbag \
+            dist-deb
+
+          tar -xzf "${ARCHIVE}" -C staging
+
+          install -m 0755 staging/gymbag debroot/usr/bin/gymbag
+          install -m 0644 staging/Gymbagfile debroot/etc/gymbag/Gymbagfile
+          install -m 0644 packaging/debian/gymbag.service debroot/lib/systemd/system/gymbag.service
+          install -m 0644 staging/README.md debroot/usr/share/doc/gymbag/README.md
+          install -m 0644 staging/LICENSE debroot/usr/share/doc/gymbag/copyright
+
+          INSTALLED_SIZE="$(du -sk debroot | cut -f1)"
+          cat > debroot/DEBIAN/control <<EOF
+          Package: gymbag
+          Version: ${DEB_VERSION}
+          Section: net
+          Priority: optional
+          Architecture: ${{ matrix.goarch }}
+          Maintainer: Evil-Project <noreply@evilneuro.org>
+          Installed-Size: ${INSTALLED_SIZE}
+          Recommends: libcap2-bin
+          Homepage: https://github.com/Evil-Project/gymbag
+          Description: Single-binary HTTPS reverse proxy and Proof-of-Work WAF
+           Gymbag is a pure-Go HTTPS reverse proxy and Proof-of-Work Web Application
+           Firewall with automatic ACME/local TLS, native nginx/Apache/Caddyfile v2
+           configuration support, and hot-reloadable firewall rules.
+          EOF
+
+          cat > debroot/DEBIAN/conffiles <<EOF
+          /etc/gymbag/Gymbagfile
+          EOF
+
+          install -m 0755 packaging/debian/postinst debroot/DEBIAN/postinst
+          install -m 0755 packaging/debian/prerm debroot/DEBIAN/prerm
+          install -m 0755 packaging/debian/postrm debroot/DEBIAN/postrm
+
+          DEB_NAME="gymbag_${VERSION}_linux_${{ matrix.goarch }}.deb"
+          dpkg-deb --build --root-owner-group debroot "dist-deb/${DEB_NAME}"
+          dpkg-deb --info "dist-deb/${DEB_NAME}"
+          dpkg-deb --contents "dist-deb/${DEB_NAME}"
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-deb-${{ matrix.goarch }}
+          path: dist-deb/*.deb
+          if-no-files-found: error
+
+  package-nix:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build and verify NixOS flake package
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name || github.ref_name }}"
+          VERSION="${TAG#v}"
+
+          nix eval .#nixosModules.default --apply 'm: builtins.isFunction m'
+          nix build .#packages.x86_64-linux.default --print-out-paths
+          ./result/bin/gymbag version
+          ./result/bin/gymbag --help >/dev/null
+
+          mkdir -p staging-nix/bin staging-nix/nix dist-nix
+          install -m 0755 ./result/bin/gymbag staging-nix/bin/gymbag
+          cp flake.nix LICENSE README.md staging-nix/
+          if [[ -f flake.lock ]]; then
+            cp flake.lock staging-nix/
+          fi
+          cp nix/module.nix staging-nix/nix/
+
+          tar -C staging-nix -czf "dist-nix/gymbag_${VERSION}_nixos_x86_64-linux.tar.gz" .
+          nix-store --export $(nix-store -qR ./result) | zstd -T0 -q -o "dist-nix/gymbag_${VERSION}_nixos_x86_64-linux.nar.zst"
+          ls -lh dist-nix/
+
+      - name: Upload NixOS package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-nix-x86_64-linux
+          path: dist-nix/*
+          if-no-files-found: error
+
+  release:
+    needs: [build, package-arch, package-debian, package-nix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || (github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref) }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -231,7 +350,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
         run: |
           PRERELEASE_ARGS=()
           if [[ "${TAG#v}" == *-* ]]; then
