@@ -1,12 +1,12 @@
 # 路径路由、静态文件与配置导入
 
-除了基础的 `reverse_proxy`，Gymbag 站点还支持有序的**路径路由（Path Routes）**，用于提供静态文件服务、固定响应、HTTP 重定向、响应头修改以及按路径分流的上游代理。同时，Gymbag 原生支持直接读取和转换现有的 **nginx**、**Apache** 与 **Caddyfile v2** 配置文件。
+除了 `reverse_proxy`，Gymbag 站点内还可以声明有序的**路径路由（path routes）**，用于静态文件托管、固定响应、HTTP 重定向、响应头修改以及按路径分流到不同上游。Gymbag 也支持直接读取和转换现有的 **nginx**、**Apache** 与 **Caddyfile v2** 配置文件。
 
 ## 有序路径路由
 
-站点内的路由按声明顺序依次评估。**首个** `path` 匹配的路由将处理该请求；未匹配任何路由的请求会回退到站点的默认 `upstreams`（若未配置默认上游则返回 `404`）。
+同一站点内的路由按从上到下的顺序检查。第一条匹配 `path` 的路由负责处理请求；未命中任何路由的请求回落到站点默认 `upstreams`（如果未配置默认上游则返回 `404`）。
 
-WAF 规则、限流、威胁情报与 PoW 验证始终在任何路由处理器**之前**执行。
+WAF 规则、限流、威胁情报和 PoW 验证始终在任何路由处理器**之前**执行。
 
 ```caddyfile
 app.example.com {
@@ -32,26 +32,26 @@ app.example.com {
 }
 ```
 
-### 支持的处理器
+### 路由处理器
 
-每条路由使用以下处理器之一：
+每条路由使用一种处理器：
 
-- **反向代理 (`upstreams`)**：将匹配的请求（含 WebSocket 升级）代理到路由专属上游，可选剥离路径前缀（`handle_path` / `strip_prefix`）。
-- **静态文件服务 (`root` / `file_server`)**：从 `root` 目录提供静态文件，支持可配置的 `index` 文件（默认 `["index.html"]`）、目录浏览（`browse`）及 SPA `fallback`（如 `try_files {path} /index.html`）。
-- **固定响应 (`respond`)**：直接由 Gymbag 返回指定状态码与响应体，无需请求上游。
-- **重定向 (`redir`)**：返回 HTTP 重定向（`301`、`302`、`307`、`308`），支持请求占位符：`{scheme}`、`{host}`、`{uri}`、`{path}` 与 `{query}`。
-- **响应头修改 (`headers` / `header`)**：设置响应头（`Header-Name value`），或通过在键名前加 `-` 来删除响应头（`-Server`）。
+- 反向代理（`upstreams`）：将匹配的 HTTP 请求与 WebSocket 升级转发到路由专属上游，可选剥离路径前缀（`handle_path` / `strip_prefix`）。
+- 静态文件服务（`root` / `file_server`）：基于 `root` 目录提供静态资源，支持 `index` 索引文件（默认 `["index.html"]`）、目录浏览（`browse`）以及 SPA `fallback`（`try_files {path} /index.html`）。
+- 固定响应（`respond`）：直接返回指定状态码和响应体，不请求上游。
+- 重定向（`redir`）：返回 3xx 重定向（`301`、`302`、`307`、`308`），支持展开 `{scheme}`、`{host}`、`{uri}`、`{path}` 和 `{query}` 占位符。
+- 响应头（`headers` / `header`）：设置响应头（`Header-Name value`），或用 `-` 前缀删除响应头（`-Server`）。
 
 ### 路径匹配器
 
-- `""`、`*` 或 `/*`：匹配所有请求路径。
+- `""`、`*` 或 `/*`：匹配所有路径。
 - `/exact`：精确路径匹配。
-- `/api/*`、`*.php`：通配符匹配（`*` 匹配包括 `/` 在内的任意字符序列）。
-- `~^/v[0-9]+/`：开头的 `~` 之后为 Go RE2 正则表达式。
+- `/api/*`、`*.php`：通配符匹配（`*` 匹配包括 `/` 在内的任意字符）。
+- `~^/v[0-9]+/`：`~` 后接 Go RE2 正则表达式。
 
-### 在 `gymbag.json` 与 CLI 中管理路由
+### `gymbag.json` 与 CLI 中的路由配置
 
-在 `gymbag.json` 中，路由配置在每个站点的 `routes` 数组中：
+在 `gymbag.json` 中，路由位于站点对象的 `routes` 数组中：
 
 ```json
 {
@@ -64,7 +64,7 @@ app.example.com {
 }
 ```
 
-可通过 CLI 或 `PATCH /api/v1/sites/{domain}` 实时管理路由：
+可通过 CLI 或 `PATCH /api/v1/sites/{domain}` 修改路由：
 
 ```bash
 ./gymbag config route list -d app.example.com
@@ -75,17 +75,14 @@ app.example.com {
 
 ## 导入 nginx、Apache 与 Caddyfile v2
 
-Gymbag 原生支持解析以下格式：
-- **Caddyfile v2**：代码片段 `(name) { ... }`、`import`（支持文件通配符与 `{args[n]}`）、命名匹配器 `@matchers`（`path`、`path_regexp`、`method`）、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir` 与 `header`。
-- **nginx (`nginx.conf`)**：`http` / `server` / `location` 块、`upstream` 池、`proxy_pass`、`root` / `alias` / `index` / `autoindex` / `try_files`、`return`、`rewrite ... permanent|redirect`、`add_header`、`ssl_certificate` / `ssl_certificate_key` 与 `include`。
-- **Apache (`httpd.conf` / `apache2.conf`)**：`<VirtualHost>`、`ServerName` / `ServerAlias`、`ProxyPass` / `<Proxy balancer://...>`、`DocumentRoot` / `DirectoryIndex`、`Redirect` / `RedirectMatch`、`Header set|unset`、`SSLCertificateFile` / `SSLCertificateKeyFile` 与 `Include` / `IncludeOptional`。
+Gymbag 可直接识别以下配置格式：
+- Caddyfile v2：片段 `(name) { ... }`、`import`（文件通配与 `{args[n]}`）、命名 `@matchers`（`path`、`path_regexp`、`method`）、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir` 与 `header`。
+- nginx（`nginx.conf`）：`http` / `server` / `location` 块、`upstream` 节点池、`proxy_pass`、`root` / `alias` / `index` / `autoindex` / `try_files`、`return`、`rewrite ... permanent|redirect`、`add_header`、`ssl_certificate` / `ssl_certificate_key` 以及 `include`。
+- Apache（`httpd.conf` / `apache2.conf`）：`<VirtualHost>`、`ServerName` / `ServerAlias`、`ProxyPass` / `<Proxy balancer://...>`、`DocumentRoot` / `DirectoryIndex`、`Redirect` / `RedirectMatch`、`Header set|unset`、`SSLCertificateFile` / `SSLCertificateKeyFile` 以及 `Include` / `IncludeOptional`。
 
-可直接运行导入的配置，或将其转换为 `gymbag.json` / `Gymbagfile`：
+可以直接用原有配置启动，或转换成 `gymbag.json` / `Gymbagfile`：
 
 ```bash
-# 直接使用 nginx.conf 或 httpd.conf 启动服务
 ./gymbag run -c /etc/nginx/nginx.conf
-
-# 转换为 Gymbag 原生 gymbag.json 格式
 ./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 ```

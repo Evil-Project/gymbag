@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Gymbag
-  text: HTTPS 反向代理与工作量证明 WAF
-  tagline: 一个 Go 二进制，接管 HTTPS、跑多个 CA 的 ACME，再用 SHA-256 工作量证明把爬虫挡在门外。
+  text: HTTP/HTTPS、SSH 与 Minecraft PoW 网关
+  tagline: 单个 Go 二进制文件同时处理 HTTPS 终结、用浏览器工作量证明防护 SSH 与 Minecraft，并拦截爬虫和威胁 IP。
   image:
     src: /mascot-happy.png
     alt: Gymbag 吉祥物
@@ -13,37 +13,37 @@ hero:
       text: 两条命令快速开始
       link: /zh/guide/getting-started
     - theme: alt
-      text: Docker 部署指南
-      link: /zh/guide/docker
+      text: SSH 与 Minecraft 指南
+      link: /zh/guide/ssh-minecraft
     - theme: alt
-      text: 与 Caddy / Nginx 性能对比
+      text: 与 Caddy / Nginx 基准对比
       link: /zh/guide/benchmarks
 
 features:
   - icon: ⚡
     title: 代理路径够快
-    details: Aho-Corasick 匹配、分片限流和复用缓冲区让 WAF 不挡道：走 TLS 大约 72.5k RPS，在边缘拦探测请求能到 140k+ RPS。
+    details: Aho-Corasick 规则匹配、分片限流和缓冲池让 WAF 不拖慢代理：走 TLS 约 72.5k RPS，边缘直接丢弃探测请求可达 140k+ RPS。
   - icon: 🛡️
-    title: WAF 默认就开着
-    details: 自带 /.env、/wp-admin、扫描器和 SQLi/XSS 探测规则。四档验证级别决定谁要过 SHA-256 挑战，通过后的有效期可以设成 30m、12h 或 7d。
+    title: HTTP、SSH 与 Minecraft
+    details: 单进程同时防护网站、WebSocket、OpenSSH 和 Minecraft Java 服务器。SSH 与 Minecraft 的质询会直接把 HTTPS 验证链接打在客户端断开界面里。
   - icon: 🌐
-    title: 远程规则与威胁情报
-    details: 通过 HTTP 拉取防火墙规则并用 ETag 缓存，按定时器刷新 IPsum、Spamhaus DROP、Feodo 以及公开的 AI 爬虫 CIDR 列表。
+    title: 威胁情报、VPN 与 AI 列表
+    details: 自动刷新 IPsum、Spamhaus DROP、Feodo、X4BNet VPN/Tor 列表和官方 AI 爬虫 CIDR，并接入 Shodan InternetDB、StopForumSpam、ipquery.io 与 ipapi.is 故障放行实时查询。
   - icon: 🔒
-    title: 证书不用操心
-    details: 针对 Let's Encrypt、ZeroSSL、Google、SSL.com、LiteSSL、Buypass 跑 ACME HTTP-01。遇到 *.internal 会自己签发一套 CA，并把 /etc/hosts 也写好。
+    title: ACME、IP 证书与本地 PKI
+    details: 支持 Let's Encrypt、ZeroSSL、Google、SSL.com、LiteSSL 与 Buypass 的 HTTP-01，为验证门户申请 RFC 8738 ACME IP 证书，并用自有 CA 签发 *.internal 域名。
   - icon: 🐳
-    title: 照旧方式部署
-    details: GHCR 多架构镜像（amd64、arm64）、带 Redis 共享状态的 compose、Arch 软件包，以及 systemd、launchd、OpenRC、Supervisor 服务单元。
+    title: 软件包与容器就绪
+    details: 提供静态二进制、Debian/Ubuntu .deb、Arch .pkg.tar.zst、NixOS flake、多架构 GHCR 镜像、带 Redis 的 Compose，以及 systemd/launchd/OpenRC/Supervisor 服务单元。
   - icon: 🔌
-    title: 运行中改配置
-    details: 用 --watch 改 Gymbagfile，或在 Admin API 上调整验证级别、超时、本地规则和远程规则 URL，已经连上的连接不会断。
+    title: 运行时修改配置
+    details: 可生成 gymbag.json 或 Gymbagfile，直接读取 nginx/Apache/Caddyfile v2 配置，监听规则目录变更并热加载，还能通过 Admin REST API 不断流调整策略。
 ---
 
 <QuickStartBuilder />
 
-## 交互式验证级别预览
+## 交互式验证级别
 
-点下面的按钮，可以看到 Gymbag 对普通浏览器、AI 爬虫、自动化客户端、威胁 IP 和漏洞探测分别怎么处理：
+在下方选择验证级别，查看 Gymbag 对普通浏览器、AI 爬虫、VPN/Tor IP、自动化客户端、威胁情报源和漏洞探测的处理方式：
 
 <VerifyLevelMatrix />

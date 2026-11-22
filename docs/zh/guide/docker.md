@@ -1,20 +1,18 @@
-# Docker 与 Docker Compose 部署
+# Docker 与 Docker Compose
 
-Gymbag 在每次发布和推送至 `main` 分支时，均会向 GitHub Container Registry (`GHCR`) 发布基于 Alpine 的多架构（`linux/amd64` 与 `linux/arm64`）官方容器镜像：
+每次打标签发布或推送至 `main` 分支，都会在 GitHub Container Registry（`GHCR`）构建多架构（`linux/amd64`、`linux/arm64`）Alpine 镜像：
 
 - **镜像地址**：`ghcr.io/evil-project/gymbag`
-- **标签**：`latest`、`<semver>`（如 `0.1.0`）、`<major>.<minor>`、`<major>`、`main` 及 Git Commit SHA
-- **运行用户**：非 root 用户 `gymbag`（UID `10001`），已赋予 `cap_net_bind_service=+ep`
-- **暴露端口**：`80`（HTTP 跳转 + ACME HTTP-01）和 `443`（HTTPS 网关）
-- **内置健康检查**：每 30 秒通过 TCP 探测 `127.0.0.1:80`
-
----
+- **标签**：`latest`、`<semver>`（如 `0.1.0`）、`<major>.<minor>`、`<major>`、`main` 以及 commit SHA
+- **运行用户**：非 root 用户 `gymbag`（UID `10001`），具备 `cap_net_bind_service=+ep`
+- **默认暴露端口**：`80`（HTTP 重定向与 ACME HTTP-01）和 `443`（HTTPS 网关）
+- **健康检查**：每 30s 探测一次 `127.0.0.1:80` TCP 端口
 
 ## 使用 `docker run` 快速启动
 
-### 方式 A：挂载 `Gymbagfile`（推荐）
+### 方案 A：挂载 `Gymbagfile` 或 `gymbag.json`
 
-在当前目录创建 `Gymbagfile`：
+在当前目录编写 `Gymbagfile`：
 
 ```caddyfile
 {
@@ -31,7 +29,7 @@ app.example.com {
 }
 ```
 
-挂载持久化卷用于保存证书、本地 CA 密钥、签名密钥、威胁情报缓存及远程规则缓存并启动容器：
+挂载持久化卷 `/app/certs`，防止重建容器后 ACME 证书、HMAC 密钥、威胁情报缓存及远程规则缓存丢失：
 
 ```bash
 docker run -d \
@@ -46,9 +44,9 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### 方式 B：零配置文件（纯环境变量模式）
+### 方案 B：仅用环境变量（不挂载配置文件）
 
-无需挂载配置文件，直接通过 `GYMBAG_*` 环境变量配置站点与防护策略：
+如果不想单独维护配置文件，可以直接传入 `GYMBAG_*` 环境变量：
 
 ```bash
 docker run -d \
@@ -68,30 +66,52 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### 方式 C：开启配置文件热重载 (`--watch`)
+### 方案 C：暴露 SSH、Minecraft 与验证门户
 
-覆盖容器 `CMD` 传入 `--watch`，修改挂载的 `Gymbagfile` 时无需重启容器即可自动重载路由、规则与 SNI 证书：
+在 Docker 中防护 SSH 或 Minecraft 服务器时，除了业务端口（`22` 或 `25565`），还需映射验证门户端口（`8443`）；如果不想在断开提示里显示容器 IP，传入 `GYMBAG_VERIFY_URL` 指定域名：
+
+```bash
+docker run -d \
+  --name gymbag \
+  --restart unless-stopped \
+  -p 80:80 -p 443:443 \
+  -p 25565:25565 -p 8443:8443 \
+  --cap-add NET_BIND_SERVICE \
+  --add-host=host.docker.internal:host-gateway \
+  -e GYMBAG_MC_ENABLED=true \
+  -e GYMBAG_MC_UPSTREAM=host.docker.internal:25566 \
+  -e GYMBAG_MC_VERIFY_LEVEL=3 \
+  -e GYMBAG_VERIFY_URL=https://verify.example.com:8443 \
+  -e GYMBAG_VERIFY_PORT=8443 \
+  -e GYMBAG_VPN_DETECTION=on \
+  -v gymbag-certs:/app/certs \
+  ghcr.io/evil-project/gymbag:latest
+```
+
+SSH 也有对应的一组变量（`GYMBAG_SSH_ENABLED`、`GYMBAG_SSH_PORT`、`GYMBAG_SSH_UPSTREAM`、`GYMBAG_SSH_VERIFY_LEVEL`、`GYMBAG_SSH_PROTECT`）。
+
+### 方案 D：启用热重载（`--watch`）
+
+覆盖 `CMD` 传入 `--watch`，修改配置后无需重启容器即可重载路由、防火墙规则与 SNI 证书：
 
 ```bash
 docker run -d \
   --name gymbag \
   -p 80:80 -p 443:443 \
   --cap-add NET_BIND_SERVICE \
-  -v "$(pwd)/Gymbagfile:/app/Gymbagfile:ro" \
+  -v "$(pwd)/config:/app/config:ro" \
   -v gymbag-certs:/app/certs \
   ghcr.io/evil-project/gymbag:latest \
-  run --config /app/Gymbagfile --watch
+  run --config /app/config/Gymbagfile --watch
 ```
 
-::: tip 避免单文件挂载引起的 inode 替换问题
-当以单文件形式挂载（`./Gymbagfile:/app/Gymbagfile:ro`）时，部分编辑器通过原子重命名保存会更换宿主机 inode，导致容器内无法感知更新。在 Docker 中使用 `--watch` 时，建议挂载整个配置目录（`-v "$(pwd)/config:/app/config:ro"`）并指定 `--config /app/config/Gymbagfile --watch`。
+::: tip 使用 `--watch` 时请挂载父目录
+许多编辑器保存文件时采用原子重命名，会替换宿主机上的 inode。如果只绑定挂载了单个文件（`./Gymbagfile:/app/Gymbagfile:ro`），容器内看到的仍是旧 inode，`--watch` 无法感知变更。请改为挂载整个父目录（`./config:/app/config:ro`）。
 :::
 
----
+## Docker Compose 搭配 Redis
 
-## Docker Compose + Redis（生产多容器编排）
-
-仓库自带开箱即用的 `compose.yaml`，可将 Gymbag 与 `redis:8-alpine` 一同编排运行。配置 `GYMBAG_REDIS_URL` 后，Gymbag 通过内置纯 Go RESP2 客户端与 Redis 通信，实现容器重启或跨多副本间的单次 PoW 质询与限流窗口共享：
+仓库自带的 `compose.yaml` 将 Gymbag 与 `redis:8-alpine` 编排在一起。设置 `GYMBAG_REDIS_URL` 后，Gymbag 会启用纯 Go RESP2 Redis 客户端，使 PoW 质询 nonce、固定窗口限流计数以及 SSH/Minecraft 验证凭证和 IP 放行记录在容器重启或跨实例间保持共享：
 
 ```yaml
 services:
@@ -145,7 +165,7 @@ volumes:
   gymbag-redis:
 ```
 
-在 `Gymbagfile` 中直接将 `reverse_proxy` 指向 Compose 服务名（如 `http://app:3000`），或指向宿主机服务（`http://host.docker.internal:3000`）：
+在 `Gymbagfile` 中将 `reverse_proxy` 指向 Compose 服务名（`http://app:3000`）或宿主机进程（`http://host.docker.internal:3000`）：
 
 ```caddyfile
 app.example.com {
@@ -155,17 +175,15 @@ app.example.com {
 }
 ```
 
-启动服务（或从源码本地构建）：
+启动服务或基于本地源码构建镜像：
 
 ```bash
-# 使用 GHCR 预构建镜像
 docker compose up -d
-
-# 或从本地源码构建镜像
+# 或本地构建：
 docker compose up -d --build
 ```
 
-同目录下的 `.env` 文件中的 `GYMBAG_*` 变量会被自动加载：
+放在 `compose.yaml` 同级目录的 `.env` 文件会自动覆盖 `Gymbagfile` 中的对应配置：
 
 ```dotenv
 GYMBAG_ACME_EMAIL=ops@example.com
@@ -175,11 +193,7 @@ GYMBAG_CLEARANCE_TTL=12h
 GYMBAG_REMOTE_RULES=https://rules.example.com/waf.rules
 ```
 
----
-
 ## 无配置文件代理多个容器
-
-可通过 `GYMBAG_UPSTREAMS` 将多个域名直接映射到不同的后端容器服务：
 
 ```yaml
 environment:
@@ -189,21 +203,17 @@ environment:
   GYMBAG_VERIFY_LEVEL: "3"
 ```
 
----
+## 挂载卷、权限与安全说明
 
-## 数据卷、权限与安全注意事项
-
-- **持久化 `/app/certs` 卷**：用于存储 ACME 账号密钥、已签发证书、本地 PKI CA、自动生成的 HMAC 签名密钥（`/app/certs/secret`）、威胁情报缓存（`/app/certs/intel-cache`）以及远程规则缓存（`/app/certs/rules-cache`）。请务必持久化该目录，避免容器重建后重复申请证书或导致已签发的访客 Cookie 失效。
-- **宿主机目录挂载权限**：容器默认以 UID/GID `10001` 运行。如果将宿主机目录绑定挂载到 `/app/certs`（`./certs:/app/certs`），请确保 UID `10001` 拥有读写权限：
+- **持久化 `/app/certs` 卷**：该目录存放 ACME 账户密钥、签发证书、本地 CA 文件、HMAC 通行密钥（`/app/certs/secret`）、威胁/VPN/AI 情报缓存（`/app/certs/intel-cache`）以及远程规则缓存（`/app/certs/rules-cache`）。务必使用命名卷或宿主机目录持久化。
+- **宿主机目录挂载权限**：Gymbag 在容器内以 UID/GID `10001` 运行。如果将宿主机目录绑定挂载到 `/app/certs`（`./certs:/app/certs`）而非使用命名卷，需确保该目录对 `10001` 可写：
   ```bash
   mkdir -p ./certs
   sudo chown -R 10001:10001 ./certs
   ```
-- **ACME HTTP-01 需要开放 80/443 端口**：公共 ACME CA 通过 80 端口验证 `/.well-known/acme-challenge/*`，请直接映射宿主机 `80:80` 与 `443:443`。
-- **容器内 `*.internal` 本地开发**：请设置 `GYMBAG_AUTO_HOSTS=off`（容器无法修改宿主机 `/etc/hosts`），按需映射非特权端口（`-p 8080:80 -p 8443:443`），并将卷中的 `/app/certs/ca/neuro-sama-root-ca.pem` 拷贝到宿主机信任一次即可。
-- **Admin REST API**：如果在容器内启用 `GYMBAG_ADMIN=0.0.0.0:2019`，请务必仅将端口绑定到宿主机回环地址（`-p 127.0.0.1:2019:2019`），切勿暴露至公网。
-
----
+- **ACME HTTP-01 需要 `80` 端口**：公网 CA 会通过 `80` 端口请求 `/.well-known/acme-challenge/*` 验证域名归属，因此请映射 `80:80` 和 `443:443`。
+- **容器内使用本地域名 `*.internal`**：设置 `GYMBAG_AUTO_HOSTS=off`（容器内无法修改宿主机 `/etc/hosts`），按需映射非特权端口（`-p 8080:80 -p 8443:443`），并将卷内的 `/app/certs/ca/neuro-sama-root-ca.pem` 拷出到宿主机导入信任。
+- **Admin REST API**：如果在容器内开启 `GYMBAG_ADMIN=0.0.0.0:2019`，宿主机侧请绑定回环地址（`-p 127.0.0.1:2019:2019`），避免将无鉴权的配置修改接口暴露到公网。
 
 ## 本地构建镜像
 
@@ -213,4 +223,4 @@ docker build \
   -t gymbag:local .
 ```
 
-多阶段 `Dockerfile` 在 `golang:1.27-alpine` 中编译静态 `CGO_ENABLED=0` 二进制文件，并打包进仅包含 `ca-certificates` 和 `libcap` 的轻量级 `alpine:3.21` 镜像。
+`Dockerfile` 基于 `golang:1.27-alpine` 编译出静态 `CGO_ENABLED=0` 二进制文件，再拷贝到包含 `ca-certificates` 和 `libcap` 的 `alpine:3.21` 镜像中。
