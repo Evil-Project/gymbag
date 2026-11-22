@@ -138,12 +138,23 @@ func IssueLeaf(certDir string, domains []string, validityDays, renewWithinDays i
 // whenever localhost, *.localhost, or *.internal is present), and verifiable against the local CA chain.
 // Otherwise it generates and persists a new leaf certificate (default 90 days).
 func (m *CAManager) IssueLeaf(certDir string, domains []string, validityDays, renewWithinDays int) (*IssuedCert, error) {
+	return m.IssueLeafNamed(certDir, LeafFullchainFilename, LeafPrivkeyFilename, domains, validityDays, renewWithinDays)
+}
+
+// IssueLeafNamed reuses or issues a leaf certificate under custom filenames inside certDir.
+func (m *CAManager) IssueLeafNamed(certDir, certFilename, keyFilename string, domains []string, validityDays, renewWithinDays int) (*IssuedCert, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	certDir = strings.TrimSpace(certDir)
 	if certDir == "" {
 		return nil, errors.New("localpki: certDir must not be empty")
+	}
+	if strings.TrimSpace(certFilename) == "" {
+		certFilename = LeafFullchainFilename
+	}
+	if strings.TrimSpace(keyFilename) == "" {
+		keyFilename = LeafPrivkeyFilename
 	}
 
 	normalizedDomains, dnsNames, ipAddrs, effectiveTargets, err := expandLeafSANs(domains)
@@ -182,8 +193,8 @@ func (m *CAManager) IssueLeaf(certDir string, domains []string, validityDays, re
 
 	rootCAPath := filepath.Join(caDir, RootCACertFilename)
 	interCAPath := filepath.Join(caDir, IntermediateCACertFilename)
-	certPath := filepath.Join(certDir, LeafFullchainFilename)
-	keyPath := filepath.Join(certDir, LeafPrivkeyFilename)
+	certPath := filepath.Join(certDir, certFilename)
+	keyPath := filepath.Join(certDir, keyFilename)
 
 	now := time.Now().UTC()
 	if pair, ok := tryReuseLeaf(certPath, keyPath, effectiveTargets, renewWithinDays, caState, now); ok {

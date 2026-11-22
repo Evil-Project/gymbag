@@ -124,6 +124,27 @@ func CertificateExpiresWithin(certPath string, days int) (bool, error) {
 	return remaining <= time.Duration(days)*24*time.Hour, nil
 }
 
+// CertificateNeedsRenewal reports whether leaf is expired or within the renewal threshold,
+// capping the threshold for short-lived certificates (<= 14 days, e.g. 160h IP certs) to 1/3 of lifetime.
+func CertificateNeedsRenewal(leaf *x509.Certificate, withinDays int) bool {
+	if leaf == nil {
+		return true
+	}
+	if withinDays <= 0 {
+		withinDays = 30
+	}
+	threshold := time.Duration(withinDays) * 24 * time.Hour
+	lifetime := leaf.NotAfter.Sub(leaf.NotBefore)
+	if lifetime > 0 && lifetime <= 14*24*time.Hour && threshold >= lifetime {
+		third := lifetime / 3
+		if lifetime >= 3*time.Hour && third < time.Hour {
+			third = time.Hour
+		}
+		threshold = third
+	}
+	return time.Until(leaf.NotAfter) <= threshold
+}
+
 // BuildSelfSigned generates an ECDSA P-256 X.509v3 certificate and PKCS#8 private key covering domains.
 func BuildSelfSigned(domains []string, days int) (certPEM, keyPEM []byte, err error) {
 	if len(domains) == 0 {

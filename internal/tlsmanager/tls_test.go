@@ -970,3 +970,143 @@ func TestProviderScopedCachingAndAutomaticRenewal(t *testing.T) {
 		t.Fatalf("BuildACMEClientFromConfig custom failed: %+v, %v", customClient, err)
 	}
 }
+
+func TestRFC8738ACMEIPCertShortLivedAndVerifyFallback(t *testing.T) {
+	ctx := context.Background()
+	board := NewHTTP01Board()
+	var seenOrder map[string]any
+	var seenCSR []byte
+
+	mockHTTP := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			nonceHdr := map[string]string{"Replay-Nonce": "nonce-ip"}
+			switch req.URL.Path {
+			case "/directory":
+				return jsonResp(200, map[string]any{
+					"newNonce":   "https://acme-ip.test/new-nonce",
+					"newAccount": "https://acme-ip.test/new-acct",
+					"newOrder":   "https://acme-ip.test/new-order",
+					"meta": map[string]any{
+						"profiles": map[string]string{
+							"classic":    "https://letsencrypt.org/documents/le-profiles/",
+							"shortlived": "https://letsencrypt.org/documents/le-profiles/",
+						},
+					},
+				}, nil), nil
+			case "/new-nonce":
+				return jsonResp(204, nil, nonceHdr), nil
+			case "/new-acct":
+				nonceHdr["Location"] = "https://acme-ip.test/acct/1"
+				return jsonResp(201, map[string]any{}, nonceHdr), nil
+			case "/new-order":
+				bodyBytes, _ := io.ReadAll(req.Body)
+				var jws map[string]string
+				_ = json.Unmarshal(bodyBytes, &jws)
+				payloadRaw, _ := b64urlDecode(jws["payload"])
+				_ = json.Unmarshal(payloadRaw, &seenOrder)
+				nonceHdr["Location"] = "https://acme-ip.test/order/1"
+				return jsonResp(201, map[string]any{
+					"status":         "pending",
+					"authorizations": []string{"https://acme-ip.test/authz/1"},
+					"finalize":       "https://acme-ip.test/finalize/1",
+				}, nonceHdr), nil
+			case "/authz/1":
+				if _, ok := board.Lookup("ip-tok"); ok {
+					return jsonResp(200, map[string]any{"status": "valid"}, nonceHdr), nil
+				}
+				return jsonResp(200, map[string]any{
+					"status": "pending",
+					"challenges": []map[string]string{
+						{"type": "http-01", "token": "ip-tok", "url": "https://acme-ip.test/chall/1"},
+					},
+				}, nonceHdr), nil
+			case "/chall/1":
+				return jsonResp(200, map[string]any{}, nonceHdr), nil
+			case "/finalize/1":
+				bodyBytes, _ := io.ReadAll(req.Body)
+				var jws map[string]string
+				_ = json.Unmarshal(bodyBytes, &jws)
+				payloadRaw, _ := b64urlDecode(jws["payload"])
+				var csrObj map[string]string
+				_ = json.Unmarshal(payloadRaw, &csrObj)
+				seenCSR, _ = b64urlDecode(csrObj["csr"])
+				return jsonResp(200, map[string]any{
+					"status":      "valid",
+					"certificate": "https://acme-ip.test/cert/1",
+				}, nonceHdr), nil
+			case "/cert/1":
+				parsedCSR, err := x509.ParseCertificateRequest(seenCSR)
+				if err != nil {
+					t.Fatal(err)
+				}
+				caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				tmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(500),
+					Issuer:       pkix.Name{CommonName: "IP ACME CA"},
+					NotBefore:    time.Now().Add(-time.Minute),
+					NotAfter:     time.Now().Add(160 * time.Hour),
+					IPAddresses:  parsedCSR.IPAddresses,
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}
+				der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, parsedCSR.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+				return &http.Response{
+					StatusCode: 200,
+					Header:     http.Header{"Replay-Nonce": []string{"nonce-cert"}},
+					Body:       io.NopCloser(bytes.NewReader(certPEM)),
+				}, nil
+			}
+			return jsonResp(404, nil, nil), nil
+		}),
+	}
+
+	dir := t.TempDir()
+	client := NewACMEClient("https://acme-ip.test/directory", filepath.Join(dir, "acct.pem"), mockHTTP)
+	cfg := config.Default()
+	cfg.Sites = nil
+	cfg.SSH = &config.SSHConfig{Enabled: true, Port: 22, Upstream: "127.0.0.1:2222", Protect: true}
+	cfg.TLS.CertDir = dir
+	cfg.TLS.ACMEEmail = "ops@example.com"
+
+	// 1. Public IP triggers RFC 8738 IP order with profile=shortlived & empty CSR Subject
+	mgr := NewManager(BuildVerifyProviders(cfg, []string{"1.1.1.1"}, board, client))
+	mat, err := mgr.Obtain(ctx)
+	if err != nil || mat == nil || mat.Source != "acme" {
+		t.Fatalf("BuildVerifyProviders public IP ACME failed: mat=%+v err=%v", mat, err)
+	}
+	if seenOrder["profile"] != "shortlived" {
+		t.Fatalf("expected shortlived profile in order, got %+v", seenOrder)
+	}
+	ids, _ := seenOrder["identifiers"].([]any)
+	if len(ids) != 1 || ids[0].(map[string]any)["type"] != "ip" || ids[0].(map[string]any)["value"] != "1.1.1.1" {
+		t.Fatalf("unexpected ACME IP identifier: %+v", ids)
+	}
+	csr, err := x509.ParseCertificateRequest(seenCSR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csr.Subject.CommonName != "" || len(csr.IPAddresses) != 1 || csr.IPAddresses[0].String() != "1.1.1.1" {
+		t.Fatalf("unexpected IP CSR: CN=%q IPs=%v", csr.Subject.CommonName, csr.IPAddresses)
+	}
+	// Short-lived 160h cert must NOT need immediate renewal under default 30d window
+	if CertificateNeedsRenewal(mat.Cert.Leaf, 30) {
+		t.Fatal("fresh 160h IP cert should not trigger immediate renewal at withinDays=30")
+	}
+
+	// 2. Offline / non-public IP falls back cleanly to LocalCAProvider ("verify-local-fullchain.pem")
+	dirLocal := t.TempDir()
+	cfgLocal := cfg
+	cfgLocal.TLS.CertDir = dirLocal
+	localMgr := NewManager(BuildVerifyProviders(cfgLocal, []string{"127.0.0.1", "192.168.1.50"}, board, client))
+	localMat, err := localMgr.Obtain(ctx)
+	if err != nil || localMat == nil || localMat.Source != "local" || filepath.Base(localMat.CertPath) != "verify-local-fullchain.pem" {
+		t.Fatalf("expected verify-local-fullchain.pem fallback, got mat=%+v err=%v", localMat, err)
+	}
+	if !CertificateCovers(localMat.Cert.Leaf, []string{"127.0.0.1", "192.168.1.50"}) {
+		t.Fatalf("expected verify local cert to cover loopback + LAN IP")
+	}
+}

@@ -136,7 +136,7 @@ func (p *FileProvider) loadWithWindow(withinDays int) *Material {
 	if leaf.NotBefore.Add(-5 * time.Minute).After(now) {
 		return nil
 	}
-	if expiring, err := CertificateExpiresWithin(p.CertFile, withinDays); err != nil || expiring {
+	if CertificateNeedsRenewal(leaf, withinDays) {
 		return nil
 	}
 	if !CertificateCovers(leaf, p.Domains) {
@@ -152,9 +152,11 @@ func (p *FileProvider) loadWithWindow(withinDays int) *Material {
 
 // SelfSignedProvider generates a local ECDSA P-256 certificate covering all configured domains.
 type SelfSignedProvider struct {
-	Directory string
-	Domains   []string
-	Days      int
+	Directory    string
+	Domains      []string
+	Days         int
+	CertFilename string
+	KeyFilename  string
 }
 
 func (p *SelfSignedProvider) Issue(_ context.Context) (*Material, error) {
@@ -166,8 +168,16 @@ func (p *SelfSignedProvider) Issue(_ context.Context) (*Material, error) {
 	if err != nil {
 		return nil, err
 	}
-	certPath := filepath.Join(p.Directory, "selfsigned.pem")
-	keyPath := filepath.Join(p.Directory, "selfsigned.key")
+	certName := strings.TrimSpace(p.CertFilename)
+	if certName == "" {
+		certName = "selfsigned.pem"
+	}
+	keyName := strings.TrimSpace(p.KeyFilename)
+	if keyName == "" {
+		keyName = "selfsigned.key"
+	}
+	certPath := filepath.Join(p.Directory, certName)
+	keyPath := filepath.Join(p.Directory, keyName)
 	if err := writePublicFile(certPath, certPEM); err != nil {
 		return nil, certErrorf("failed to write self-signed cert: %v", err)
 	}
@@ -194,6 +204,9 @@ type LocalCAProvider struct {
 	Days            int
 	RenewWithinDays int
 	Required        bool
+	AllowNonLocal   bool
+	CertFilename    string
+	KeyFilename     string
 	CA              *localpki.CAManager
 }
 
@@ -216,7 +229,7 @@ func (p *LocalCAProvider) Renew(_ context.Context, withinDays int, force bool) (
 		}
 		return nil, nil
 	}
-	if !p.Required && !localpki.AllLocalDomains(p.Domains) {
+	if !p.Required && !p.AllowNonLocal && !localpki.AllLocalDomains(p.Domains) {
 		return nil, nil
 	}
 
@@ -236,7 +249,7 @@ func (p *LocalCAProvider) Renew(_ context.Context, withinDays int, force bool) (
 	if caMgr == nil {
 		caMgr = localpki.NewCAManager(filepath.Join(p.Directory, "ca"))
 	}
-	issued, err := caMgr.IssueLeaf(p.Directory, p.Domains, days, effectiveWithin)
+	issued, err := caMgr.IssueLeafNamed(p.Directory, p.CertFilename, p.KeyFilename, p.Domains, days, effectiveWithin)
 	if err != nil {
 		return nil, certErrorf("local CA issuance failed: %v", err)
 	}
@@ -294,6 +307,9 @@ type ACMEProvider struct {
 	ProviderName    string
 	RenewWithinDays int
 	Required        bool
+	AllowIPs        bool
+	CertFilename    string
+	KeyFilename     string
 }
 
 func (p *ACMEProvider) effectiveProviderName() string {
@@ -308,6 +324,9 @@ func (p *ACMEProvider) effectiveProviderName() string {
 
 // CachePaths returns the on-disk fullchain and private key cache paths for this ACMEProvider.
 func (p *ACMEProvider) CachePaths() (certPath, keyPath string) {
+	if strings.TrimSpace(p.CertFilename) != "" && strings.TrimSpace(p.KeyFilename) != "" {
+		return filepath.Join(p.Directory, p.CertFilename), filepath.Join(p.Directory, p.KeyFilename)
+	}
 	return ACMECachePaths(p.Directory, p.effectiveProviderName())
 }
 
@@ -319,7 +338,7 @@ func (p *ACMEProvider) Issue(ctx context.Context) (*Material, error) {
 		return nil, nil
 	}
 	provSlug := p.effectiveProviderName()
-	certPath, keyPath := ACMECachePaths(p.Directory, provSlug)
+	certPath, keyPath := p.CachePaths()
 
 	defaultDays := p.RenewWithinDays
 	if defaultDays <= 0 {
@@ -344,7 +363,7 @@ func (p *ACMEProvider) Issue(ctx context.Context) (*Material, error) {
 	if p.Board != nil {
 		defer p.Board.Clear()
 	}
-	certPEM, keyPEM, err := p.Client.Issue(ctx, p.Domains, p.Email, p.Board)
+	certPEM, keyPEM, err := p.Client.IssueWithOptions(ctx, p.Domains, p.Email, p.Board, p.AllowIPs)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +394,7 @@ func (p *ACMEProvider) eligible() bool {
 		return false
 	}
 	for _, d := range p.Domains {
-		if !isPublicACMEDomain(d) {
+		if !isPublicACMEIdentifier(d, p.AllowIPs) {
 			return false
 		}
 	}
@@ -511,6 +530,99 @@ func BuildProvidersWithLocal(cfg config.Config, board *HTTP01Board, client *ACME
 		return []Provider{selfProv}
 	default:
 		return []Provider{fileProv, acmeProv, localProvider, selfProv}
+	}
+}
+
+// BuildVerifyProviders builds the TLS Provider chain for the SSH/Minecraft verification HTTPS portal,
+// supporting custom Verify.CertFile/KeyFile, RFC 8738 ACME IP/domain certs, Local CA certs, and SelfSigned fallback.
+func BuildVerifyProviders(cfg config.Config, targets []string, board *HTTP01Board, client *ACMEClient) []Provider {
+	if len(targets) == 0 {
+		targets = []string{"127.0.0.1", "::1"}
+	}
+	certFile, keyFile := cfg.Verify.CertFile, cfg.Verify.KeyFile
+	fileRequired := certFile != "" && keyFile != ""
+	if !fileRequired && cfg.TLS.Mode == "file" {
+		certFile, keyFile = cfg.TLS.CertFile, cfg.TLS.KeyFile
+		fileRequired = true
+	}
+	fileProv := &FileProvider{
+		CertFile:        certFile,
+		KeyFile:         keyFile,
+		KeyPassword:     cfg.TLS.KeyPassword,
+		Domains:         targets,
+		RenewWithinDays: cfg.TLS.RenewWithinDays,
+		Required:        fileRequired,
+	}
+
+	var acmeTargets []string
+	for _, t := range targets {
+		if isPublicACMEIdentifier(t, true) {
+			acmeTargets = append(acmeTargets, t)
+		}
+	}
+
+	provName := strings.TrimSpace(cfg.TLS.Provider)
+	if strings.EqualFold(provName, "local") {
+		provName = ""
+	}
+	acmeCertFile, acmeKeyFile := "verify-acme-fullchain.pem", "verify-acme-privkey.pem"
+	if slug := sanitizeProviderSlug(provName); slug != "" && slug != "letsencrypt" {
+		acmeCertFile = "verify-acme-" + slug + "-fullchain.pem"
+		acmeKeyFile = "verify-acme-" + slug + "-privkey.pem"
+	}
+	acmeProv := &ACMEProvider{
+		Client:          client,
+		Board:           board,
+		Directory:       cfg.TLS.CertDir,
+		Domains:         acmeTargets,
+		Email:           cfg.TLS.ACMEEmail,
+		ProviderName:    provName,
+		RenewWithinDays: cfg.TLS.RenewWithinDays,
+		Required:        cfg.TLS.Mode == "acme",
+		AllowIPs:        true,
+		CertFilename:    acmeCertFile,
+		KeyFilename:     acmeKeyFile,
+	}
+
+	localProv := &LocalCAProvider{
+		Directory:       cfg.TLS.CertDir,
+		Domains:         targets,
+		Days:            90,
+		RenewWithinDays: cfg.TLS.RenewWithinDays,
+		Required:        cfg.TLS.Mode == "local" || strings.EqualFold(cfg.TLS.Provider, "local"),
+		AllowNonLocal:   true,
+		CertFilename:    "verify-local-fullchain.pem",
+		KeyFilename:     "verify-local-privkey.pem",
+	}
+
+	selfProv := &SelfSignedProvider{
+		Directory:    cfg.TLS.CertDir,
+		Domains:      targets,
+		Days:         90,
+		CertFilename: "verify-selfsigned.pem",
+		KeyFilename:  "verify-selfsigned.key",
+	}
+
+	if cfg.Verify.CertFile != "" && cfg.Verify.KeyFile != "" {
+		return []Provider{fileProv}
+	}
+	switch cfg.TLS.Mode {
+	case "file":
+		return []Provider{fileProv}
+	case "acme":
+		if len(acmeTargets) > 0 {
+			return []Provider{acmeProv}
+		}
+		return []Provider{localProv, selfProv}
+	case "local":
+		return []Provider{localProv}
+	case "selfsigned":
+		return []Provider{selfProv}
+	default:
+		if len(acmeTargets) > 0 && !strings.EqualFold(cfg.TLS.Provider, "local") {
+			return []Provider{acmeProv, localProv, selfProv}
+		}
+		return []Provider{localProv, selfProv}
 	}
 }
 
@@ -650,7 +762,7 @@ func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material,
 	inMemExpiring := true
 	if prevLeaf != nil {
 		prevDER = prevLeaf.Raw
-		inMemExpiring = time.Until(prevLeaf.NotAfter) <= time.Duration(withinDays)*24*time.Hour
+		inMemExpiring = CertificateNeedsRenewal(prevLeaf, withinDays)
 	}
 
 	diskChangedOrExpiring := false
@@ -662,7 +774,7 @@ func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material,
 		} else {
 			if len(prevDER) > 0 && !bytes.Equal(prevDER, diskLeaf.Raw) {
 				diskChangedOrExpiring = true
-			} else if time.Until(diskLeaf.NotAfter) <= time.Duration(withinDays)*24*time.Hour {
+			} else if CertificateNeedsRenewal(diskLeaf, withinDays) {
 				diskChangedOrExpiring = true
 			}
 		}

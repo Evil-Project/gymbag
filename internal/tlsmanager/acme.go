@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -77,6 +79,31 @@ func isValidACMEToken(token string) bool {
 	return true
 }
 
+// isPublicACMEIP reports whether raw is a globally routable IP address eligible for RFC 8738 ACME IP issuance.
+func isPublicACMEIP(raw string) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(host.Normalize(raw)))
+	if err != nil || !addr.IsValid() {
+		return false
+	}
+	addr = addr.Unmap()
+	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
+		return false
+	}
+	for _, p := range []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("2001:db8::/32"),
+	} {
+		if p.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
 // isPublicACMEDomain reports whether raw is a publicly routable domain eligible for ACME HTTP-01 validation.
 func isPublicACMEDomain(raw string) bool {
 	if !host.IsPublic(raw) {
@@ -92,6 +119,14 @@ func isPublicACMEDomain(raw string) bool {
 		}
 	}
 	return true
+}
+
+// isPublicACMEIdentifier reports whether raw is either a public ACME domain or (when allowIPs) a globally routable IP.
+func isPublicACMEIdentifier(raw string, allowIPs bool) bool {
+	if allowIPs && isPublicACMEIP(raw) {
+		return true
+	}
+	return isPublicACMEDomain(raw)
 }
 
 // HTTP01Board stores in-flight ACME HTTP-01 challenge key authorizations served on port 80.
@@ -446,17 +481,22 @@ func LoadOrCreateCertKey(path string) (crypto.Signer, []byte, error) {
 
 // RejectIneligibleACME validates that domains and email are eligible for ACME HTTP-01 issuance.
 func RejectIneligibleACME(domains []string, email string) error {
+	return RejectIneligibleACMEWithOptions(domains, email, false)
+}
+
+// RejectIneligibleACMEWithOptions validates domains/IPs and email for ACME HTTP-01 issuance.
+func RejectIneligibleACMEWithOptions(identifiers []string, email string, allowIPs bool) error {
 	if email != "" && (!strings.Contains(email, "@") || strings.HasPrefix(email, "@") || strings.HasSuffix(email, "@")) {
 		return certErrorf("GYMBAG_ACME_EMAIL must be a valid email address")
 	}
-	if len(domains) == 0 {
+	if len(identifiers) == 0 {
 		return certErrorf("ACME requires at least one public domain")
 	}
 	var reasons []string
-	for _, d := range domains {
+	for _, d := range identifiers {
 		if strings.HasPrefix(d, "*.") {
 			reasons = append(reasons, fmt.Sprintf("%s needs DNS-01; Gymbag completes HTTP-01 only", d))
-		} else if !isPublicACMEDomain(d) {
+		} else if !isPublicACMEIdentifier(d, allowIPs) {
 			reasons = append(reasons, fmt.Sprintf("%s is not a public hostname", d))
 		}
 	}
@@ -492,6 +532,7 @@ type ACMEClient struct {
 
 	mu        sync.Mutex
 	directory map[string]string
+	profiles  map[string]string
 	nonce     string
 	kid       string
 	key       crypto.Signer
@@ -580,7 +621,12 @@ func (c *ACMEClient) DirectoryURL() string {
 
 // Issue executes a full ACME HTTP-01 certificate order for domains.
 func (c *ACMEClient) Issue(ctx context.Context, domains []string, email string, board *HTTP01Board) (certPEM, keyPEM []byte, err error) {
-	if err := RejectIneligibleACME(domains, email); err != nil {
+	return c.IssueWithOptions(ctx, domains, email, board, false)
+}
+
+// IssueWithOptions executes an ACME HTTP-01 certificate order for domains and (when allowIPs) RFC 8738 public IPs.
+func (c *ACMEClient) IssueWithOptions(ctx context.Context, identifiers []string, email string, board *HTTP01Board, allowIPs bool) (certPEM, keyPEM []byte, err error) {
+	if err := RejectIneligibleACMEWithOptions(identifiers, email, allowIPs); err != nil {
 		return nil, nil, err
 	}
 	c.mu.Lock()
@@ -598,7 +644,7 @@ func (c *ACMEClient) Issue(ctx context.Context, domains []string, email string, 
 	if err := c.registerLocked(ctx, email, existed); err != nil {
 		return nil, nil, err
 	}
-	order, orderURL, err := c.newOrderLocked(ctx, domains)
+	order, orderURL, err := c.newOrderLocked(ctx, identifiers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -613,7 +659,7 @@ func (c *ACMEClient) Issue(ctx context.Context, domains []string, email string, 
 	if err != nil {
 		return nil, nil, err
 	}
-	csrDER, err := buildCSR(certSigner, domains)
+	csrDER, err := buildCSR(certSigner, identifiers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -673,6 +719,16 @@ func (c *ACMEClient) loadDirectoryLocked(ctx context.Context) (map[string]string
 	for k, v := range raw {
 		if s, ok := v.(string); ok {
 			dir[k] = s
+		}
+	}
+	if meta, ok := raw["meta"].(map[string]any); ok {
+		if profs, ok := meta["profiles"].(map[string]any); ok {
+			c.profiles = make(map[string]string, len(profs))
+			for pk, pv := range profs {
+				if ps, ok := pv.(string); ok {
+					c.profiles[pk] = ps
+				}
+			}
 		}
 	}
 	c.directory = dir
@@ -770,16 +826,29 @@ func (c *ACMEClient) registerLocked(ctx context.Context, email string, accountKe
 	return nil
 }
 
-func (c *ACMEClient) newOrderLocked(ctx context.Context, domains []string) (map[string]any, string, error) {
+func (c *ACMEClient) newOrderLocked(ctx context.Context, identifiers []string) (map[string]any, string, error) {
 	dir, err := c.loadDirectoryLocked(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	ids := make([]map[string]string, len(domains))
-	for i, d := range domains {
-		ids[i] = map[string]string{"type": "dns", "value": d}
+	ids := make([]map[string]string, len(identifiers))
+	hasIP := false
+	for i, d := range identifiers {
+		norm := host.Normalize(d)
+		if addr, parseErr := netip.ParseAddr(norm); parseErr == nil {
+			ids[i] = map[string]string{"type": "ip", "value": addr.Unmap().String()}
+			hasIP = true
+		} else {
+			ids[i] = map[string]string{"type": "dns", "value": norm}
+		}
 	}
-	payloadBytes, _ := json.Marshal(map[string]any{"identifiers": ids})
+	orderReq := map[string]any{"identifiers": ids}
+	if hasIP {
+		if _, hasShortlived := c.profiles["shortlived"]; hasShortlived {
+			orderReq["profile"] = "shortlived"
+		}
+	}
+	payloadBytes, _ := json.Marshal(orderReq)
 	statusCode, body, hdrs, err := c.signedLocked(ctx, dir["newOrder"], payloadBytes)
 	if err != nil {
 		return nil, "", err
@@ -940,18 +1009,32 @@ func (c *ACMEClient) refreshNonceLocked(ctx context.Context) error {
 	return nil
 }
 
-func buildCSR(key crypto.Signer, domains []string) ([]byte, error) {
-	dnsNames := make([]string, len(domains))
-	for i, d := range domains {
-		dnsNames[i] = host.Normalize(d)
-	}
-	cn := dnsNames[0]
-	if len(cn) > 64 {
-		cn = cn[:64]
+func buildCSR(key crypto.Signer, identifiers []string) ([]byte, error) {
+	var dnsNames []string
+	var ipAddrs []net.IP
+	for _, raw := range identifiers {
+		norm := host.Normalize(raw)
+		if addr, err := netip.ParseAddr(norm); err == nil {
+			unmapped := addr.Unmap()
+			ip := net.IP(unmapped.AsSlice())
+			if ip4 := ip.To4(); ip4 != nil {
+				ip = ip4
+			}
+			ipAddrs = append(ipAddrs, ip)
+		} else if norm != "" {
+			dnsNames = append(dnsNames, norm)
+		}
 	}
 	tmpl := &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: cn},
-		DNSNames: dnsNames,
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddrs,
+	}
+	if len(dnsNames) > 0 {
+		cn := dnsNames[0]
+		if len(cn) > 64 {
+			cn = cn[:64]
+		}
+		tmpl.Subject = pkix.Name{CommonName: cn}
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
 	if err != nil {
