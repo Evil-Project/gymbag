@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Gymbag
-  text: Proxy Inverso HTTPS y WAF Proof-of-Work
-  tagline: Un único binario Go que termina HTTPS, emite certificados ACME con varias CA y frena a los scrapers con un desafío proof-of-work SHA-256.
+  text: Gateway PoW para HTTP/HTTPS, SSH y Minecraft
+  tagline: Un único binario en Go que termina HTTPS, protege SSH y Minecraft con proof-of-work en el navegador y bloquea scrapers e IPs maliciosas.
   image:
     src: /mascot-happy.png
     alt: Mascota de Gymbag
@@ -13,8 +13,8 @@ hero:
       text: Inicio Rápido en 2 Comandos
       link: /es/guide/getting-started
     - theme: alt
-      text: Guía de Docker
-      link: /es/guide/docker
+      text: Guía de SSH y Minecraft
+      link: /es/guide/ssh-minecraft
     - theme: alt
       text: Benchmarks vs Caddy y Nginx
       link: /es/guide/benchmarks
@@ -22,28 +22,28 @@ hero:
 features:
   - icon: ⚡
     title: Ruta de proxy rápida
-    details: La coincidencia Aho-Corasick, los limitadores por shard y los buffers reutilizables dejan el WAF fuera del camino, con unos 72.5k RPS pasando por TLS y más de 140k RPS bloqueando sondeos en el borde.
+    details: "La coincidencia Aho-Corasick, los limitadores por shard y los buffers reutilizables dejan el WAF fuera del camino: ~72.5k RPS a través de TLS y más de 140k RPS descartando sondeos en el borde."
   - icon: 🛡️
-    title: WAF activo por defecto
-    details: Trae reglas para /.env, /wp-admin, escáneres y sondeos SQLi/XSS. Cuatro niveles de verificación deciden a quién se le pide el desafío SHA-256, y el permiso puede durar 30m, 12h o 7d.
+    title: HTTP, SSH y Minecraft
+    details: "Protege sitios web, WebSockets, OpenSSH y servidores Minecraft Java desde un mismo proceso. Los desafíos de SSH y Minecraft imprimen un enlace HTTPS directamente en la pantalla de desconexión del cliente."
   - icon: 🌐
-    title: Reglas remotas y feeds de amenazas
-    details: Descarga reglas de firewall por HTTP con caché ETag, y refresca con temporizador IPsum, Spamhaus DROP, Feodo y las listas CIDR publicadas de rastreadores de IA.
+    title: Inteligencia de amenazas, VPN y listas de IA
+    details: "Actualiza automáticamente IPsum, Spamhaus DROP, Feodo, listas VPN/Tor de X4BNet y CIDRs oficiales de rastreadores de IA, además de consultas fail-open en vivo con Shodan InternetDB, StopForumSpam, ipquery.io e ipapi.is."
   - icon: 🔒
-    title: Certificados sin complicaciones
-    details: ACME HTTP-01 contra Let's Encrypt, ZeroSSL, Google, SSL.com, LiteSSL o Buypass. Para nombres *.internal monta su propia CA y escribe las entradas de /etc/hosts por ti.
+    title: ACME, certs IP y PKI local
+    details: "Ejecuta HTTP-01 para Let's Encrypt, ZeroSSL, Google, SSL.com, LiteSSL y Buypass, soporta certificados IP ACME RFC 8738 para portales de verificación y firma nombres *.internal con su propia CA."
   - icon: 🐳
-    title: Despliega como ya despliegas
-    details: Imágenes multiarquitectura en GHCR (amd64 y arm64), un compose con Redis para estado compartido, paquetes para Arch y unidades para systemd, launchd, OpenRC y Supervisor.
+    title: Paquetes y contenedores listos
+    details: "Publica binarios estáticos, paquetes .deb para Debian/Ubuntu, .pkg.tar.zst para Arch, un flake de NixOS, imágenes multiarquitectura en GHCR, compose con Redis y unidades para systemd/launchd/OpenRC/Supervisor."
   - icon: 🔌
-    title: Cambia la configuración en caliente
-    details: Edita el Gymbagfile con --watch, o ajusta niveles de verificación, timeouts, reglas locales y URLs remotas desde la Admin API. Las conexiones activas siguen en pie.
+    title: Cambia la configuración en marcha
+    details: "Genera gymbag.json o Gymbagfile, lee configuraciones de nginx/Apache/Caddyfile v2, vigila ediciones en directorios de reglas y expone una Admin REST API en vivo sin cortar conexiones."
 ---
 
 <QuickStartBuilder />
 
 ## Niveles de Verificación Interactivos
 
-Elige un nivel abajo y verás cómo Gymbag trata a navegadores, rastreadores de IA, clientes automatizados, IPs maliciosas y sondeos de vulnerabilidades:
+Elige abajo un nivel de verificación para ver cómo trata Gymbag a navegadores, rastreadores de IA, IPs VPN/Tor, clientes automatizados, feeds de amenazas y sondeos de exploits:
 
 <VerifyLevelMatrix />

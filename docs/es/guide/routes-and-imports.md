@@ -1,12 +1,12 @@
-# Rutas por Path, Archivos Estáticos e Importación de Configuración
+# Rutas por Path, Archivos Estáticos e Importación de Configuraciones
 
-Además de `reverse_proxy` simple, un sitio de Gymbag puede contener **rutas por path** ordenadas para servir archivos estáticos, respuestas fijas, redirecciones HTTP, modificaciones de cabeceras de respuesta y upstreams específicos por ruta. Gymbag también lee y convierte de forma nativa configuraciones existentes de **nginx**, **Apache** y **Caddyfile v2**.
+Junto a `reverse_proxy`, un sitio en Gymbag puede declarar **rutas por path** ordenadas para archivos estáticos, respuestas fijas, redirecciones HTTP, modificación de cabeceras de respuesta y upstreams específicos por ruta. Gymbag también lee y convierte directamente archivos existentes de **nginx**, **Apache** y **Caddyfile v2**.
 
-## Rutas por Path Ordenadas
+## Rutas por path ordenadas
 
-Las rutas dentro de un sitio se evalúan en orden. La **primera** ruta cuyo `path` coincida gestiona la petición; las peticiones que no coincidan con ninguna ruta pasan a los `upstreams` predeterminados del sitio (o devuelven `404` cuando no hay un upstream predeterminado configurado).
+Las rutas dentro de un sitio se evalúan de arriba abajo. El primer `path` que coincida atiende la petición; todo lo que no coincida pasa a los `upstreams` predeterminados del sitio (o devuelve `404` si no hay ninguno definido).
 
-Las reglas WAF, los límites de tasa, la inteligencia de amenazas y la verificación PoW siempre se ejecutan **antes** que cualquier manejador de ruta.
+Las reglas WAF, los límites de tasa, la inteligencia de amenazas y los desafíos PoW se ejecutan siempre **antes** que cualquier manejador de ruta.
 
 ```caddyfile
 app.example.com {
@@ -32,26 +32,26 @@ app.example.com {
 }
 ```
 
-### Manejadores Soportados
+### Manejadores de ruta
 
-Cada ruta utiliza exactamente un manejador:
+Cada ruta utiliza un manejador:
 
-- **Proxy Inverso (`upstreams`)**: Envía las peticiones coincidentes (y actualizaciones WebSocket) a upstreams específicos de la ruta, eliminando opcionalmente un prefijo (`handle_path` / `strip_prefix`).
-- **Servidor de Archivos Estáticos (`root` / `file_server`)**: Sirve archivos desde `root` con archivos `index` configurables (por defecto `["index.html"]`), listado de directorios (`browse`) y `fallback` para SPA (p. ej. `try_files {path} /index.html`).
-- **Respuesta Estática (`respond`)**: Escribe un código de estado y cuerpo inmediatos directamente desde Gymbag sin pasar por un upstream.
-- **Redirección (`redir`)**: Devuelve una redirección HTTP (`301`, `302`, `307`, `308`) con marcadores de petición: `{scheme}`, `{host}`, `{uri}`, `{path}` y `{query}`.
-- **Cabeceras de Respuesta (`headers` / `header`)**: Establece cabeceras (`Header-Name value`) o las elimina anteponiendo `-` a la clave (`-Server`).
+- **Proxy inverso (`upstreams`)**: reenvía las peticiones HTTP coincidentes y actualizaciones WebSocket hacia los upstreams propios de la ruta, retirando opcionalmente un prefijo (`handle_path` / `strip_prefix`).
+- **Servidor de archivos estáticos (`root` / `file_server`)**: sirve archivos desde `root` con archivos `index` (por defecto `["index.html"]`), listados de directorio (`browse`) y `fallback` para SPA (`try_files {path} /index.html`).
+- **Respuesta estática (`respond`)**: devuelve de inmediato un código de estado y cuerpo sin abrir conexión al upstream.
+- **Redirección (`redir`)**: envía una redirección 3xx (`301`, `302`, `307`, `308`) expandiendo `{scheme}`, `{host}`, `{uri}`, `{path}` y `{query}`.
+- **Cabeceras de respuesta (`headers` / `header`)**: fija cabeceras (`Header-Name value`) o las elimina con prefijo `-` (`-Server`).
 
-### Coincidencia de Paths
+### Comparadores de path
 
-- `""`, `*` o `/*`: Coincide con cualquier ruta de petición.
-- `/exact`: Coincidencia exacta de path.
-- `/api/*`, `*.php`: Comodín glob (`*` coincide con cualquier secuencia de caracteres, incluyendo `/`).
-- `~^/v[0-9]+/`: Expresión regular Go RE2 después del `~` inicial.
+- `""`, `*` o `/*`: coincide con cualquier ruta.
+- `/exact`: coincidencia exacta de path.
+- `/api/*`, `*.php`: comodín glob (`*` coincide con cualquier secuencia de caracteres, incluido `/`).
+- `~^/v[0-9]+/`: expresión regular Go RE2 tras `~`.
 
-### Gestión de Rutas en `gymbag.json` y CLI
+### Rutas en `gymbag.json` y CLI
 
-En `gymbag.json`, las rutas se definen en el arreglo `routes` de cada sitio:
+En `gymbag.json`, las rutas van en el array `routes` del sitio:
 
 ```json
 {
@@ -64,7 +64,7 @@ En `gymbag.json`, las rutas se definen en el arreglo `routes` de cada sitio:
 }
 ```
 
-Gestiona las rutas desde la CLI o en vivo mediante `PATCH /api/v1/sites/{domain}`:
+Edita rutas desde la CLI o mediante `PATCH /api/v1/sites/{domain}`:
 
 ```bash
 ./gymbag config route list -d app.example.com
@@ -73,19 +73,16 @@ Gestiona las rutas desde la CLI o en vivo mediante `PATCH /api/v1/sites/{domain}
 ./gymbag config route remove -d app.example.com --index 0
 ```
 
-## Importación de nginx, Apache y Caddyfile v2
+## Importar nginx, Apache y Caddyfile v2
 
-Gymbag analiza de forma nativa:
-- **Caddyfile v2**: Snippets `(name) { ... }`, `import` (con globs de archivos y `{args[n]}`), `@matchers` con nombre (`path`, `path_regexp`, `method`), `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir` y `header`.
-- **nginx (`nginx.conf`)**: Bloques `http` / `server` / `location`, pools `upstream`, `proxy_pass`, `root` / `alias` / `index` / `autoindex` / `try_files`, `return`, `rewrite ... permanent|redirect`, `add_header`, `ssl_certificate` / `ssl_certificate_key` e `include`.
+Gymbag lee directamente estos formatos:
+- **Caddyfile v2**: snippets `(name) { ... }`, `import` (globs de archivo y `{args[n]}`), matchers nombrados `@matchers` (`path`, `path_regexp`, `method`), `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir` y `header`.
+- **nginx (`nginx.conf`)**: bloques `http` / `server` / `location`, pools `upstream`, `proxy_pass`, `root` / `alias` / `index` / `autoindex` / `try_files`, `return`, `rewrite ... permanent|redirect`, `add_header`, `ssl_certificate` / `ssl_certificate_key` e `include`.
 - **Apache (`httpd.conf` / `apache2.conf`)**: `<VirtualHost>`, `ServerName` / `ServerAlias`, `ProxyPass` / `<Proxy balancer://...>`, `DocumentRoot` / `DirectoryIndex`, `Redirect` / `RedirectMatch`, `Header set|unset`, `SSLCertificateFile` / `SSLCertificateKeyFile` e `Include` / `IncludeOptional`.
 
-Ejecuta una configuración importada directamente o conviértela a `gymbag.json` / `Gymbagfile`:
+Sirve directamente una configuración importada o conviértela a `gymbag.json` / `Gymbagfile`:
 
 ```bash
-# Servir directamente desde nginx.conf o httpd.conf
 ./gymbag run -c /etc/nginx/nginx.conf
-
-# Convertir al formato nativo gymbag.json de Gymbag
 ./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 ```

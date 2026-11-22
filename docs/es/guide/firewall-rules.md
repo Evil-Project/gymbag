@@ -1,39 +1,37 @@
 # Reglas de Firewall, Reglas Remotas e Inteligencia de Amenazas
 
-## Pipeline de Evaluación de Peticiones
+## Pipeline de evaluación de peticiones
 
-Para cada petición en un sitio protegido, Gymbag evalúa las capas en orden estricto:
+En los sitios HTTP protegidos, las peticiones pasan por estas capas en orden:
 
-1. **Sanidad de petición** — Método HTTP, longitud máxima de URI, bytes nulos y path traversal (`..` / `%2e%2e`).
-2. **Bypass ACME HTTP-01** — `/.well-known/acme-challenge/*` siempre pasa para garantizar la emisión de certificados.
-3. **Reglas personalizadas locales** — Globales primero, luego las del sitio, de arriba a abajo (**la primera coincidencia gana**).
-4. **Reglas remotas (`remote_rules`)** — Reglas validadas descargadas desde URLs HTTP/HTTPS en orden de declaración.
-5. **Reglas base integradas** — Archivos sensibles, sondeos CMS, escáneres, patrones SQLi/XSS y verificación de automatización (salvo `default_rules off`).
-6. **Limitador de tasa por sitio e IP** — `rate_limit` y `rate_window`.
-7. **Inteligencia de amenazas IP** — `ip_security_action` (`verify` o `block`).
-8. **Verificación Proof-of-Work** — Nivel `verify` configurado (`0`–`3`).
+1. **Validación básica de petición**: verificación de método HTTP, longitud máxima de URI y rechazo de bytes nulos y traversal `..` / `%2e%2e`.
+2. **Exención ACME HTTP-01**: `/.well-known/acme-challenge/*` siempre pasa para no interrumpir la emisión de certificados.
+3. **Reglas personalizadas locales**: primero reglas globales y luego las del sitio, de arriba abajo (gana la primera coincidencia).
+4. **Reglas remotas (`remote_rules`)**: reglas validadas descargadas desde URLs HTTP/HTTPS, evaluadas en orden.
+5. **Reglas base integradas**: rutas sensibles, sondeos de CMS, escáneres, consultas SQLi/XSS y reglas PoW de automatización (salvo `default_rules off`).
+6. **Limitador de tasa por sitio y por IP**: `rate_limit` y `rate_window` (por defecto `240` / `60s`).
+7. **Inteligencia de amenazas IP**: `ip_security_action verify` (por defecto) o `block`.
+8. **Verificación Proof-of-Work**: nivel `verify` configurado (`0`–`3`), incluida la detección de VPN/proxy/Tor (`1` y `3`) y coincidencia con rastreadores de IA (`2` y `3`).
 
----
+Como las reglas personalizadas locales se evalúan antes que las reglas remotas, las reglas base, los límites de tasa y los feeds de amenazas, colocar una regla `allow` al principio de un bloque de sitio incluye en lista blanca un CIDR de oficina, un health check o una cookie de vista previa sin rodeos. Las reglas globales dentro de `{ ... }` también se aplican a los servicios `ssh` y `minecraft` (junto con las reglas específicas dentro de `ssh { ... }` y `minecraft { ... }`).
 
-## Reglas en Una Línea
+## Reglas abreviadas en una línea
 
-Sintaxis: `<allow | verify | block> <campo> <patrón...>` (alias `bypass`/`pass`, `challenge`/`pow`, `deny`/`drop`/`reject`).
+Sintaxis: `<allow | verify | block> <field> <pattern...>` (también funcionan los alias `bypass`/`pass`, `challenge`/`pow` y `deny`/`drop`/`reject`).
 
-| Campo | Semántica | Ejemplo |
+| Campo | Semántica de coincidencia | Ejemplo |
 | :--- | :--- | :--- |
-| `ip` | IPv4, IPv6 o rangos CIDR | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
-| `user_agent` | Subcadena sin distinción de mayúsculas, `*` glob o `~regex` | `block user_agent BadBot ~^(?i)python-urllib/` |
-| `path` | Exacto/prefijo, `*` glob o `~regex` | `verify path /api/export* ~^/v[0-9]+/search` |
-| `query` | Cadena de consulta, `*` glob o `~regex` | `block query "union select" ~(?i)<script` |
-| `method` | Verbos HTTP | `verify method POST DELETE` |
-| `header` | `<Header-Name> [patrón]` (`""` = ausente/vacío, `*` = presente) | `verify header Accept-Language ""` |
-| `cookie` | `<cookie_name> [patrón]` (`""` = ausente/vacío, `*` = presente) | `allow cookie vip_session *` |
+| `ip` | Direcciones IPv4, IPv6 o rangos CIDR | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
+| `user_agent` | Subcadena insensible a mayúsculas, glob `*` o `~regex` | `block user_agent BadBot ~^(?i)python-urllib/` |
+| `path` | Exacto/prefijo, glob `*` o `~regex` | `verify path /api/export* ~^/v[0-9]+/search` |
+| `query` | Coincidencia en query raw/decodificada, glob `*` o `~regex` | `block query "union select" ~(?i)<script` |
+| `method` | Verbos HTTP (insensible a mayúsculas) | `verify method POST DELETE` |
+| `header` | `<Header-Name> [pattern]` (`""` = ausente/vacía, `*` = presente) | `verify header Accept-Language ""` |
+| `cookie` | `<cookie_name> [pattern]` (`""` = ausente/vacía, `*` = presente) | `allow cookie vip_session *` |
 
----
+## Bloques `rule` multicondición
 
-## Bloques `rule` Multicondición
-
-Múltiples valores en el **mismo** campo se combinan con **OR**; campos distintos dentro del mismo bloque `rule` se combinan con **AND**:
+Usa `rule "name" { ... }` cuando varias condiciones deban cumplirse juntas. Múltiples valores en un mismo campo se combinan con OR; campos distintos dentro del mismo bloque se combinan con AND:
 
 ```caddyfile
 app.example.com {
@@ -55,11 +53,9 @@ app.example.com {
 }
 ```
 
----
+## Reglas remotas (`remote_rules`)
 
-## Reglas Remotas (`remote_rules`)
-
-Sincroniza reglas de firewall compartidas desde una o más URLs HTTP/HTTPS (Git raw, S3/R2, CDN o servidor interno). Se actualizan al iniciar y cada `remote_rules_refresh` (por defecto `5m` / `300`s).
+Puedes obtener conjuntos compartidos de reglas desde una o más URLs HTTP/HTTPS (un archivo raw en Git, bucket de almacenamiento de objetos, CDN o servidor de políticas). Gymbag las descarga al arrancar y cada `remote_rules_refresh` (por defecto `5m` / `300s`).
 
 ::: code-group
 ```caddyfile [Gymbagfile]
@@ -71,12 +67,13 @@ Sincroniza reglas de firewall compartidas desde una o más URLs HTTP/HTTPS (Git 
 app.example.com {
     reverse_proxy http://localhost:3000
     verify 3
+
     allow ip 10.0.0.0/8
     remote_rules https://rules.example.com/app-overrides.json
 }
 ```
 
-```bash [CLI y Entorno]
+```bash [CLI y entorno]
 gymbag run --config Gymbagfile \
   --remote-rules https://rules.example.com/baseline.rules \
   --remote-rules-refresh 10m
@@ -89,20 +86,60 @@ gymbag
 ```bash [Admin REST API]
 curl http://127.0.0.1:2019/api/v1/rules/remote
 curl -X POST http://127.0.0.1:2019/api/v1/rules/remote/refresh
+
+curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
+  -H "Content-Type: application/json" \
+  -d '{"remote_rules": ["https://rules.example.com/emergency.rules"]}'
 ```
 :::
 
-### Formatos Soportados y Garantías Fail-Safe
+### Formatos soportados de reglas remotas
 
-- **Detección automática de formato**: Sintaxis de reglas `Gymbagfile` o JSON (`[ ... ]` o `{"rules": [...]}`).
-- **Peticiones condicionales y caché en disco**: Usa `ETag` / `If-Modified-Since` y guarda caché bajo `<cert_dir>/rules-cache/` para arranque instantáneo.
-- **Seguridad ante fallos**: Valida sintaxis (límite 4 MiB, timeout 15s) antes de activar; ante errores conserva la última lista válida y recarga el motor WAF atómicamente sin cortar conexiones.
+Gymbag acepta tanto la **sintaxis de reglas de Gymbagfile** como **JSON** (`[ ... ]` o `{"rules": [ ... ]}`):
 
----
+::: code-group
+```caddyfile [Sintaxis Gymbagfile en texto plano]
+block ip 198.51.100.0/24 203.0.113.42
+block user_agent BadScraper ~^(?i)EvilBot/
+verify path /api/export*
 
-## Archivos de Reglas Locales, Carpetas de Reglas y Recarga Dinámica en Caliente
+rule "challenge-xml-posts" {
+    action verify
+    method POST
+    path /xmlrpc* /api/import*
+    header Origin ""
+}
+```
 
-Guarda reglas en un archivo `.rules` / `.json` dedicado o en un directorio completo de reglas y referéncialos por ruta. Marca una fuente como `dynamic` para observarla y recargar en caliente los cambios en disco sin reiniciar el servidor (si un archivo tiene sintaxis inválida, Gymbag conserva el último conjunto de reglas válido). Las reglas locales se evalúan junto con tus reglas en línea, antes que las reglas remotas.
+```json [Objeto JSON]
+{
+  "rules": [
+    {
+      "name": "block-abusive-cidr",
+      "action": "block",
+      "ips": ["198.51.100.0/24", "203.0.113.42"]
+    },
+    {
+      "name": "verify-exports",
+      "action": "verify",
+      "methods": ["GET", "POST"],
+      "paths": ["/api/export*"]
+    }
+  ]
+}
+```
+:::
+
+### Caché y validación
+
+- Envía `If-None-Match` (`ETag`) e `If-Modified-Since`; las respuestas `304 Not Modified` evitan recompilar el conjunto de reglas.
+- Cachea los payloads validados en `<cert_dir>/rules-cache/` y los precarga al iniciar antes de que termine la primera descarga.
+- Cada payload se valida (límite de 4 MiB, timeout de 15s) antes del cambio. Si un origen devuelve sintaxis inválida o un error HTTP, el conjunto anterior sigue activo y el error aparece en `GET /api/v1/rules/remote`.
+- Las actualizaciones de reglas se aplican de forma atómica sin cortar conexiones activas.
+
+## Archivos de reglas locales, carpetas y recarga en caliente
+
+Guarda reglas en archivos `.rules` / `.json` independientes o en directorios. Marca una fuente como `dynamic` para vigilar cambios en disco y recargar automáticamente:
 
 ::: code-group
 ```caddyfile [Gymbagfile]
@@ -125,22 +162,23 @@ app.example.com {
 {
   "sites": [
     {
-      "domains": ["app.example.com"],
-      "rule_sources": [
-        {"source": "./rules.d", "dynamic": true, "name": "shared"}
-      ]
+      "domain": "app.example.com",
+      "upstreams": ["http://localhost:3000"],
+      "waf": {
+        "rule_sources": [
+          {"source": "./rules.d", "dynamic": true, "name": "shared"}
+        ]
+      }
     }
   ]
 }
 ```
 
 ```bash [CLI]
-# Generar una configuración que enlace fuentes de reglas locales
 gymbag init -d app.example.com -u :3000 \
   --rules-file ./rules/custom.rules --rules-dir ./rules.d \
   --rules-dynamic --rules-watch-interval 2s
 
-# Gestionar archivos de reglas y enlaces
 gymbag ruleset init ./rules/custom.rules
 gymbag ruleset add --source ./rules --dynamic --name local-dir
 gymbag ruleset update local-dir --static
@@ -150,11 +188,32 @@ gymbag ruleset remove local-dir
 ```
 :::
 
-El intervalo de sondeo es `rules_watch_interval` (por defecto `2s`; `GYMBAG_RULES_WATCH_INTERVAL` o `gymbag config set rules_watch_interval 2s`). Las entradas de `rule_sources` también se pueden parchear en vivo mediante `PATCH /api/v1/sites/{domain}`. Consulta [CLI y Entorno](/es/reference/cli-env) para ver todos los subcomandos `ruleset`.
+El sondeo usa `rules_watch_interval` (por defecto `2s`). `rule_sources` también puede parchearse mediante `PATCH /api/v1/sites/{domain}`. Consulta [CLI y variables de entorno](/es/reference/cli-env) para la lista completa de subcomandos de `ruleset`.
 
----
+## Reglas integradas (`default_rules on|off`)
 
-## Reglas Integradas (`default_rules on|off`) y Feeds de Amenazas
+`default_rules` está en `on` por defecto:
+- Cuando un sitio **no** tiene reglas personalizadas locales ni remotas, Gymbag aplica tanto las reglas de bloqueo integradas (`/.env`, `/.git/*`, `/wp-admin/*`, `sqlmap`/`nuclei`, consultas SQLi/XSS) como las reglas PoW de automatización (`curl`, `wget`, `python-requests`, `headlesschrome`, `playwright`, `User-Agent` vacío).
+- En cuanto añades reglas personalizadas a un sitio, tus reglas corren primero y las reglas base de **bloqueo** siguen añadiéndose después para que agregar un `verify path` no deje expuesto `/.env`.
+- Fija `default_rules off` en un sitio o globalmente para desactivar por completo las reglas integradas.
 
-- `default_rules` está en `on` por defecto (si añades reglas locales o remotas, las reglas base de bloqueo siguen protegiendo `/.env`, `/.git`, `/wp-admin`, escáneres e inyecciones).
-- Feeds autoactualizables cada `intel_refresh` (`6h` por defecto): **IPsum level 3+**, **Spamhaus DROP v4/v6**, **abuse.ch Feodo Tracker**, **Shodan InternetDB**, **StopForumSpam** y rangos oficiales de **OpenAI, Anthropic, Perplexity, Google y Apple**.
+## Feeds de amenazas, detección de VPN/Tor y listas de rastreadores de IA
+
+Los feeds se refrescan al iniciar y cada `intel_refresh` (por defecto `21600`s / `6h`), cacheados en `<cert_dir>/intel-cache`:
+
+- **Feeds de amenazas (`ip_security on`)**: IPsum nivel 3+, Spamhaus DROP IPv4 e IPv6, abuse.ch Feodo Tracker.
+- **Reputación IP en vivo (`ip_reputation on`)**: consultas sin clave vía Shodan InternetDB y StopForumSpam con caché TTL de 1 hora y timeouts fail-open.
+- **Detección de VPN / proxy / Tor (`vpn_detection on`)**: listas autoactualizables de VPN IPv4/IPv6 de X4BNet y lista masiva de nodos de salida de Tor, además de consultas en vivo sin clave contra `api.ipquery.io` y `api.ipapi.is` (timeout de 1.2s, deduplicación singleflight, caché de 1 hora, fail-open). Las IPs detectadas cuentan como **sospechosas** en los niveles `1` y `3` para HTTP, SSH y Minecraft.
+- **CIDRs oficiales de rastreadores de IA (`ai_ip_list on`)**: OpenAI (`gptbot`, `searchbot`, `chatgpt-user`), Anthropic (`claude.com/crawling/bots.json`), Perplexity, Google y Apple (`applebot`).
+
+```caddyfile
+{
+    ip_security on
+    ip_security_action block   # "verify" (desafío PoW) o "block" (403 Forbidden)
+    ip_reputation on
+    vpn_detection on
+    ai_ip_list on
+    intel_refresh 6h
+    # vpn_feed https://rules.example.com/extra-vpn-cidrs.txt
+}
+```
