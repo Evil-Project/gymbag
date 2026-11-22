@@ -176,3 +176,108 @@ func TestManagerAutoUpdateDiskCacheAndLiveReputation(t *testing.T) {
 		t.Fatal("expected warm disk cache to populate IPSets immediately")
 	}
 }
+
+func TestVPNDetectionFeedsLiveCheckersCacheAndFailOpen(t *testing.T) {
+	ctx := context.Background()
+	var liveHits atomic.Int32
+
+	mockTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Host == "feeds.test" && req.URL.Path == "/vpn.txt":
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader("# VPN CIDRs\n185.156.72.0/24\n2a07:7800::/32\n")),
+			}, nil
+
+		case req.URL.Host == "ipquery.test":
+			liveHits.Add(1)
+			if strings.HasSuffix(req.URL.Path, "/1.2.3.4") {
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(strings.NewReader(`{"ip":"1.2.3.4","risk":{"is_vpn":true,"is_proxy":false,"is_tor":false}}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"ip":"other","risk":{"is_vpn":false,"is_proxy":false,"is_tor":false}}`)),
+			}, nil
+
+		case req.URL.Host == "ipapi.test":
+			liveHits.Add(1)
+			if strings.Contains(req.URL.RawQuery, "q=5.6.7.8") {
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(strings.NewReader(`{"ip":"5.6.7.8","is_vpn":false,"is_proxy":true,"is_tor":false}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"is_vpn":false,"is_proxy":false,"is_tor":false}`)),
+			}, nil
+		}
+		return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader("error"))}, nil
+	})
+
+	httpClient := &http.Client{Transport: mockTransport}
+	vpnChk := NewVPNChecker(httpClient, time.Hour)
+	vpnChk.ipQueryBaseURL = "https://ipquery.test"
+	vpnChk.ipAPIIsBaseURL = "https://ipapi.test"
+
+	cacheDir := t.TempDir()
+	mgr := NewManager(ManagerOptions{
+		CacheDir:              cacheDir,
+		LiveReputationEnabled: true,
+		VPNDetectionEnabled:   true,
+		ReplaceVPNFeeds:       []FeedSource{{Name: "test-vpn", URL: "https://feeds.test/vpn.txt"}},
+		HTTPClient:            httpClient,
+		VPNChecker:            vpnChk,
+	})
+	st := mgr.RefreshNow(ctx)
+	if !st.VPNDetectionEnabled || st.VPNEntries != 2 {
+		t.Fatalf("unexpected VPN status: %+v", st)
+	}
+	if !mgr.IsVPNOrProxyIP(ctx, "185.156.72.42") || !mgr.IsVPNOrProxyIP(ctx, "2a07:7800::1") {
+		t.Fatal("expected VPN feed match")
+	}
+	if !mgr.IsVPNOrProxyIP(ctx, "1.2.3.4") {
+		t.Fatal("expected ipquery VPN IP match")
+	}
+	if !mgr.IsVPNOrProxyIP(ctx, "5.6.7.8") {
+		t.Fatal("expected ipapi.is proxy IP match")
+	}
+	if mgr.IsVPNOrProxyIP(ctx, "8.8.8.8") {
+		t.Fatal("expected 8.8.8.8 to not be flagged as VPN/proxy")
+	}
+
+	// Verify cache avoids duplicate live queries
+	beforeHits := liveHits.Load()
+	if !mgr.IsVPNOrProxyIP(ctx, "1.2.3.4") || mgr.IsVPNOrProxyIP(ctx, "8.8.8.8") {
+		t.Fatal("cached VPN lookup mismatch")
+	}
+	if liveHits.Load() != beforeHits {
+		t.Fatalf("expected cached lookups without extra HTTP hits, got %d -> %d", beforeHits, liveHits.Load())
+	}
+
+	// Verify warm disk cache restores VPN feed without network
+	offlineClient := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("down"))}, nil
+		}),
+	}
+	mgrWarm := NewManager(ManagerOptions{
+		CacheDir:            cacheDir,
+		VPNDetectionEnabled: true,
+		ReplaceVPNFeeds:     []FeedSource{{Name: "test-vpn", URL: "https://feeds.test/vpn.txt"}},
+		HTTPClient:          offlineClient,
+	})
+	if !mgrWarm.IsVPNFeedIP("185.156.72.42") {
+		t.Fatal("expected warm VPN disk cache match")
+	}
+	// Fail-open when live VPN endpoints fail
+	failVPN := NewVPNChecker(offlineClient, time.Hour)
+	failVPN.ipQueryBaseURL = "https://ipquery.test"
+	failVPN.ipAPIIsBaseURL = "https://ipapi.test"
+	if flagged, _ := failVPN.Check(ctx, "9.9.9.9"); flagged {
+		t.Fatal("expected fail-open false when upstream VPN APIs return 503")
+	}
+}

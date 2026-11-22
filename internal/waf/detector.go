@@ -223,8 +223,11 @@ func (d *SuspicionDetector) matchView(ctx context.Context, v *reqView) bool {
 		}
 	}
 
-	// 2. IP security threat-feed & live reputation check (reuses cached result from ThreatIntelRule).
+	// 2. IP security threat-feed, live reputation, and free VPN/proxy/Tor IP detection.
 	if d.intel != nil && v.checkThreatIP(ctx, d.intel) {
+		return true
+	}
+	if d.intel != nil && v.checkVPNOrProxyIP(ctx, d.intel) {
 		return true
 	}
 

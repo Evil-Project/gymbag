@@ -128,6 +128,11 @@ type IntelProvider interface {
 	IsAIIP(ipStr string) bool
 }
 
+// VPNIntelProvider optionally supplies free VPN/proxy/Tor IP detection lookups (ISP).
+type VPNIntelProvider interface {
+	IsVPNOrProxyIP(ctx context.Context, ipStr string) bool
+}
+
 // AccessGate decides whether an IncomingRequest is allowed, challenged, or denied (ISP/DIP).
 type AccessGate interface {
 	Decide(ctx context.Context, req IncomingRequest) Decision

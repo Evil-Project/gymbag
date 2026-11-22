@@ -33,6 +33,8 @@ type reqView struct {
 	lowerDecodedQ   string
 	threatChecked   bool
 	isThreat        bool
+	vpnIPChecked    bool
+	isVPNIP         bool
 	aiIPChecked     bool
 	isAIIP          bool
 	aiMatchChecked  bool
@@ -213,6 +215,19 @@ func (v *reqView) checkThreatIP(ctx context.Context, ip IntelProvider) bool {
 		v.threatChecked = true
 	}
 	return v.isThreat
+}
+
+func (v *reqView) checkVPNOrProxyIP(ctx context.Context, ip IntelProvider) bool {
+	if ip == nil {
+		return false
+	}
+	if !v.vpnIPChecked {
+		if vp, ok := ip.(VPNIntelProvider); ok {
+			v.isVPNIP = vp.IsVPNOrProxyIP(ctx, v.clientIP)
+		}
+		v.vpnIPChecked = true
+	}
+	return v.isVPNIP
 }
 
 func (v *reqView) checkAIIP(ip IntelProvider) bool {
