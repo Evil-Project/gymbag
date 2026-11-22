@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Gymbag
-  text: HTTPS Reverse Proxy & Proof-of-Work WAF
-  tagline: A single Go binary that terminates HTTPS, runs ACME for several CAs, and blocks scrapers with a SHA-256 proof-of-work challenge.
+  text: HTTP/HTTPS, SSH & Minecraft PoW Gateway
+  tagline: A single Go binary that terminates HTTPS, guards SSH and Minecraft with browser proof-of-work, and blocks scrapers and threat IPs.
   image:
     src: /mascot-happy.png
     alt: Gymbag mascot
@@ -13,8 +13,8 @@ hero:
       text: Two-Command Quick Start
       link: /guide/getting-started
     - theme: alt
-      text: Docker Guide
-      link: /guide/docker
+      text: SSH & Minecraft Guide
+      link: /guide/ssh-minecraft
     - theme: alt
       text: Benchmarks vs Caddy & Nginx
       link: /guide/benchmarks
@@ -22,28 +22,28 @@ hero:
 features:
   - icon: ⚡
     title: Fast proxy path
-    details: "Aho-Corasick rule matching, sharded rate limiters and pooled buffers keep the WAF out of the way: about 72.5k RPS through TLS, and 140k+ RPS when blocking probes at the edge."
+    details: "Aho-Corasick rule matching, sharded rate limiters, and pooled buffers keep the WAF out of the way: ~72.5k RPS through TLS, and 140k+ RPS dropping probes at the edge."
   - icon: 🛡️
-    title: WAF on by default
-    details: Ships with rules for /.env, /wp-admin, scanners and SQLi/XSS probes. Four verify levels decide who gets a SHA-256 challenge, and clearance can last 30m, 12h or 7d.
+    title: HTTP, SSH, and Minecraft
+    details: "Guards websites, WebSockets, OpenSSH, and Minecraft Java servers from one process. SSH and Minecraft challenges print an HTTPS link straight into the client disconnect screen."
   - icon: 🌐
-    title: Remote rules and threat feeds
-    details: Pull firewall rules over HTTP with ETag caching, and refresh IPsum, Spamhaus DROP, Feodo and the published AI crawler CIDR lists on a timer.
+    title: Threat intel, VPN & AI lists
+    details: "Auto-refreshes IPsum, Spamhaus DROP, Feodo, X4BNet VPN/Tor lists, and official AI crawler CIDRs, plus fail-open live lookups via Shodan InternetDB, StopForumSpam, ipquery.io, and ipapi.is."
   - icon: 🔒
-    title: Certificates without the fuss
-    details: ACME HTTP-01 against Let's Encrypt, ZeroSSL, Google, SSL.com, LiteSSL or Buypass. For *.internal names it mints its own CA and writes the /etc/hosts entries for you.
+    title: ACME, IP certs & Local PKI
+    details: "Runs HTTP-01 for Let's Encrypt, ZeroSSL, Google, SSL.com, LiteSSL, and Buypass, supports RFC 8738 ACME IP certs for verify portals, and signs *.internal names with its own CA."
   - icon: 🐳
-    title: Deploy how you already deploy
-    details: Multi-arch images on GHCR (amd64 and arm64), a Compose file with Redis for shared state, packages for Arch, and service units for systemd, launchd, OpenRC and Supervisor.
+    title: Packages & containers ready
+    details: "Ships static binaries, Debian/Ubuntu .deb packages, Arch .pkg.tar.zst packages, a NixOS flake, multi-arch GHCR images, Redis-backed compose, and systemd/launchd/OpenRC/Supervisor units."
   - icon: 🔌
     title: Change config while it runs
-    details: Edit the Gymbagfile with --watch, or patch verify levels, timeouts, local rules and remote rule URLs through the Admin API. Active connections stay up.
+    details: "Generates gymbag.json or Gymbagfile, reads nginx/Apache/Caddyfile v2 configs, watches rule directories for edits, and exposes a live Admin REST API without dropping connections."
 ---
 
 <QuickStartBuilder />
 
 ## Interactive Verify Levels
 
-Click a verify level below to see how Gymbag handles browsers, AI crawlers, automation clients, threat-feed IPs, and exploit probes:
+Pick a verify level below to see how Gymbag treats browsers, AI crawlers, VPN/Tor IPs, automation clients, threat feeds, and exploit probes:
 
 <VerifyLevelMatrix />

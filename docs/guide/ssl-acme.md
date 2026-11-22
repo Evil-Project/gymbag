@@ -1,4 +1,4 @@
-# Multi-CA ACME, Custom Certificates & Renewal
+# Multi-CA ACME, IP Certs & Custom Certificates
 
 For public domains, `tls auto` (the default) gets and renews certificates over RFC 8555 ACME HTTP-01.
 
@@ -18,11 +18,10 @@ Pick a CA with `ssl_provider` (aliases: `acme_provider`, `ca`, `cert_issuer`) or
 | `local` | Local Two-Tier PKI | Local CA (`Neuro-sama Headquarters Root CA`) |
 | `https://...` | Any RFC 8555 ACME v2 CA | Optional `eab <kid> <hmac_key>` (e.g. `step-ca`, Pebble) |
 
----
+## Provider Examples
 
-## Provider Configuration Examples
+### ZeroSSL with Automatic EAB
 
-### ZeroSSL with Automatic Email EAB
 ```caddyfile
 {
     email ops@example.com
@@ -37,7 +36,7 @@ example.com {
 
 ### Google Trust Services / SSL.com (Explicit EAB)
 
-Both padded base64 and URL-safe unpadded base64 HMAC keys work. `eab_hmac_key` is redacted in Admin API responses.
+Both padded base64 and unpadded URL-safe base64 HMAC keys are accepted. `eab_hmac_key` is redacted in Admin API output.
 
 ```caddyfile
 {
@@ -56,15 +55,30 @@ Both padded base64 and URL-safe unpadded base64 HMAC keys work. `eab_hmac_key` i
 }
 ```
 
-Certificates are cached under `<cert_dir>` keyed by provider name (e.g. `certs/acme-zerossl-fullchain.pem`), so switching `ssl_provider` immediately issues from the new CA.
+ACME certificates are cached under `<cert_dir>` keyed by provider (for example `certs/acme-zerossl-fullchain.pem`, while Let's Encrypt uses `certs/acme-fullchain.pem`), so switching `ssl_provider` requests from the new CA instead of reusing the old one.
 
----
+## RFC 8738 IP Certificates (SSH & Minecraft Verify Portal)
+
+When SSH or Minecraft protection is active without a custom `verify_url`, Gymbag serves the HTTPS verification portal on the server's detected IP address (default port `8443`).
+
+In `auto` mode (`tls auto` with a non-`local` provider), Gymbag requests an **RFC 8738 ACME IP HTTP-01 certificate** for the public server IP—automatically requesting the CA's `shortlived` profile if the ACME directory advertises one—and caches it at `certs/verify-acme-fullchain.pem` (`verify-acme-<provider>-fullchain.pem` for other CAs). If port `80` is unavailable or the CA rejects IP identifiers, Gymbag falls back to its Local CA (`certs/verify-local-fullchain.pem`) or a self-signed IP cert (`certs/verify-selfsigned.pem`).
+
+You can also assign a dedicated certificate pair to the verification portal:
+
+```caddyfile
+{
+    verify_url https://verify.example.com:8443
+    verify_server {
+        tls /etc/ssl/verify-fullchain.pem /etc/ssl/verify-privkey.pem
+    }
+}
+```
 
 ## Bring Your Own Keys & Certificates
 
-- **Custom ACME account key**: `account_key /etc/gymbag/account.pem` (ECDSA P-256/P-384 or RSA)
-- **Custom CSR private key**: `ssl_key /etc/gymbag/domain.key`
-- **Custom PEM cert & key (global or per-site SNI)**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **ACME account key**: `account_key /etc/gymbag/account.pem` (ECDSA P-256/P-384 or RSA)
+- **CSR private key**: `ssl_key /etc/gymbag/domain.key`
+- **PEM cert & key (global or per-site SNI)**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
 - **Encrypted private key passphrase**: `key_password super-secret-passphrase` (or `GYMBAG_KEY_PASSWORD`)
 
 ```caddyfile
@@ -79,6 +93,6 @@ corp.example.com {
 }
 ```
 
-## Zero-Downtime Background Renewal
+## Background Renewal
 
-Gymbag checks certificates every `renew_interval` seconds (default `43200`, i.e. 12 hours). Within `renew_within_days` of expiry (default `30` days) it renews or reloads in the background and swaps the active `tls.Certificate` pointer atomically, so HTTP streams and WebSocket connections stay up.
+A background loop checks certificates every `renew_interval` seconds (default `43200`, i.e. 12 hours). Any certificate within `renew_within_days` of expiry (default `30` days), or replaced on disk, is renewed or reloaded and swapped atomically via `atomic.Pointer` so open HTTP streams and WebSocket connections stay connected.

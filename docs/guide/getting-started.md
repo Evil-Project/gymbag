@@ -1,14 +1,21 @@
 # Two-Command Quick Start
 
-Gymbag is compiled into a single standalone binary with zero external Go dependencies — all HTML templates, SHA-256 browser solver scripts, and mascot PNGs are embedded via `go:embed`.
+Gymbag compiles to a single binary using only the Go standard library. HTML templates, the SHA-256 browser solver script, and the mascot PNGs are embedded directly via `go:embed`.
 
 ## Installation
 
-### Prebuilt Static Binaries, Docker, Arch Linux & NixOS
-
-Every tagged release on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) publishes `CGO_ENABLED=0` static binaries (`linux`, `darwin`, `windows` for `amd64`/`arm64`), Arch Linux `.pkg.tar.zst` packages (`x86_64` and `aarch64`), and multi-arch GHCR container images (`ghcr.io/evil-project/gymbag`):
+Each tagged release on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) publishes static `CGO_ENABLED=0` binaries (`linux`, `darwin`, `windows` for `amd64`/`arm64`), Debian/Ubuntu `.deb` packages, Arch Linux `.pkg.tar.zst` packages, NixOS bundles, and multi-arch GHCR container images (`ghcr.io/evil-project/gymbag`):
 
 ::: code-group
+```bash [Debian / Ubuntu (.deb)]
+# Install a release .deb package (sets cap_net_bind_service and systemd unit)
+sudo apt install ./gymbag_<version>_linux_amd64.deb
+
+# Generate config and enable the service
+sudo gymbag init -o /etc/gymbag/Gymbagfile --format gymbagfile
+sudo systemctl enable --now gymbag
+```
+
 ```bash [Docker (GHCR)]
 docker run -d --name gymbag \
   -p 80:80 -p 443:443 \
@@ -19,21 +26,20 @@ docker run -d --name gymbag \
 ```
 
 ```bash [Arch Linux (pacman)]
-# Install a release .pkg.tar.zst binary package
+# Install a release .pkg.tar.zst package
 sudo pacman -U gymbag-<version>-1-x86_64.pkg.tar.zst
 
-# Or build from source with PKGBUILD
+# Or build from packaging/arch
 git clone https://github.com/Evil-Project/gymbag.git
 cd gymbag/packaging/arch
 makepkg -si
 ```
 
 ```bash [Nix / NixOS]
-# Run or install directly via Nix Flakes
 nix run github:Evil-Project/gymbag -- --help
 nix profile install github:Evil-Project/gymbag
 
-# Static Linux release tarballs (CGO_ENABLED=0) also run directly on NixOS
+# Static Linux release binaries (CGO_ENABLED=0) also run directly on NixOS
 ```
 
 ```bash [Build from Source (Go)]
@@ -43,59 +49,79 @@ go build -o gymbag ./cmd/gymbag
 ```
 :::
 
-See the [Docker & Docker Compose guide](/guide/docker) for full container deployment, Compose + Redis stacks, and volume permissions.
+See the [Docker & Docker Compose guide](/guide/docker) for container deployments, Compose + Redis stacks, and volume permissions.
 
 ## Start in Two Commands
 
-### Option A: Flag-driven (Non-interactive)
+`gymbag init` writes `gymbag.json` by default, or `Gymbagfile` when you pass `--format gymbagfile` (or `-o Gymbagfile`). Every generated config is validated before being written to disk.
+
+### HTTP / HTTPS Website
 
 ```bash
-# 1. Generate gymbag.json (add --format gymbagfile for a Caddy-style Gymbagfile)
+# 1. Generate gymbag.json (add --format gymbagfile for Caddy syntax)
 ./gymbag init -d app.example.com -u http://localhost:3000
 
 # 2. Start Gymbag (auto-loads ./gymbag.json, ./Gymbagfile, then ./Caddyfile)
 ./gymbag
 ```
 
-### Option B: Interactive Setup Wizard
+### SSH Protection
 
-Run `gymbag init` without flags to walk through domains, upstream URL, verify level, SSL provider, ports, Admin API, and optional system service registration:
+Moves `sshd` to a random free port in `20000–59999` inside `/etc/ssh/sshd_config` (keeping a `.gymbag.bak` backup), validates with `sshd -t` (rolling back if anything fails), reloads `sshd`, and updates the host firewall (`ufw`, `firewalld`, `nftables`, or `iptables`+`ip6tables`) so external traffic can only enter through Gymbag on port `22`:
 
 ```bash
-# 1. Interactive config generator
-./gymbag init
+# Keep a second SSH terminal open while running this on a remote host
+sudo ./gymbag init -t ssh
+sudo ./gymbag
+```
 
-# 2. Start Gymbag
+### Minecraft Server Protection
+
+Moves `server-port` to a random free port in `20000–59999` inside `server.properties` (and binds empty/`0.0.0.0`/`::` `server-ip` to `127.0.0.1`), leaves Server List Pings working so MOTD and player count still show, and displays the HTTPS verification link in Minecraft's **"Connection Lost"** dialog on login:
+
+```bash
+./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
 
-### Option C: Local Development Preset (`*.internal`)
+### All-in-One (`http,ssh,minecraft`) or Interactive Wizard
+
+One process can guard websites, SSH, and Minecraft together:
 
 ```bash
-# 1. Generate app.internal -> http://localhost:3000 with local PKI
+# Non-interactive combined config:
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag
+
+# Or run the interactive wizard:
+./gymbag init
+./gymbag
+```
+
+> **Verification Portal & IP SSL Certs:** SSH and Minecraft share an HTTPS verification portal on port `8443` by default (`--verify-port`). Pass `--verify-url https://verify.example.com:8443` to use a custom domain, or leave it blank to serve the check on the server's detected IP using an RFC 8738 ACME IP certificate (falling back to Gymbag's Local CA or a self-signed IP cert when HTTP-01 isn't reachable). See the [SSH & Minecraft Protection guide](/guide/ssh-minecraft).
+
+### Local Development (`*.internal`)
+
+```bash
+# 1. Generate app.internal -> http://localhost:3000 with Local PKI
 ./gymbag init --preset local
 
-# 2. Start Gymbag (use unprivileged ports or sudo for 80/443 + /etc/hosts)
+# 2. Run on unprivileged ports (or use sudo for 80/443 + /etc/hosts)
 ./gymbag --http-port 8080 --https-port 8443
 ```
 
-### Option D: Register as a System Service
+### Register as a System Service
 
 ```bash
-# 1. Generate gymbag.json and register systemd / launchd / openrc / supervisor
 ./gymbag init -d app.example.com -u :3000 --service auto
-
-# 2. Start the registered service
 ./gymbag service start
 ```
 
-See [System Service Setup](/guide/system-service) for `systemd`, `launchd`, `openrc`, and `supervisor` options.
-
----
+See [System Service Setup](/guide/system-service) for `systemd`, `launchd`, `openrc`, and `supervisor`.
 
 ## Existing nginx / Apache / Caddyfile Configs
 
-Gymbag natively reads `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, and Caddyfile v2 files, so you can start from an existing setup:
+Gymbag parses native `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, and Caddyfile v2 files directly:
 
 ```bash
 ./gymbag run -c /etc/nginx/nginx.conf
@@ -104,63 +130,56 @@ Gymbag natively reads `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, and Ca
 
 See [Routes & Config Import](/guide/routes-and-imports) for path routes, static files, redirects, and conversion details.
 
----
-
-## Ad-Hoc Reverse Proxy (Zero Config File)
-
-For quick one-off testing without creating any file on disk:
+## Ad-Hoc Reverse Proxy (No Config File)
 
 ```bash
 ./gymbag reverse-proxy --from app.internal --to :3000 --verify 3 --verify-timeout 12h
 ```
 
----
-
-## Config Generator Options (`gymbag init`)
-
-`gymbag init` validates every generated config before writing it to disk.
+## `gymbag init` Flags
 
 | Flag | Description |
 | :--- | :--- |
 | `-o`, `--output <path>` | Output path (`gymbag.json` by default, or `Gymbagfile` with `--format gymbagfile`) |
 | `--format <fmt>` | `json` (default) or `gymbagfile` |
-| `--preset <name>` | `standard`, `local`, `public`, `strict`, `ai-only`, `suspicious`, or `proxy-only` |
+| `-t`, `--template <list>` | Service template(s): `http`, `ssh`, `minecraft`, or `all` (comma-separated or repeatable) |
+| `--preset <name>` | `standard`, `local`, `public`, `strict`, `ai-only`, `suspicious`, `proxy-only`, `http`, `ssh`, `minecraft`, or `all` |
 | `-d`, `--domain <domains>` | Downstream domain(s), comma-separated |
-| `-u`, `--upstream <url>` | Upstream URL (e.g. `http://localhost:3000` or `:3000`) |
-| `--site <domain=url>` | Add multiple site blocks (repeatable, e.g. `--site app.example.com=:3000 --site api.example.com=:8080`) |
+| `-u`, `--upstream <url>` | Upstream URL (`http://localhost:3000` or `:3000`) |
+| `--site <domain=url>` | Add multiple site entries (repeatable) |
+| `--ssh` / `--ssh-port <port>` | Enable SSH protection (default port `22`) |
+| `--ssh-upstream <addr>` / `--sshd-config <p>` | Explicit `sshd` target or `sshd_config` path (default `/etc/ssh/sshd_config`) |
+| `--minecraft`, `--mc` / `--mc-port <port>` | Enable Minecraft protection (default port `25565`) |
+| `--mc-upstream <addr>` / `--server-properties <p>` | Explicit Minecraft backend or `server.properties` path |
+| `--verify-url <url>` | Shared HTTPS verification portal URL (blank = server IP + IP SSL cert) |
+| `--verify-port <port>` | Shared HTTPS verification portal port (default `8443`) |
+| `--no-auto-setup` / `--no-firewall` | Skip automatic `sshd_config`/firewall or `server.properties` edits |
 | `-l`, `--verify <0-3\|off>` | Verify level (`0`, `1`, `2`, `3`, or `off`) |
-| `--difficulty <1-5>` | SHA-256 PoW leading-hex-zero difficulty (default `4`) |
-| `--verify-timeout <dur>` | Verified clearance timeout (e.g. `30m`, `12h`, `7d`, or seconds; alias `--clearance-ttl`) |
+| `--difficulty <1-5>` | SHA-256 PoW difficulty (default `4`) |
+| `--verify-timeout <dur>` | Clearance lifetime (`30m`, `12h`, `7d`, or seconds; alias `--clearance-ttl`) |
 | `--remote-rules <url>` | Remote firewall rules URL (repeatable or comma-separated) |
 | `--remote-rules-refresh <dur>` | Refresh interval for remote rules (default `5m`) |
-| `--rules-file <path>` | Dedicated firewall rules file path (repeatable) |
-| `--rules-dir <path>` | Directory of firewall rule files (repeatable) |
-| `--rules-dynamic` | Auto-reload `--rules-file` / `--rules-dir` when files change |
-| `--rules-watch-interval <dur>` | Polling interval for dynamic local rule files/folders (default `2s`) |
-| `--no-protect` | Disable WAF verification (`protect off`) |
-| `--no-default-rules` | Disable built-in baseline firewall rules (`default_rules off`) |
-| `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or custom URL |
+| `--rules-file <path>` / `--rules-dir <path>` | Local rules file or directory (repeatable) |
+| `--rules-dynamic` / `--rules-watch-interval <dur>` | Watch local rule sources for changes (default `2s`) |
+| `--no-protect` / `--no-default-rules` | Disable PoW verification or built-in baseline rules |
+| `--ssl-provider <name>` | `letsencrypt`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or URL |
 | `--email <addr>` | ACME contact email (also enables ZeroSSL auto-EAB) |
 | `--eab-kid` / `--eab-hmac-key` | ACME External Account Binding credentials |
 | `--http-port` / `--https-port` | Custom HTTP/HTTPS ports (defaults `80` / `443`) |
-| `--bind <ip>` | Bind address (auto-selected when omitted) |
+| `--bind <ip>` | Bind IP address (auto-selected when omitted) |
 | `--admin <addr>` | Enable local REST Admin API (e.g. `127.0.0.1:2019`) |
-| `--cert-dir <dir>` | Directory for certificates, local CA, and caches (default `certs`) |
-| `--redis <url>` | Optional Redis URL for shared challenge and rate-limit state |
-| `--ip-security-action <act>` | Action for threat-intel IP hits (`verify` or `block`) |
-| `--no-auto-hosts` | Disable automatic `/etc/hosts` entries for local domains |
-| `-y`, `--yes` | Skip interactive prompts and accept defaults |
-| `-i`, `--interactive` | Force interactive wizard even when flags are present |
-| `--dry-run` | Print generated config to stdout without writing a file |
-| `-f`, `--force` | Overwrite an existing config file |
-| `--service <type>` | Also register a system service (`auto`, `systemd`, `launchd`, `openrc`, `supervisor`) |
+| `--cert-dir <dir>` | Directory for certs, local CA, and caches (default `certs`) |
+| `--redis <url>` | Redis URL for shared challenge, rate-limit, and SSH/MC gate state |
+| `--ip-security-action <act>` | Threat-intel hit action (`verify` or `block`) |
+| `--no-auto-hosts` | Disable `/etc/hosts` management for local domains |
+| `-y`, `--yes` / `-i`, `--interactive` | Skip wizard prompts or force interactive wizard |
+| `--dry-run` / `-f`, `--force` | Print config to stdout without writing / overwrite existing file |
+| `--service <type>` | Register OS service (`auto`, `systemd`, `launchd`, `openrc`, `supervisor`) |
 
----
+## What Works Without Writing Rules
 
-## What Open-Box Protection Includes Out of the Box
+Writing bare `verify` (sets verify level `3`: `suspicious & ai`) or `block` enables three layers right away:
 
-Writing bare `verify` (verify level `3`: `suspicious & ai`) or `block` activates three layers immediately without manual regex writing:
-
-1. **Baseline firewall rules (`default_rules on`)** — Blocks `/.env`, `/.git/*`, `/.aws/*`, `/wp-admin/*`, `sqlmap`/`nikto`/`nuclei`, and SQLi/XSS query probes (`403`), and challenges CLI/headless automation clients.
-2. **Auto-updating IP threat intelligence** — Pulls IPsum (level 3+), Spamhaus DROP v4/v6, and abuse.ch Feodo Tracker on startup and every 6 hours, plus keyless live Shodan InternetDB and StopForumSpam reputation lookups.
-3. **Official AI crawler IP lists** — Tracks published CIDR ranges for OpenAI, Anthropic, Perplexity, Google, and Apple so crawlers are detected even when spoofing desktop User-Agents.
+1. **Built-in baseline rules (`default_rules on`)**: Returns `403` on `/.env`, `/.git/*`, `/.aws/*`, `/wp-admin/*`, `sqlmap`/`nikto`/`nuclei`, and SQLi/XSS query probes, and sends CLI/headless HTTP clients to the PoW screen.
+2. **Threat feeds, live IP reputation, and VPN/Tor detection**: Refreshes IPsum (level 3+), Spamhaus DROP v4/v6, Feodo Tracker, X4BNet VPN lists, and Tor exit nodes at startup and every 6 hours, and queries Shodan InternetDB, StopForumSpam, `ipquery.io`, and `ipapi.is` with fail-open timeouts. VPN/proxy/Tor IPs count as suspicious at levels `1` and `3` across HTTP, SSH, and Minecraft.
+3. **Official AI crawler IP lists**: Matches published CIDR blocks for OpenAI, Anthropic, Perplexity, Google, and Apple even if a bot spoofs a Chrome `User-Agent`.

@@ -1,6 +1,6 @@
 # System Service Setup
 
-Gymbag ships a small service manager (`gymbag service`) that writes, registers, starts, stops, restarts, inspects, and uninstalls background services for:
+`gymbag service` generates, installs, starts, stops, restarts, checks status for, and removes OS background services across four init systems:
 
 | Manager | Target OS / Init | Default Unit Path |
 | :--- | :--- | :--- |
@@ -9,59 +9,69 @@ Gymbag ships a small service manager (`gymbag service`) that writes, registers, 
 | `openrc` | Linux (Alpine, Gentoo, Artix) | `/etc/init.d/<name>` |
 | `supervisor` | Unix / Containers (`supervisord`) | `/etc/supervisor/conf.d/<name>.conf` (or `~/.config/supervisor/conf.d/<name>.conf` with `--user`) |
 
----
-
 ## Two-Command Service Workflow
 
-With a `Gymbagfile` in hand (from `gymbag init`):
+Once you have a `gymbag.json` or `Gymbagfile`:
 
 ```bash
-# 1. Register the system service (auto-detects systemd / launchd / openrc / supervisor)
-sudo ./gymbag service install --config /etc/gymbag/Gymbagfile
+# 1. Register the service (auto-detects systemd / launchd / openrc / supervisor)
+sudo ./gymbag service install --config /etc/gymbag/gymbag.json
 
-# 2. Start the service
+# 2. Start it
 sudo ./gymbag service start
 ```
 
-Or combine config generation and registration into step 1:
+Or generate the config and install the service in one step:
 
 ```bash
-sudo ./gymbag init -d app.example.com -u :3000 -o /etc/gymbag/Gymbagfile --service auto --system
+sudo ./gymbag init -d app.example.com -u :3000 -o /etc/gymbag/gymbag.json --service auto --system
 sudo ./gymbag service start --system
 ```
 
-::: tip Automatic `--watch` and `CAP_NET_BIND_SERVICE`
-- By default `gymbag service install` sets up `gymbag run --config <path> --watch`, so editing `Gymbagfile` reloads routes, WAF policies, and rules without a restart.
-- For a system-wide `systemd` unit with a non-root `--service-user` on ports `80`/`443`, Gymbag adds `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, and `NoNewPrivileges=true`.
-- OpenRC units get `capabilities="^cap_net_bind_service"` when `--service-user` is non-root.
+::: tip `--watch` and `CAP_NET_BIND_SERVICE`
+- `gymbag service install` defaults to `--watch=true`, so edits to the config reload routes, firewall rules, and SNI certs without restarting the daemon.
+- System-wide `systemd` units with a non-root `--service-user` and privileged ports (`< 1024`, including `80`, `443`, `22`, or `verify_port < 1024`) get `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, and `NoNewPrivileges=true`.
+- OpenRC units receive `capabilities="^cap_net_bind_service"` when `--service-user` is non-root.
 :::
 
----
-
-## Service Lifecycle Subcommands
+## Service Subcommands
 
 ```bash
-# Start, stop, restart, or inspect status
 ./gymbag service start
 ./gymbag service stop
 ./gymbag service restart
 ./gymbag service status
-
-# Remove service registration and unit file
 ./gymbag service uninstall
 ```
 
-### User-Level vs System-Wide Scope
+### User vs System Scope
 
-- Without `sudo` (`euid != 0`), `gymbag service` defaults to `--user` scope (`systemd --user`, `~/Library/LaunchAgents`) for `systemd`, `launchd`, and `supervisor`.
-- As `root` (`sudo`), it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`).
-- Pass `--user` or `--system` to override.
+- Without `sudo` (`euid != 0`), `gymbag service` defaults to `--user` scope (`systemd --user`, `~/Library/LaunchAgents`) on `systemd`, `launchd`, and `supervisor`.
+- As `root`, it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`).
+- Pass `--user` or `--system` to pick explicitly.
 
----
+## Debian / Ubuntu (`.deb` + `systemd`)
 
-## NixOS Declarative Module (`services.gymbag`)
+Installing the `.deb` release package puts `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile` (as a conffile), and `/lib/systemd/system/gymbag.service` (`DynamicUser=yes`, `StateDirectory=gymbag`, `GYMBAG_CERT_DIR=/var/lib/gymbag/certs`) in place:
 
-On NixOS, `/etc/systemd/system` is declarative. Add the flake input and import `nixosModules.default`:
+```bash
+sudo apt install ./gymbag_<version>_linux_amd64.deb
+sudo gymbag init -o /etc/gymbag/Gymbagfile --format gymbagfile
+sudo systemctl enable --now gymbag
+```
+
+## Arch Linux (`pacman` + `systemd`)
+
+Installing the `.pkg.tar.zst` package (or building from `packaging/arch/PKGBUILD`) puts `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile`, and `/usr/lib/systemd/system/gymbag.service` in place:
+
+```bash
+sudo gymbag init -o /etc/gymbag/Gymbagfile --format gymbagfile
+sudo systemctl enable --now gymbag
+```
+
+## NixOS Module (`services.gymbag`)
+
+On NixOS, import `nixosModules.default` from the flake:
 
 ```nix
 {
@@ -90,53 +100,35 @@ On NixOS, `/etc/systemd/system` is declarative. Add the flake input and import `
 }
 ```
 
-The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, and `CAP_NET_BIND_SERVICE`, so ports `80`/`443` work without root.
+The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, and `CAP_NET_BIND_SERVICE` so ports `80` and `443` work without root.
 
----
+## Rendering Unit Files Cross-Platform (`render`)
 
-## Arch Linux (`pacman` + `systemd`)
-
-Installed from the Arch `.pkg.tar.zst` package (or `packaging/arch/PKGBUILD`), Gymbag puts `/usr/bin/gymbag` (with `cap_net_bind_service=+ep`), `/etc/gymbag/Gymbagfile`, and `/usr/lib/systemd/system/gymbag.service` in place:
+`render` outputs the service definition for any supported init system on any OS—useful when generating a Linux `systemd` unit on macOS before deploying:
 
 ```bash
-sudo gymbag init -o /etc/gymbag/Gymbagfile
-sudo systemctl enable --now gymbag
-```
-
----
-
-## Previewing or Generating Unit Files Cross-Platform (`render`)
-
-`render` writes a service file for any supported manager from any OS. Handy when you generate a Linux `systemd` unit on macOS before shipping to a VPS:
-
-```bash
-# Preview systemd unit on stdout
-./gymbag service render --type systemd --system --service-user gymbag --config /etc/gymbag/Gymbagfile
-
-# Write unit file to a specific path without registering locally
+./gymbag service render --type systemd --system --service-user gymbag --config /etc/gymbag/gymbag.json
 ./gymbag service render --type systemd --system -o ./deploy/gymbag.service
 ```
 
----
-
-## `gymbag service` Flags Reference
+## `gymbag service` Flags
 
 | Flag | Description |
 | :--- | :--- |
 | `-t`, `--type <mgr>` | `auto` (default), `systemd`, `launchd`, `openrc`, or `supervisor` |
 | `-n`, `--name <name>` | Service name (default `gymbag`) |
-| `--label <id>` | `launchd` reverse-DNS label (default `io.gymbag.<name>`) |
-| `-c`, `--config <path>` | Path to `Gymbagfile`, `Caddyfile`, or JSON config |
+| `--label <id>` | `launchd` label (default `io.gymbag.<name>`) |
+| `-c`, `--config <path>` | Path to `gymbag.json`, `Gymbagfile`, or `Caddyfile` |
 | `--bin <path>` | Path to `gymbag` binary (default current executable) |
-| `--workdir <dir>` | Service working directory (default directory of config file) |
+| `--workdir <dir>` | Working directory (default directory of the config file) |
 | `--env-file <path>` | Optional `.env` file (auto-detected if `<workdir>/.env` exists) |
 | `--log-dir <dir>` | Log directory for `launchd`, `openrc`, and `supervisor` |
-| `-o`, `--output <path>` | Override target unit/plist/script file path |
-| `--service-user <user>` | OS user to run system-level service as |
-| `--service-group <grp>` | OS group for system-level service |
+| `-o`, `--output <path>` | Override target unit/plist/script path |
+| `--service-user <user>` | Run-as OS user for system-level service |
+| `--service-group <grp>` | Run-as OS group for system-level service |
 | `--user` / `--system` | Force user-level or system-wide scope |
 | `--watch` | Pass `--watch` to `gymbag run` (default `true`) |
-| `--enable` | Enable service at boot during `install` (default `true`) |
+| `--enable` | Enable service on boot during `install` (default `true`) |
 | `--start`, `--now` | Start service immediately after `install` |
-| `--no-reload` | Write/remove unit file without invoking `systemctl`/`launchctl`/`rc-update`/`supervisorctl` |
-| `-f`, `--force` | Overwrite existing unit/plist/script file |
+| `--no-reload` | Write/remove unit file without running `systemctl`/`launchctl`/`rc-update`/`supervisorctl` |
+| `-f`, `--force` | Overwrite an existing service file |
