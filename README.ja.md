@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>純 Go 製シングルバイナリ HTTPS リバースプロキシ &amp; Proof-of-Work WAF</strong>
+  <strong>純 Go 製シングルバイナリ HTTP/HTTPS・SSH・Minecraft 対応 Proof-of-Work ゲートウェイ</strong>
 </p>
 
 <p align="center">
@@ -27,88 +27,126 @@
   <sub>オンラインドキュメント: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
-Gymbag は、Anubis スタイルの Proof-of-Work（作業証明）Web アプリケーションファイアウォールを内蔵した、純 Go 製のシングルバイナリ HTTPS リバースプロキシです。標準ライブラリのみを使用して実装されており、外部 Go 依存はゼロ。すべての HTML テンプレート、ブラウザ用 SHA-256 ソルバースクリプト、マスコット PNG 画像まで `go:embed` によって実行ファイルに直接組み込まれています。
+Gymbag は、Anubis の発想を取り入れた Proof-of-Work (PoW) WAF を備え、SSH と Minecraft サーバーも保護できる単一バイナリの HTTPS リバースプロキシです。Go 標準ライブラリのみで実装しており、外部 Go モジュールへの依存はありません。HTML ページ、ブラウザ用 SHA-256 ソルバー、マスコット画像も `go:embed` でバイナリに組み込まれています。
 
-Web アプリや Gitea/Forgejo、ドキュメントサイト、社内ツールなどをセルフホストしているなら、Anubis が生まれたのと同じ課題に直面したことがあるはずです。`robots.txt` を無視する攻撃的な LLM クローラーや、`/.env` や `/wp-admin` を24時間スキャンし続ける脆弱性スキャナーです。Nginx/Caddy に独立した PoW サイドカーコンテナ、fail2ban、手作業の CIDR リストを組み合わせる代わりに、Gymbag は TLS 終端、マルチ CA ACME、HTTP/WebSocket プロキシ、ローカル＆リモートファイアウォールルール、IP 脅威インテリジェンス、サイトごとの PoW ポリシーをシンプルな `Gymbagfile` で設定できる 1 つのバイナリに統合します。
+セルフホストのアプリや Git フォージ、SSH ポート、Minecraft サーバーがさらされるトラフィックはどこも似たようなものです。`robots.txt` を無視する LLM スクレイパー、`/.env` や `/wp-admin` を探るボット、SSH ブルートフォース、ログインフラッド。nginx や Caddy に PoW 用サイドカー、fail2ban、独自のファイアウォールスクリプトを組み合わせる代わりに、Gymbag は TLS 終端、マルチ CA ACME、HTTP/WebSocket プロキシ、SSH/Minecraft TCP ゲーティング、IP 脅威・VPN・AI リスト、ファイアウォールルールを 1 プロセスにまとめています。設定は `gymbag.json` または Caddy 風の `Gymbagfile` で記述できます。
 
----
+## クイックスタート
 
-## クイックスタート（すぐに使える多層防御）
-
-[GitHub Releases](https://github.com/Evil-Project/gymbag/releases) からビルド済み静的バイナリ（Linux/macOS/Windows、および Arch Linux 用 `.pkg.tar.zst`）をダウンロードするか、Nix Flakes またはソースからビルドしてください：
+ビルド済みの静的バイナリ（Linux・macOS・Windows の `amd64`/`arm64` 向け `CGO_ENABLED=0`）、Debian/Ubuntu 用 `.deb` パッケージ、Arch Linux 用 `.pkg.tar.zst` パッケージ、NixOS 用 tarball/NAR を [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) で公開しています。GHCR のコンテナイメージや Nix flake を使うか、ソースから直接ビルドすることもできます。
 
 ```bash
 go build -o gymbag ./cmd/gymbag
 ```
 
+**Debian / Ubuntu:**
+```bash
+sudo apt install ./gymbag_<version>_linux_amd64.deb
+sudo gymbag init -o /etc/gymbag/Gymbagfile --format gymbagfile
+sudo systemctl enable --now gymbag
+```
+
 **Arch Linux:**
 ```bash
-# ビルド済みパッケージ（.pkg.tar.zst）をインストール
-sudo pacman -U gymbag-0.1.0-1-x86_64.pkg.tar.zst
-# または makepkg でローカルビルド
+sudo pacman -U gymbag-<version>-1-x86_64.pkg.tar.zst
+# または packaging/arch からビルド:
 cd packaging/arch && makepkg -si
 ```
 
 **Nix / NixOS:**
 ```bash
-# flake から実行またはインストール
 nix run github:Evil-Project/gymbag -- --help
 nix profile install github:Evil-Project/gymbag
 ```
-静的リンクされた `CGO_ENABLED=0` の Linux リリースバイナリは NixOS 上でも `patchelf` や `nix-ld` なしでそのまま動作し、`nixosModules.default` による宣言的な `services.gymbag` 設定も提供されています。
+静的リンクされた Linux リリースバイナリは NixOS 上で `patchelf` や `nix-ld` なしにそのまま動作し、`nixosModules.default` で宣言的な `services.gymbag` モジュールも利用できます。
 
-**わずか 2 コマンド**で `gymbag.json` を生成してサーバーを起動できます：
+起動までは 2 コマンドです。設定ファイルを生成し（デフォルトは `gymbag.json`、`--format gymbagfile` で `Gymbagfile` を出力）、起動します。
 
 ```bash
-# 1. JSON 設定を生成（Caddy 風の Gymbagfile にしたい場合は --format gymbagfile を指定）
+# HTTP/HTTPS サイトを保護
 ./gymbag init -d app.example.com -u http://localhost:3000
-
-# 2. サーバーを起動（./gymbag.json、./Gymbagfile、./Caddyfile を自動で読み込み）
 ./gymbag
+
+# SSH を保護（sshd をランダムポートへ移動しファイアウォールを設定）
+sudo ./gymbag init -t ssh
+sudo ./gymbag
+
+# Minecraft Java Edition を保護（server.properties の server-port をランダム化）
+./gymbag init -t minecraft --server-properties /path/to/server.properties
+./gymbag
+
+# 3 つすべてを 1 プロセスで保護
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag
 ```
 
-Gymbag は既存の **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）、**Caddyfile v2** 設定もネイティブに読み込めます（スニペット、`import`、`@matchers`、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir`、`header` に対応）。
-
-システムサービス（`systemd`、`launchd`、`openrc`、`supervisor`）として登録して起動することも可能です：
+既存の **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）、**Caddyfile v2** の設定ファイルをそのまま読み込むことも、システムサービス（`systemd`、`launchd`、`openrc`、`supervisor`）として登録することもできます。
 
 ```bash
 ./gymbag init -d app.example.com -u :3000 --service auto
 ./gymbag service start
 ```
 
-設定ファイルを使わずにアドホックなプロキシを起動することもできます：
+設定ファイルを書かずに単発でプロキシを試したい場合は次のように実行します。
 
 ```bash
 ./gymbag reverse-proxy --from app.internal --to :3000 --verify 3
 ```
 
-### 「すぐに使える（Open-Box）」保護の仕組み
+> **1024 番未満のポート:** `:80` は HTTP→HTTPS リダイレクトと ACME HTTP-01、`:443` は HTTPS、`:22` は SSH で待ち受けます。Linux では `sudo setcap 'cap_net_bind_service=+ep' ./gymbag` を付与すると root 権限なしでバインドできます（`.deb` パッケージと Arch パッケージでは自動で付与されます）。非特権ユーザーでローカル Web テストを行う場合は `--http-port 8080 --https-port 8443` を指定してください。
 
-Gymbag をインターネットに公開する前に、正規表現を 1 行書いたりブロックリストを手動インポートしたりする必要はありません。`verify`（検証レベル `3`：`suspicious & ai`）または `block`（脅威インテリジェンス一致 IP をチャレンジせず即 `403 Forbidden`）を指定するだけで、次の 3 層が即座に有効になります：
+### ルールを書かずに動く標準防御
 
-1. **組み込みベースラインファイアウォールルール（`default_rules on`）**
-   - **機密ファイル保護（`403`）**: `/.env`、`/.env.*`、`/.git/*`、`/.svn/*`、`/.hg/*`、`/.DS_Store`、`/.aws/*`、`/.ssh/*`、`/docker-compose.yml`、`/docker-compose.yaml`、`*.bak`、`*.sql`、`*.sqlite` へのアクセスを遮断します。
-   - **CMS・フレームワーク攻撃探査（`403`）**: `/wp-admin/*`、`/wp-login.php`、`/xmlrpc.php`、`/phpmyadmin*`、`/vendor/phpunit*`、`/cgi-bin/*`、`/actuator/env*`、`/actuator/heapdump*` をドロップします。
-   - **脆弱性スキャナー遮断（`403`）**: `sqlmap`、`nikto`、`nuclei`、`masscan`、`zgrab`、`gobuster`、`dirbuster`、`ffuf`、`wfuzz`、`feroxbuster`、`acunetix`、`nessus`、`openvas` を拒否します。
-   - **インジェクション＆トラバーサル検知（`403`）**: クエリ文字列内の `UNION SELECT`、`<script`、`javascript:`、`/etc/passwd`、`information_schema`、`../`、`cmd.exe`、`/bin/sh` を検知します（NULL バイトや `%2e%2e` パストラバーサルに対する厳格なリクエスト形式チェックも併用）。
-   - **自動化クライアント向けチャレンジ（`PoW`）**: カスタムルールを定義していない場合、CLI HTTP クライアント（`curl`、`wget`、`python-requests`、`python-httpx`、`go-http-client`、`scrapy`）、ヘッドレスブラウザ（`headlesschrome`、`playwright`、`puppeteer`、`selenium`）、および空の `User-Agent` は Proof-of-Work 画面へ誘導されます。
-2. **自動更新 IP 脅威インテリジェンス**
-   - 起動時およびバックグラウンドで 6 時間ごとに [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt)、[Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) & [IPv6](https://www.spamhaus.org/drop/dropv6.txt)、[abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt) を取得し、`ETag` / `If-Modified-Since` を使って `<cert_dir>/intel-cache` にキャッシュします。
-   - **Shodan InternetDB**（`internetdb.shodan.io`）および **StopForumSpam**（`api.stopforumspam.org`）に対するキー不要のリアルタイム IP レピュテーション照会を、インメモリ TTL キャッシュとフェイルオープンタイムアウト付きで実行します。
-3. **公式 AI クローラー IP レンジ追跡**
-   - **OpenAI**（`gptbot`、`searchbot`、`chatgpt-user`）、**Anthropic**（`claude.com/crawling/bots.json`）、**Perplexity**（`perplexitybot`、`perplexity-user`）、**Google**（`user-triggered-agents`、`user-triggered-fetchers-google`）、**Apple**（`applebot`）の公開 CIDR リストを追跡します。`User-Agent` を通常のデスクトップ Chrome に偽装しても、送信元 IP から確実に判別します。
+正規表現を書いたりブロックリストを取り込んだりしなくても、サイトの前に置くだけで保護が働きます。引数なしの `verify`（レベル `3`: `suspicious & ai`）または `block`（脅威インテル一致時にチャレンジではなく `403` を返却）を指定すると、次の 3 層が有効になります。
 
-> **ポート 80 と 443 に関する運用メモ：** デフォルトでは `:80`（HTTP→HTTPS リダイレクト + ACME HTTP-01 応答）と `:443`（HTTPS ゲートウェイ）をリッスンします。Linux ではバイナリに `CAP_NET_BIND_SERVICE` を付与することで root 権限なしで起動できます：
-> ```bash
-> sudo setcap 'cap_net_bind_service=+ep' ./gymbag
-> ```
-> 非特権環境でのローカルテストでは `--http-port 8080 --https-port 8443`（または `Gymbagfile` で `http_port` / `https_port`）を指定してください。
+1. **組み込みベースラインルール（`default_rules on`）**
+   - **機密パス（`403`）**: `/.env`、`/.env.*`、`/.git`、`/.git/*`、`/.svn/*`、`/.hg/*`、`/.DS_Store`、`/.aws/*`、`/.ssh/*`、`/docker-compose.yml`、`/docker-compose.yaml`、`*.bak`、`*.sql`、`*.sqlite`。
+   - **CMS・フレームワーク探査（`403`）**: `/wp-admin`、`/wp-admin/*`、`/wp-login.php`、`/xmlrpc.php`、`/phpmyadmin*`、`/vendor/phpunit*`、`/cgi-bin/*`、`/actuator/env*`、`/actuator/heapdump*`。
+   - **脆弱性スキャナー（`403`）**: `sqlmap`、`nikto`、`nuclei`、`masscan`、`zgrab`、`gobuster`、`dirbuster`、`ffuf`、`wfuzz`、`feroxbuster`、`acunetix`、`nessus`、`openvas`。
+   - **インジェクション・パストラバーサル（`403`）**: クエリ文字列内の `UNION SELECT`、`<script`、`javascript:`、`/etc/passwd`、`information_schema`、`../`、`cmd.exe`、`/bin/sh`。さらに NULL バイトや `%2e%2e` トラバーサルをリクエスト形状チェックで拒否します。
+   - **自動化クライアント（PoW チャレンジ）**: カスタムルールが未設定のサイトでは、CLI ライブラリ（`curl`、`wget`、`python-requests`、`python-httpx`、`go-http-client`、`aiohttp`、`okhttp`、`axios`、`node-fetch`、`scrapy`）、ヘッドレスブラウザ（`headlesschrome`、`playwright`、`puppeteer`、`selenium`、`phantomjs`）、空の `User-Agent` を PoW 検証ページへ誘導します。
+2. **自動更新 IP 脅威インテルと VPN/Tor 検出**
+   - 起動時と 6 時間ごとに [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt)、[Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) / [IPv6](https://www.spamhaus.org/drop/dropv6.txt)、[abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt) を取得し、`ETag` と `If-Modified-Since` を使って `<cert_dir>/intel-cache` にキャッシュします。
+   - **Shodan InternetDB**（`internetdb.shodan.io`）と **StopForumSpam**（`api.stopforumspam.org`）へキー不要でライブ照会を行います。インメモリキャッシュは 1 時間有効で、上流が遅い場合はフェイルオープンで通過させるため通常の訪問者を止めません。
+   - **無料 VPN/プロキシ/Tor 検出（`vpn_detection on`）**: 自動更新される X4BNet VPN IPv4/IPv6 リストと Tor 一括出口ノードリストに加え、`api.ipquery.io` と `api.ipapi.is` へのキー不要なライブ照会（キャッシュ 1 時間、1.2 秒フェイルオープン）を行います。一致した IP は HTTP・SSH・Minecraft の検証レベル `1` および `3` で **suspicious** 扱いになります。
+3. **公式 AI クローラー IP リスト**
+   - **OpenAI**（`gptbot`、`searchbot`、`chatgpt-user`）、**Anthropic**（`claude.com/crawling/bots.json`）、**Perplexity**（`perplexitybot`、`perplexity-user`）、**Google**（`user-triggered-agents`、`user-triggered-fetchers-google`）、**Apple**（`applebot`）が公開している CIDR リストを追跡し、`User-Agent` を Chrome に偽装していても送信元 IP から判定します。
 
----
+## SSH・Minecraft の保護
 
-## ローカル開発（`localhost` & `*.internal`）
+未認証の SSH または Minecraft 接続が Gymbag に届き、設定された検証レベルに該当すると、Gymbag はバックエンドのデーモンやゲームサーバーには転送せず、プロトコル自身の切断メッセージ内にワンタイム HTTPS リンク（`/v/<token>`）を含めて返します。
 
-カスタムホスト名でのローカル HTTPS テストでは、通常 `mkcert` や手動での `/etc/hosts` 編集、自己署名証明書の警告に悩まされます。Gymbag は `localhost`、`*.localhost`、`*.internal`（例：`app.internal` や `api.internal`）、`*.local`、`*.test` を使うサイトに対して、名前解決とローカル X.509 証明書発行を自動で処理します：
+- **SSH（デフォルト `port` `22`）**: `sudo ./gymbag init -t ssh` を実行すると、`20000–59999` の範囲から未使用のローカルポートを選び、`/etc/ssh/sshd_config` を `/etc/ssh/sshd_config.gymbag.bak` へバックアップした上で、すべての `Match` ブロックより前に新しい `Port` を書き込みます。続けて `sshd -t` で検証し（失敗時は自動ロールバック）、`sshd` をリロードして稼働中の Linux ファイアウォール（`ufw`、`firewalld`、`nftables`、`iptables`+`ip6tables`）を更新し、バックエンドポートへの外部アクセスを遮断して `22` と `8443` を開放します。（`sshd_config` 変更中は別の SSH セッションを開いたまま作業してください。手動で設定したい場合は `--ssh-upstream 127.0.0.1:2222`、`--no-auto-setup`、`--no-firewall` を使います。）ブラウザでチャレンジを完了した IP からの接続は、SSH ハンドシェイクに触れず生の TCP リレーでそのまま通過します。レベル `1` と `3` では、不正なバナーやスクリプト化された SSH クライアント（`libssh`、`paramiko`、`zgrab`、`masscan`、`nmap`、`asyncssh`、`ssh2go`、`jsch`、`hydra`、`medusa`、`patator`、`python`、`curl`、`ssh-2.0-go`）がチャレンジ対象となり、それ以外のクライアントは RFC 4253 `SSH_MSG_DISCONNECT` 経由でターミナル上に検証 URL を受け取ります。
+- **Minecraft Java（デフォルト `port` `25565`）**: `./gymbag init -t minecraft --server-properties ./server.properties` は `server.properties` を `server.properties.gymbag.bak` にバックアップし、`server-port` を `20000–59999` の空きポートへ移動して、空またはワイルドカードの `server-ip` を `127.0.0.1` に設定します。Server List Ping（`nextState == 1` および旧形式 `0xFE`）はルールで遮断されない限りそのまま通すため、MOTD やプレイヤー数は通常どおり表示されます。Login または Transfer 時に検証が必要な場合は、Minecraft Login Disconnect パケット（`0x00`）を返し、**「Connection Lost」**ダイアログ内に検証リンクを表示します。
+- **共有 HTTPS 検証ポータル（デフォルト `:8443`）**: SSH と Minecraft は `verify_port` を共有します（独自ドメインを使う場合は `--verify-url https://verify.example.com:8443` を指定し、空欄のままにすると自動検出したサーバー IP が使われます）。ACME でサーバー IP を使う場合、Gymbag は **RFC 8738** IP 証明書（CA が提供していれば `shortlived` プロファイル）を要求し、HTTP-01 が到達できない環境ではローカル CA または自己署名 IP 証明書へフォールバックします。`verify_port` が `https_port` と一致し HTTP サイトが有効な場合は、ポータルもポート `443` を共有します。
+
+```caddyfile
+{
+    verify_url https://verify.example.com:8443
+    verify_port 8443
+}
+
+ssh {
+    port 22
+    upstream 127.0.0.1:41822
+    verify 3
+    rate_limit 60 60s
+}
+
+minecraft {
+    port 25565
+    upstream 127.0.0.1:48291
+    server_properties /srv/mc/server.properties
+    verify 3
+    allow ip 192.168.1.0/24
+}
+```
+
+設定例（`gymbag.json` を含む）と動作仕様の詳細は [SSH・Minecraft 保護ガイド](docs/ja/guide/ssh-minecraft.md) を参照してください。
+
+## ローカル開発（`localhost` と `*.internal`）
+
+`localhost`、`*.localhost`、`*.internal`（`app.internal`、`api.internal`）、`*.local`、`*.test` を使うサイトでは、Gymbag が `/etc/hosts` とローカル TLS 証明書を自動で管理します。
 
 ```caddyfile
 app.internal {
@@ -122,59 +160,51 @@ api.internal {
 }
 ```
 
-### `/etc/hosts` の自動登録とクリーンアップ
+### `/etc/hosts` の自動管理
 
-`auto_hosts` が有効（デフォルト）な場合、Gymbag は起動時に `/etc/hosts`（Windows では `C:\Windows\System32\drivers\etc\hosts`）を確認します。未解決のローカルドメイン（`app.internal` など）が見つかると、インスタンス ID タグ付きの IPv4 / IPv6 ループバックエントリを追記します：
+`auto_hosts on`（デフォルト）が有効な場合、Gymbag は起動時に `/etc/hosts`（Windows では `C:\Windows\System32\drivers\etc\hosts`）を確認し、未登録のローカルドメインに対して IPv4・IPv6 のループバックエントリを追記します。
 
 ```text
 127.0.0.1 app.internal # gymbag-managed:9f3a1c2b
 ::1 app.internal # gymbag-managed:9f3a1c2b
 ```
 
-既存の `localhost` 行には触れません。Gymbag を終了（`Ctrl+C` / `SIGTERM`）すると、実行中の手動編集を保持したまま `/etc/hosts` を再読み込みし、自身の `# gymbag-managed:<instanceID>` 行**のみ**を削除します。
+既存の `localhost` 行には手を加えません。`Ctrl+C` または `SIGTERM` で終了する際、ファイルを再読み込みして実行中の手動編集を残したまま `# gymbag-managed:<instanceID>` 行だけを削除します。macOS/Linux で `/etc/hosts` を書き換えるには root 権限が必要ですが、非特権ユーザーで起動した場合は警告ログを出してそのまま起動を続けます。`.internal` の名前解決を `dnsmasq` や手動管理に任せる場合は `auto_hosts off`（`GYMBAG_AUTO_HOSTS=off`）を設定してください。
 
-- **macOS & Linux の権限について：** `/etc/hosts` の更新には root 権限が必要です。書き込み権限のない一般ユーザーで `./gymbag` を起動した場合、明確な警告ログを出力して**クラッシュせずそのまま稼働を続けます**。`/etc/hosts` の自動管理（および 80/443 ポート利用）を行いたい場合は `sudo ./gymbag` で実行するか、`dnsmasq` 等を使う場合は `auto_hosts off`（または `GYMBAG_AUTO_HOSTS=off`）を設定してください。
+### ローカル CA
 
-### 2 階層ローカル PKI と Root CA の信頼設定
+再起動のたびに使い捨ての自己署名証明書を作り直す代わりに、Gymbag は `<cert_dir>/ca/`（デフォルト `certs/ca/`）に 2 階層の ECDSA P-256 CA を維持します。
 
-ブラウザが信頼キャッシュを拒否する使い捨ての自己署名リーフ証明書ではなく、Gymbag は `<cert_dir>/ca/`（デフォルト `certs/ca/`）内に 2 階層の ECDSA P-256 認証局を構築します：
+1. **Root CA**: `"Neuro-sama Headquarters Root CA"`（`certs/ca/neuro-sama-root-ca.pem`、有効期限 10 年、`MaxPathLen: 1`）
+2. **Intermediate CA**: `"Gymbag & Swarm SSL Local CA"`（`certs/ca/gymbag-swarm-local-ca.pem`、有効期限 5 年、`MaxPathLen: 0`）
+3. **Leaf 証明書**: `certs/local-fullchain.pem` + `certs/local-privkey.pem`（有効期限 90 日、残り 30 日以内で更新、DNS SAN と `127.0.0.1`・`::1` を付与）
 
-1. **Root CA**: **`"Neuro-sama Headquarters Root CA"`**（`certs/ca/neuro-sama-root-ca.pem`、有効期限 10 年、`MaxPathLen: 1`）
-2. **Intermediate CA**: **`"Gymbag & Swarm SSL Local CA"`**（`certs/ca/gymbag-swarm-local-ca.pem`、有効期限 5 年、`"Neuro-sama Headquarters Root CA"` による署名、`MaxPathLen: 0`）
-3. **Leaf 証明書**: `certs/local-fullchain.pem` + `certs/local-privkey.pem`（有効期限 90 日、残り 30 日以内で自動更新、DNS SAN および `127.0.0.1` / `::1` の IP SAN 付き）
+`"Neuro-sama Headquarters Root CA"` を一度信頼ストアに登録すれば、ブラウザも `curl` もすべてのローカルサイトを検証済みとして受け入れます。
 
-OS の信頼ストアで **`"Neuro-sama Headquarters Root CA"`** を一度信頼するだけで、Gymbag が配信するすべての `https://localhost` および `https://*.internal` がブラウザや `curl` で正常に検証されます：
-
-**macOS（システムキーチェーン）：**
 ```bash
+# macOS
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/ca/neuro-sama-root-ca.pem
-```
 
-**Debian / Ubuntu:**
-```bash
+# Debian / Ubuntu
 sudo cp certs/ca/neuro-sama-root-ca.pem /usr/local/share/ca-certificates/neuro-sama-root-ca.crt && sudo update-ca-certificates
-```
 
-**Fedora / RHEL / Arch Linux:**
-```bash
+# Fedora / RHEL / Arch Linux
 sudo trust anchor --store certs/ca/neuro-sama-root-ca.pem
 ```
 
-> **Firefox に関する注意：** macOS および Windows では、`about:config` で `security.enterprise_roots.enabled` を `true` にすると OS のルート証明書を自動信頼します。Linux で Firefox が p11-kit ではなく独自の NSS DB を使っている場合は、`security.enterprise_roots.enabled` を有効にするか、*設定 -> プライバシーとセキュリティ -> 証明書 -> 証明書を表示 -> 認証局* から `certs/ca/neuro-sama-root-ca.pem` を一度インポートしてください。
+> **Firefox:** macOS/Windows（および `p11-kit` 対応の Linux）では `about:config` で `security.enterprise_roots.enabled` を `true` にするか、*設定 -> プライバシーとセキュリティ -> 証明書 -> 証明書を表示 -> 認証局* から `certs/ca/neuro-sama-root-ca.pem` をインポートしてください。
 
----
+## 複数サイトの管理と検証レベル（`0`–`3`）
 
-## 複数サイトの保護と検証レベル（`0`–`3`）
+1 つのプロセスで複数ドメインをホストし、ラウンドロビンのアップストリーム負荷分散と RFC 6455 WebSocket アップグレードを処理できます。サイトごと（および SSH/Minecraft サービスごと）に検証レベル（`0`–`3`）または PoW 無効化（`protect off`）を指定します。
 
-単一の Gymbag プロセスで数十ものドメインを同時にホストし、複数アップストリームへのラウンドロビン負荷分散や全二重 RFC 6455 WebSocket アップグレードを行えます。各サイトで `verify <0-3>`（または WAF 無効化の `protect off`）を指定します：
-
-| レベル | 名称 | チャレンジ対象 | 最適な用途 |
+| レベル | 名称 | チャレンジ対象 | 主な用途 |
 | :---: | :--- | :--- | :--- |
-| `0` | `always` | 有効な HMAC クリアランス Cookie を持たないすべての訪問者。 | 社内専用ツール、ステージング環境、L7 フラッド攻撃を受けているサイト。 |
-| `1` | `only suspicious` | 脅威リスト/低評価 IP、スキャナー、CLI HTTP ライブラリ、ヘッドレスブラウザ、不審/偽装ヘッダー、脆弱性プローブ。 | 一般ブラウザにチャレンジ画面を見せたくない公開 Web アプリや API。 |
-| `2` | `only ai` | **公式 AI クローラー IP 範囲** *または* AI ボットの `User-Agent`/エージェントヘッダーに一致する AI クローラー・LLM エージェント。 | 人間や `curl` ユーザーにはストレスなく公開しつつ、LLM スクレイパーに負荷を課したいドキュメントやブログ、Git フォージ。 |
-| `3` | `suspicious & ai` | `1` と `2` の組み合わせ：不審クライアント/IP と AI クローラーの両方にチャレンジし、通常の人間のブラウザはそのまま通過。 | 公開本番サイトでの推奨デフォルト（引数なしの `verify` でも有効）。 |
-| — | `protect off` | Proof-of-Work チャレンジを無効化し、純粋な HTTPS ＆ WebSocket リバースプロキシとして動作（サイトにカスタムルールが定義されている場合は評価されます）。 | 静的アセット配信、Webhook、公開パッケージミラー。 |
+| `0` | `always` | 有効なクリアランス Cookie または認証済み IP を持たない全員 | 管理ツール、ステージング環境、L7 フラッド対策 |
+| `1` | `only suspicious` | 脅威フィード、ライブ低評価 IP、VPN/プロキシ/Tor IP、スキャナー、CLI ライブラリ、ヘッドレスブラウザ、ヘッダー欠落/偽装、攻撃プローブ | 通常のブラウザにチャレンジを見せない公開アプリや API |
+| `2` | `only ai` | 公式 AI クローラー IP 範囲、または AI ボットの `User-Agent` / `X-Ai-Agent` / `Sec-Agent` ヘッダー | 人間と `curl` は素通ししたいドキュメント・ブログ・Git フォージ |
+| `3` | `suspicious & ai` | `1` と `2` の組み合わせ（引数なし `verify`、SSH、Minecraft のデフォルト） | 公開本番 Web サイト |
+| — | `protect off` | PoW チャレンジなしのプロキシ動作（明示的なカスタムルールは評価） | 静的アセット配信、Webhook、ミラー |
 
 ```caddyfile
 app.example.com, www.example.com {
@@ -196,6 +226,7 @@ api.example.com {
 staging.example.com {
     reverse_proxy http://localhost:3002
     verify 0
+    verify_timeout 30m
 }
 
 static.example.com {
@@ -204,31 +235,11 @@ static.example.com {
 }
 ```
 
-ブラウザが SHA-256 Proof-of-Work（`difficulty` `1`–`5`、デフォルト `4`）を解くと、Gymbag はホスト名とクライアント IP の両方にバインドされた `HttpOnly`・`SameSite=Lax` の HMAC 署名済みクリアランス Cookie（`waf_clearance`、デフォルト有効期間 `24h` / `86400s`）を発行します。
+SHA-256 チャレンジ（`difficulty` `1`–`5`、デフォルト `4`）を解くと、ホストとクライアント IP に紐付いた `HttpOnly`・`SameSite=Lax` の HMAC クリアランス Cookie（`waf_clearance`、デフォルト `24h` / `86400s`）が発行されます。有効期限は `verify_timeout` / `clearance_ttl`（秒数、または `30m`、`12h`、`1h30m`、`7d`、`2w` などの期間表記）、`--verify-timeout`、`GYMBAG_VERIFY_TIMEOUT`、`PATCH /api/v1/sites/{domain}` でグローバルまたはサイト単位に変更できます。認証済み訪問者が `GET /.waf/v1/session` を叩くと `clearance_ttl`、`expires_at`、`expires_in` が返ります。
 
-### 認証済みステータスのカスタム有効期限（`verify_timeout` / `clearance_ttl`）
+## パスルート・静的ファイル・リダイレクト・設定インポート
 
-訪問者の認証済み状態の有効期限を、グローバルまたはサイト単位で整数秒**または**人間が読みやすい期間表記（`30m`、`12h`、`1h30m`、`7d`、`2w`）でカスタマイズできます：
-
-```caddyfile
-{
-    verify_timeout 12h     # グローバルデフォルト（エイリアス：verified_timeout, clearance_ttl）
-}
-
-staging.example.com {
-    reverse_proxy http://localhost:3002
-    verify 0
-    verify_timeout 30m     # サイト単位の上書き
-}
-```
-
-`gymbag init` / `gymbag run` / `gymbag reverse-proxy` に `--verify-timeout 6h`（または `--clearance-ttl 6h`）を渡したり、`GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL` を設定したり、`PATCH /api/v1/sites/{domain}` で `clearance_ttl` をライブ更新することも可能です。認証済みユーザーが `GET /.waf/v1/session` にアクセスすると、`clearance_ttl`、`expires_at`、残り秒数 `expires_in` が返されます。
-
----
-
-## パスルート、静的ファイル、リダイレクト＆設定インポート
-
-単純な `reverse_proxy` のほかに、サイトには順序付きの**パスルート**を定義できます。パスが最初に一致したルートがリクエストを処理し、どのルートにも一致しないリクエストはサイトのデフォルトアップストリームへ渡されます（無ければ `404`）。各ルートのハンドラは、リバースプロキシ、静的ファイル配信（`root`）、固定 `respond`、`redir` のいずれか 1 つだけです。
+サイト内には `reverse_proxy` と並べて順序付きの**パスルート**を書けます。最初に一致したルートがリクエストを処理し、どれにも一致しない場合はサイトのデフォルトアップストリームへ渡ります（未設定なら `404`）。各ルートが持つハンドラは、リバースプロキシ、静的ファイルサーバー（`root`）、固定 `respond`、`redir` のいずれか 1 つです。
 
 ```caddyfile
 app.example.com {
@@ -246,155 +257,97 @@ app.example.com {
         reverse_proxy http://localhost:8080
         header X-Served-By gymbag
     }
-    try_files {path} /index.html          # SPA フォールバック
+    try_files {path} /index.html
 }
 ```
 
-パスマッチャーは、完全一致パス（`/exact`）、グロブ（`/api/*`、`*.php`）、または `~` を前置した Go RE2 正規表現（`~^/v[0-9]+/`）です。リダイレクト先では `{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}` が使えます。静的ルートは `index`、`browse`（ディレクトリ一覧）、`fallback`（SPA 向けの `/index.html` など）をサポートし、ルートの `headers` はヘッダーを設定し、キーの先頭に `-` を付けると削除します。WAF ルールと検証は、どのルートハンドラよりも前に必ず実行されます。
+パスマッチャーには完全一致（`/exact`）、グロブ（`/api/*`、`*.php`）、Go RE2 正規表現（`~^/v[0-9]+/`）を指定できます。リダイレクト先は `{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}` を展開します。静的ルートは `index`、`browse`、SPA `fallback` に対応し、`header` はレスポンスヘッダーの追加または `-` プレフィックスでの削除を行います。なお、ファイアウォールルールと検証は常にルートハンドラより先に実行されます。
 
-`gymbag.json` では、同じ内容を `routes` 配列で記述します：
+`gymbag.json` では同等の定義を `routes` 配列に書きます。
 
 ```json
-{"routes": [
-  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
-  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
-  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
-]}
+{
+  "routes": [
+    {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+    {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+    {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+  ]
+}
 ```
 
-ルートは CLI の `gymbag config route list|add|update|remove`、またはライブで `PATCH /api/v1/sites/{domain}`（`routes`、`headers`、`rule_sources`）から管理できます。
+ルートの編集には `gymbag config route list|add|update|remove` または `PATCH /api/v1/sites/{domain}` を使います。
 
-**既存設定のインポート：** `gymbag run -c /etc/nginx/nginx.conf`（または `httpd.conf` / `apache2.conf`）でネイティブの nginx/Apache 設定をそのまま起動でき、`gymbag config convert -c <file> -o gymbag.json --format json` で nginx、Apache、Caddyfile v2（スニペット、`import`、`@matchers`、`handle`、`route`）を Gymbag のネイティブ形式へ変換できます。
+**既存設定のインポート:** `gymbag run -c /etc/nginx/nginx.conf`（または `httpd.conf` / `apache2.conf`）で nginx・Apache 設定をそのまま実行でき、`gymbag config convert -c <file> -o gymbag.json --format json` で nginx、Apache、Caddyfile v2（スニペット、`import`、`@matchers`、`handle`、`route`、`file_server`、`respond`、`redir`、`header` 対応）を変換できます。
 
----
+## SSL プロバイダ・独自鍵・証明書更新
 
-## SSL プロバイダの切り替え、カスタム鍵、自動更新
+公開ドメインのデフォルトは `tls auto` で、ACME HTTP-01 経由で Let's Encrypt から証明書を取得します。CA を変更するには `ssl_provider`（別名: `acme_provider`、`ca`、`cert_issuer`）または `tls <provider>` を指定します。
 
-公開ドメインでは、デフォルトの `tls auto` が RFC 8555 ACME HTTP-01 を通じて Let's Encrypt から自動取得を行います。`ssl_provider` ディレクティブ（エイリアス：`acme_provider`、`ca`、`cert_issuer`）または `tls <provider>` で CA を切り替えられます：
-
-| プロバイダキーワード | 認証局（CA） | EAB 要件 |
+| プロバイダキーワード | 認証局 (CA) | EAB 要件 |
 | :--- | :--- | :--- |
-| `letsencrypt` (`le`) | Let's Encrypt (本番) | 不要 |
-| `letsencrypt_staging` | Let's Encrypt (ステージング) | 不要 |
-| `zerossl` | ZeroSSL | `email` 設定時は**自動取得**、または明示的な `eab <kid> <hmac_key>` |
-| `google` (`gts`) | Google Trust Services | `eab <kid> <hmac_key>` が必要 |
-| `ssl.com` (`sslcom`, `ssl.com-rsa`) | SSL.com (ECC または RSA) | `eab <kid> <hmac_key>` が必要 |
-| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 標準 DV は不要（または `acme_directory` で URL 上書き） |
-| `buypass` | Buypass Go SSL | 不要 |
-| `local` | ローカル 2 階層 PKI | ローカル CA（`Neuro-sama Headquarters Root CA` -> `Gymbag & Swarm SSL Local CA`） |
-| `https://...` | 任意の RFC 8555 ACME v2 CA | 任意の `eab <kid> <hmac_key>`（Smallstep `step-ca`、Pebble 等） |
+| `letsencrypt` (`le`) | Let's Encrypt (本番) | なし |
+| `letsencrypt_staging` | Let's Encrypt (ステージング) | なし |
+| `zerossl` | ZeroSSL | `email` 設定時は自動取得、または `eab <kid> <hmac_key>` |
+| `google` (`gts`) | Google Trust Services | `eab <kid> <hmac_key>` が必須 |
+| `ssl.com` (`sslcom`, `ssl.com-rsa`) | SSL.com (ECC または RSA) | `eab <kid> <hmac_key>` が必須 |
+| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 標準 DV では不要 |
+| `buypass` | Buypass Go SSL | なし |
+| `local` | ローカル 2 階層 PKI | ローカル CA (`Neuro-sama Headquarters Root CA`) |
+| `https://...` | 任意の RFC 8555 ACME v2 CA | 任意の `eab <kid> <hmac_key>`（`step-ca`、Pebble 等） |
 
-### ACME CA の切り替えと External Account Binding (EAB)
+**ZeroSSL** では `eab` を明示しない限り、`email` を設定するだけで EAB 資格情報を自動取得します。**Google Trust Services** と **SSL.com** では `eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY` を渡してください（パディング付き Base64 とパディングなし Base64URL の両方に対応し、`eab_hmac_key` は Admin API の出力でマスクされます）。ACME 証明書はプロバイダごとに保存されるため（ZeroSSL なら `certs/acme-zerossl-fullchain.pem`、Let's Encrypt なら `certs/acme-fullchain.pem`）、`ssl_provider` を切り替えると即座に新しい CA から取得し直します。
 
-**ZeroSSL でのワンクリック自動メール EAB：**
-`zerossl` を選択して `email` を設定すると、明示的な EAB キーを指定していない場合に ZeroSSL の EAB エンドポイント（`https://api.zerossl.com/acme/eab-credentials-email`）から自動で認証情報を取得します：
+既存の PEM ファイルも持ち込めます。
+- `account_key /etc/gymbag/account.pem`: 既存の ECDSA（P-256/P-384）または RSA ACME アカウント鍵。
+- `ssl_key /etc/gymbag/domain.key`: ACME CSR 署名用の既存 ECDSA/RSA 秘密鍵。
+- `tls <cert> <key>`: 外部管理の証明書をグローバルまたはサイト単位（SNI）で指定。暗号化秘密鍵には `key_password`（`GYMBAG_KEY_PASSWORD`）を使います。
 
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider zerossl
-}
+バックグラウンドタスクが `renew_interval` 秒（デフォルト `43200` = 12 時間）ごとに証明書を監視し、有効期限まで `renew_within_days` 日（デフォルト `30` 日）を切ると更新または再読み込みを行い、稼働中の HTTP ストリームや WebSocket を切らずに `tls.Certificate` をアトミックに差し替えます。
 
-example.com {
-    reverse_proxy http://localhost:3000
-    verify 3
-}
-```
+## カスタムファイアウォールルール
 
-**Google Trust Services、SSL.com、または明示的な EAB 指定：**
-Key ID と HMAC キーを指定します（パディングなし URL-safe Base64 と標準パディング Base64 の両方に対応し、Admin API の出力では `eab_hmac_key` が自動的にマスクされます）：
+保護対象の HTTP リクエストは次の順で評価されます。
 
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider google
-    eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY
-}
-```
+1. リクエスト形式チェック（HTTP メソッド、最大 URI 長、NULL バイトおよび `..` / `%2e%2e` の拒否）
+2. ACME HTTP-01（`/.well-known/acme-challenge/*`）
+3. ローカルカスタムルール（グローバルルール → サイトルールを上から評価、最初の一致で決定）
+4. リモートルール（`remote_rules`、HTTP/HTTPS 経由で自動更新）
+5. 組み込みベースラインルール（`default_rules off` でない限り有効）
+6. サイト単位・IP 単位のレートリミッター（`rate_limit` / `rate_window`）
+7. IP 脅威インテリジェンス（`ip_security_action verify` または `block`）
+8. Proof-of-Work チェック（`verify` `0`–`3`）
 
-**LiteSSL by TrustAsia またはカスタム ACME ディレクトリ：**
+カスタムルールはベースラインルール・レート制限・脅威フィードより前に実行されるため、サイトブロックの先頭に `allow` を置くだけでオフィスの CIDR やヘルスチェック、プレビュー用 Cookie を確実に許可できます。
 
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider litessl
-    # または任意の ACME v2 ディレクトリ URL を直接指定：
-    # acme_directory https://ca.internal.corp/acme/acme/directory
-}
-```
+### 短縮ルール構文
 
-Gymbag はディスク上の ACME 証明書をプロバイダ名ごとに分離保存します（例：`certs/acme-zerossl-fullchain.pem`、`certs/acme-google-fullchain.pem`、Let's Encrypt は `certs/acme-fullchain.pem`）。`ssl_provider` を変更して再起動またはリロードすると、古い証明書を使い回さず新しい CA へ即座に証明書を要求します。
+構文: `<allow | verify | block> <field> <pattern...>`（別名 `bypass`/`pass`、`challenge`/`pow`、`deny`/`drop`/`reject` も使用可）
 
-### 自社鍵や既存証明書の持ち込み
-
-- **カスタム ACME アカウント鍵 (`account_key`)**: デフォルトでは `certs/acme-account.pem` に ECDSA P-256 アカウント鍵を生成・再利用します。すでに登録済みの ECDSA（P-256/P-384）または RSA アカウント鍵がある場合は `account_key /etc/gymbag/account.pem`（または `GYMBAG_ACCOUNT_KEY_FILE`）を指定してください。
-- **カスタム CSR 秘密鍵 (`ssl_key`)**: `ssl_key /etc/gymbag/domain.key` を指定すると、新規生成ではなくご自身の ECDSA / RSA 秘密鍵で ACME CSR に署名します。
-- **カスタム TLS 証明書＆秘密鍵 (`tls <cert> <key>`)**: 商用証明書、Cloudflare Origin 証明書、外部管理の PEM ファイルをグローバルまたはサイト単位（SNI 振り分け）で指定できます。暗号化秘密鍵には `key_password`（または `GYMBAG_KEY_PASSWORD`）が使用できます：
-
-```caddyfile
-{
-    key_password super-secret-passphrase
-}
-
-corp.example.com {
-    reverse_proxy http://localhost:8080
-    tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
-    verify 1
-}
-```
-
-### 無停止バックグラウンド自動更新
-
-Gymbag は `renew_interval` 秒（デフォルト `43200` = 12 時間）ごとにバックグラウンド更新ループを実行します。ACME 証明書、ローカル PKI リーフ証明書、またはファイル指定証明書の有効期限が `renew_within_days` 日（デフォルト `30` 日）以内になると、バックグラウンドで更新または再読み込みを行い、稼働中の `tls.Certificate` ポインタをアトミックに差し替えます。進行中の HTTP ストリームや WebSocket 接続は一切切断されません。
-
----
-
-## カスタムファイアウォールルールの作成
-
-保護対象サイトへの受信リクエストは、予測可能な以下の順序で評価されます：
-
-1. **リクエスト形式サニティチェック**（HTTP メソッド検証、URI 最大長、NULL バイトおよび `..` トラバーサル拒否）
-2. **ACME HTTP-01 バイパス**（`/.well-known/acme-challenge/*`）
-3. **ローカルカスタムルール**（グローバルルール -> サイトルール、上から順に評価・最初の一致で決定）
-4. **リモートファイアウォールルール (`remote_rules`)**（Gymbagfile 構文または JSON の HTTP/HTTPS ルールセットを自動更新）
-5. **組み込みベースラインルール**（`default_rules off` で無効化されていない限り実行）
-6. **サイト単位・IP 単位のレートリミッター**（`rate_limit` / `rate_window`）
-7. **IP 脅威インテリジェンス**（`ip_security_action verify` または `block`）
-8. **Proof-of-Work 検証**（`verify` レベル `0`–`3`）
-
-カスタムルールは組み込みルール・レートリミッター・脅威フィードよりも**前**に評価されるため、サイトブロックの先頭に `allow` ルールを書くだけで、信頼できるオフィスの CIDR や内部ヘルスチェック、プレビュー用 Cookie を確実にホワイトリスト化できます。
-
-### ワンライナー短縮ルール
-
-構文：`<allow | verify | block> <field> <pattern...>`（`bypass`/`pass`、`challenge`/`pow`、`deny`/`drop` のエイリアスも使用可能）。
-
-| フィールド | 受け付ける値とマッチング方式 | 例 |
+| フィールド | 値と一致ルール | 例 |
 | :--- | :--- | :--- |
-| `ip` | IPv4、IPv6、または CIDR レンジ（スペースまたはカンマ区切り） | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
-| `user_agent` | 大文字小文字を区別しない部分一致、`*` ワイルドカード、または `~regex` | `block user_agent BadBot ~^(?i)python-urllib/` |
-| `path` | 完全/部分一致、`*` ワイルドカード、または `~regex` | `verify path /api/export* ~^/v[0-9]+/search` |
-| `query` | 生クエリ文字列一致、`*` ワイルドカード、または `~regex` | `block query "union select" ~(?i)<script` |
+| `ip` | IPv4、IPv6、CIDR | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
+| `user_agent` | 大文字小文字を区別しない部分一致、`*` グロブ、`~regex` | `block user_agent BadBot ~^(?i)python-urllib/` |
+| `path` | 完全一致/部分一致、`*` グロブ、`~regex` | `verify path /api/export* ~^/v[0-9]+/search` |
+| `query` | 生/デコード済みクエリ一致、`*` グロブ、`~regex` | `block query "union select" ~(?i)<script` |
 | `method` | HTTP メソッド（大文字小文字不問） | `verify method POST DELETE` |
-| `header` | `<Header-Name> [pattern]`（`""` = 未設定または空、`*` = 存在すれば一致） | `verify header Accept-Language ""` |
-| `cookie` | `<cookie_name> [pattern]`（`""` = 未設定または空、`*` = 存在すれば一致） | `allow cookie vip_session *` |
+| `header` | `<Header-Name> [pattern]`（`""` = 欠落または空、`*` = 存在） | `verify header Accept-Language ""` |
+| `cookie` | `<cookie_name> [pattern]`（`""` = 欠落または空、`*` = 存在） | `allow cookie vip_session *` |
 
 ### 複数条件の `rule` ブロック
 
-単一フィールドでは絞り込めない場合は `rule "name" { ... }` ブロックを使用します。**同一フィールド内**の複数パターンは **OR** 条件、同一ブロック内の**異なるフィールド同士**は **AND** 条件になります：
+`rule "name" { ... }` 内では、同じフィールドに並べた複数値が OR、異なるフィールド同士が AND で評価されます。
 
 ```caddyfile
 app.example.com {
     reverse_proxy http://localhost:3000
     verify 3
 
-    # ログインやパスワードリセットへの POST リクエストに PoW を要求
     rule "challenge-auth-mutations" {
         action verify
         method POST
         path /login* /api/auth/* /reset-password*
     }
 
-    # Origin ヘッダーが欠落した /api/* への POST リクエストをブロック
     rule "block-headless-api-posts" {
         action block
         method POST
@@ -404,32 +357,16 @@ app.example.com {
 }
 ```
 
-### リモートファイアウォールルール（`remote_rules`）
+### リモートルールと動的ローカルルールファイル
 
-グローバルまたはサイト単位で 1 つ以上の HTTP/HTTPS URL から共有ファイアウォールルールを取得します。**Gymbagfile ルール構文**（`allow`/`verify`/`block` ワンライナーおよび `rule "name" { ... }` ブロック）と **JSON**（`[ ... ]` または `{"rules": [ ... ]}`）の両方に対応しており、条件付き `ETag` / `If-Modified-Since` リクエストで検証済みペイロードを `<cert_dir>/rules-cache` にキャッシュします。取得失敗や不正データ時には直前の正常なルールセットを安全に維持します：
+`remote_rules` をグローバルまたはサイト単位で指定すると、Gymbagfile ルール構文または JSON（`[ ... ]` もしくは `{"rules": [ ... ]}`）を配信する HTTP/HTTPS URL からルールを読み込みます。検証済みペイロードは `ETag` / `If-Modified-Since` 付きで `<cert_dir>/rules-cache` にキャッシュされ、不正な更新があっても直前の正常なルールセットが維持されます。
+
+ローカルの `.rules`・`.json` ファイルやフォルダも `rules_file`、`rules_dir`、`ruleset` ブロック（または `gymbag ruleset add`）で読み込めます。ソースに `dynamic` を指定すると `rules_watch_interval`（デフォルト `2s`）ごとに変更を監視してホットリロードします。
 
 ```caddyfile
 {
     remote_rules https://rules.example.com/org-baseline.rules
     remote_rules_refresh 5m
-}
-
-app.example.com {
-    reverse_proxy http://localhost:3000
-    verify 3
-    allow ip 10.0.0.0/8                              # ローカルルールが常に優先
-    remote_rules https://rules.example.com/app.json  # サイト固有のリモートルール
-}
-```
-
-`GET /api/v1/rules/remote` で状態確認、`POST /api/v1/rules/remote/refresh` で即時更新が可能なほか、`--remote-rules` / `GYMBAG_REMOTE_RULES` でも指定できます。
-
-### ローカルルールファイル、ルールフォルダ、動的ホットリロード
-
-ルールを専用の `.rules`/`.json` ファイルやルールディレクトリ全体に保存し、パスで参照できます（`gymbag ruleset add` でリンクすることも可能）。ソースを `dynamic` にすると、サーバーを再起動せずにディスク上の変更を自動で監視してホットリロードします（ファイルの構文が不正な場合、Gymbag は直前の正常なルールセットを維持します）：
-
-```caddyfile
-{
     rules_watch_interval 2s
 }
 
@@ -437,37 +374,27 @@ app.example.com {
     reverse_proxy http://localhost:3000
     rules_file ./rules/custom.rules dynamic
     rules_dir ./rules.d dynamic
-    ruleset static-corp {
-        source ./rules/corp.json
-        dynamic off
-    }
 }
 ```
 
-`gymbag.json` では `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]` を設定するか、`gymbag init` に `--rules-file`、`--rules-dir`、`--rules-dynamic`、`--rules-watch-interval` を渡します。
-
-### 組み込みルールの制御（`default_rules on|off`）
-
-`default_rules` はデフォルトで `on` です：
-- 保護対象サイトにカスタムルールが**無い**場合、組み込みのブロックプリセット（`/.env`、`/wp-admin`、スキャナー、SQLi/XSS クエリ）と自動化検証プリセットの両方が適用されます。
-- カスタムルールを追加すると、ユーザー定義ルールが先に評価され、組み込みの**ブロック**プリセットはその後に残るため、`verify path` ルールを 1 つ追加しただけで `/.git` や `/.env` が無防備になることはありません。
-- サイト単位またはグローバルで組み込みルールを完全に無効化し手動制御したい場合は `default_rules off`（または `GYMBAG_DEFAULT_RULES=off`）を設定してください。
-
----
+`default_rules` のデフォルトは `on` です。サイトにカスタムルールを追加すると、ユーザー定義ルールが先に評価され、組み込みの **block** ルールはその後に残ります。`verify path` を 1 つ追加しただけで `/.env` が無防備になることはありません。組み込みルールを完全に切る場合は `default_rules off` を指定してください。
 
 ## CLI・Docker Compose・環境変数・REST API
 
 ### CLI リファレンス
 
-カレントディレクトリに `.env` があれば自動で読み込み、フラグで上書きされない限り `./gymbag.json`、`./Gymbagfile`、`./Caddyfile` を参照します（ネイティブの `nginx.conf` や Apache の `httpd.conf`/`apache2.conf` も `-c` で直接指定できます）：
+作業ディレクトリに `.env` があれば読み込み、続けて `./gymbag.json`、`./Gymbagfile`、`./Caddyfile` を順に探します（`-c` で JSON、Gymbagfile、Caddyfile v2、`nginx.conf`、Apache 設定ファイルを明示指定することもできます）。
 
 ```bash
-# 対話ウィザードまたはフラグから gymbag.json（デフォルト）または Gymbagfile を生成
+# 設定ファイルの生成（デフォルトは gymbag.json、--format gymbagfile で Gymbagfile）
 ./gymbag init
 ./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init -t ssh --verify-url https://verify.example.com:8443
+./gymbag init -t minecraft --server-properties ./server.properties
+./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties ./server.properties
 ./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# gymbag.json または Gymbagfile のサイト、ルート、グローバル設定を管理
+# サイト・ルート・グローバル設定の管理と形式変換
 ./gymbag config list
 ./gymbag config add -d api.example.com -u :8080 -l 1
 ./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
@@ -476,7 +403,7 @@ app.example.com {
 ./gymbag config set admin 127.0.0.1:2019
 ./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 
-# 専用ルールファイル、ルールフォルダ、インラインルールを管理
+# ルールファイル・フォルダ・個別ルールの管理
 ./gymbag ruleset init ./rules/custom.rules
 ./gymbag ruleset add --source ./rules --dynamic --name local-dir
 ./gymbag ruleset update local-dir --static
@@ -484,54 +411,24 @@ app.example.com {
 ./gymbag ruleset validate ./rules
 ./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
 
-# ./gymbag.json、./Gymbagfile、./Caddyfile でサーバーを起動
+# 起動・監視・検証・整形・OS サービス管理
 ./gymbag
-
-# 設定ファイル（JSON、Gymbagfile、Caddyfile v2、nginx、Apache）を指定し、保存時にホットリロードして起動
 ./gymbag run --config gymbag.json --watch
-
-# システムサービスの登録と管理（systemd, launchd, openrc, supervisor）
 ./gymbag service install --config gymbag.json
 ./gymbag service start
-./gymbag service status
-./gymbag service render --type systemd   # 任意の OS 上で systemd ユニット定義をプレビュー
-
-# 設定ファイル不要のアドホックなリバースプロキシ
+./gymbag service render --type systemd
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
-
-# 設定とローカルルールソースを検証し、サイト別セキュリティ設定サマリーを表示
 ./gymbag validate --config gymbag.json
-
-# Gymbagfile を標準的な 4 スペースインデントに整形して上書き保存
 ./gymbag fmt --overwrite Gymbagfile
-
-# バージョン出力
 ./gymbag version
 ```
 
-| フラグ | 説明 |
-| :--- | :--- |
-| `-c`, `--config <path>` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf`、または Apache 設定ファイルのパス |
-| `-d`, `--domain <list>` | ドメインを上書き（カンマ区切り） |
-| `-u`, `--upstream <url>` | アップストリーム URL を上書き（例：`http://localhost:3000` または `:3000`） |
-| `-l`, `--verify <0-3>` | 検証レベルを上書き（`0`、`1`、`2`、`3`、または `off`） |
-| `--verify-timeout <dur>` | 認証済み有効期限を上書き（例：`30m`、`12h`、`7d`、秒数；エイリアス `--clearance-ttl`） |
-| `--remote-rules <url>` | リモートファイアウォールルール URL を指定（http/https、複数指定またはカンマ区切り可） |
-| `--remote-rules-refresh <dur>` | リモートルールの更新間隔（デフォルト `5m` / `300s`） |
-| `--no-protect` | CLI 指定サイトの WAF 検証を無効化 |
-| `--ssl-provider <name>` | ACME / SSL プロバイダを上書き（`letsencrypt`、`zerossl`、`google`、`litessl`、`local` 等） |
-| `--admin <addr>` | ローカル REST Admin API を有効化（例：`127.0.0.1:2019` または `off`） |
-| `--http-port <port>` | HTTP リダイレクト＆ACME HTTP-01 用ポート（デフォルト `80`） |
-| `--https-port <port>` | HTTPS ゲートウェイポート（デフォルト `443`） |
-| `--watch` | 設定ファイルの変更を監視し、ルート・ルール・SNI 証明書をホットリロード |
+### Docker と Docker Compose
 
-### Docker & Docker Compose
-
-マルチアーキテクチャ（`linux/amd64`、`linux/arm64`）対応の公式 Alpine コンテナイメージを GitHub Container Registry（`ghcr.io/evil-project/gymbag`）で公開しています。非 root ユーザー UID `10001` かつ `cap_net_bind_service=+ep` 付与済みです。
-
-**`Gymbagfile` をマウントしたクイック `docker run`：**
+`ghcr.io/evil-project/gymbag` にマルチアーキテクチャの Alpine イメージ（`linux/amd64`、`linux/arm64`）を公開しています。UID `10001`・`cap_net_bind_service=+ep` で動作します。
 
 ```bash
+# Gymbagfile をマウントした docker run 例
 docker run -d \
   --name gymbag \
   --restart unless-stopped \
@@ -543,147 +440,80 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-**環境変数のみの設定ファイルレス `docker run`：**
-
-```bash
-docker run -d \
-  --name gymbag \
-  -p 80:80 -p 443:443 \
-  --cap-add NET_BIND_SERVICE \
-  --add-host=host.docker.internal:host-gateway \
-  -e GYMBAG_DOMAIN=app.example.com \
-  -e GYMBAG_UPSTREAM=http://host.docker.internal:3000 \
-  -e GYMBAG_ACME_EMAIL=ops@example.com \
-  -e GYMBAG_VERIFY_LEVEL=3 \
-  -e GYMBAG_VERIFY_TIMEOUT=12h \
-  -e GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules \
-  -v gymbag-certs:/app/certs \
-  ghcr.io/evil-project/gymbag:latest
-```
-
-**Redis 連携の Docker Compose：**
-
-同梱の `compose.yaml` は Gymbag と `redis:8-alpine` を並べて起動し、純 Go 製 RESP2 Redis クライアントによってワンタイム PoW ナンスおよび固定ウィンドウのレート制限状態をコンテナ再起動や複数レプリカ間で共有します：
-
-```bash
-docker compose up -d --build
-```
-
-設定は `./Gymbagfile`（`/app/Gymbagfile` へ読み取り専用マウント）から読み込まれ、証明書・シークレット・脅威インテリジェンスキャッシュ・リモートルールキャッシュは名前付きボリューム `gymbag-certs` に永続化されます。ローカルの `.env` に記載した `GYMBAG_*` 変数はファイル設定をきれいに上書きします：
-
-```dotenv
-GYMBAG_ACME_EMAIL=ops@example.com
-GYMBAG_SSL_PROVIDER=zerossl
-GYMBAG_VERIFY_LEVEL=3
-GYMBAG_CLEARANCE_TTL=12h
-GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
-```
-
-バインドマウントの権限設定（`chown 10001:10001`）、`--watch` ホットリロード、マルチコンテナ構成、ローカルビルドの詳細は [Docker & Docker Compose ガイド](docs/ja/guide/docker.md) をご覧ください。
+`compose.yaml` は Gymbag と `redis:8-alpine` を組み合わせて起動し、純 Go 製 RESP2 Redis クライアント経由で PoW ナンス、固定ウィンドウのレート制限、SSH/Minecraft 検証チケット、IP クリアランスをコンテナ再起動や複数レプリカ間で共有します（`docker compose up -d --build`）。Docker から SSH や Minecraft を保護する場合は `-p 22:22` / `-p 25565:25565` と `-p 8443:8443` も公開してください。バインドマウントの権限設定（`chown 10001:10001`）、`--watch`、環境変数のみの構成については [Docker & Docker Compose ガイド](docs/ja/guide/docker.md) を参照してください。
 
 ### 環境変数（`GYMBAG_*`）
 
-優先順位は **設定ファイル -> `GYMBAG_*` 環境変数 -> CLI フラグ** です。
+優先順位は **設定ファイル -> `.env` / `GYMBAG_*` 環境変数 -> CLI フラグ** です。
 
 | 変数 | 説明 |
 | :--- | :--- |
-| `GYMBAG_CONFIG` | `Gymbagfile`、`Caddyfile`、または `.json` 設定ファイルのパス |
-| `GYMBAG_BIND` | バインドアドレス（ローカルドメインのみの場合は `127.0.0.1`、公開ドメインがある場合は `0.0.0.0`） |
-| `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP と HTTPS の待受ポート（デフォルト `80` と `443`） |
-| `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | カンマ区切りのドメイン一覧 |
+| `GYMBAG_CONFIG` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf`、または Apache 設定ファイルのパス |
+| `GYMBAG_BIND` | バインド IP（ローカル HTTP のみなら `127.0.0.1`、公開ドメイン・SSH・Minecraft が有効なら `0.0.0.0`） |
+| `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP と HTTPS の待受ポート（デフォルト `80` / `443`） |
+| `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | カンマ区切りの下流ドメイン |
 | `GYMBAG_UPSTREAM` | デフォルトのアップストリーム URL |
-| `GYMBAG_UPSTREAMS` | セミコロン区切りのホスト別マップ：`app.example.com=http://web:3000;api.example.com=http://api:8080` |
-| `GYMBAG_PROTECT` | 全サイト共通の WAF 保護有効/無効（`on` / `off`） |
-| `GYMBAG_PROTECT_DOMAINS` | WAF を有効化するドメインの部分集合（カンマ区切り） |
-| `GYMBAG_VERIFY_LEVEL` | 検証レベル：`0` (`always`), `1` (`only suspicious`), `2` (`only ai`), `3` (`suspicious & ai`) |
-| `GYMBAG_DEFAULT_RULES` | 組み込みベースラインルールの有効/無効（`on` / `off`、デフォルト `on`） |
-| `GYMBAG_REMOTE_RULES` | カンマまたは空白区切りの HTTP/HTTPS リモートルール URL |
-| `GYMBAG_REMOTE_RULES_REFRESH` | リモートルールの更新間隔（秒数または期間表記、デフォルト `300` / `5m`） |
-| `GYMBAG_RULES_WATCH_INTERVAL` | 動的ローカルルールファイル/フォルダのポーリング間隔（秒数または期間表記、デフォルト `2` / `2s`） |
-| `GYMBAG_DIFFICULTY` | SHA-256 PoW 先頭ゼロ桁数難易度（`1`–`5`、デフォルト `4`） |
-| `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | チャレンジ有効期限（`300`s / `5m`）と認証済み期限（`86400`s / `24h`；エイリアス `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`；`30m`, `12h`, `7d` 等に対応） |
-| `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | クリアランス Cookie 名（`waf_clearance`）および `Secure` フラグ（`true`） |
-| `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | IP あたりのリクエスト上限（`240`）とウィンドウ秒数（`60`） |
-| `GYMBAG_TLS_MODE` | `auto`, `acme`, `local`, `selfsigned`, `file` |
-| `GYMBAG_SSL_PROVIDER` | `letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, または URL |
-| `GYMBAG_ACME_EMAIL` | ACME アカウント登録用メール（ZeroSSL 自動 EAB にも使用） |
-| `GYMBAG_ACME_DIRECTORY` | 明示的な RFC 8555 ACME v2 ディレクトリ URL |
-| `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | EAB Key ID と base64/base64url HMAC 鍵 |
-| `GYMBAG_ACCOUNT_KEY_FILE` | ユーザー指定の ECDSA / RSA ACME アカウント鍵 PEM パス |
-| `GYMBAG_CERT_FILE` / `GYMBAG_KEY_FILE` | `file` モード用 TLS 証明書と秘密鍵パス |
-| `GYMBAG_KEY_PASSWORD` | 暗号化 PEM 秘密鍵のパスフレーズ |
-| `GYMBAG_CERT_DIR` | CA 証明書、ACME 状態、インテリジェンスキャッシュの保存ディレクトリ（デフォルト `certs`） |
-| `GYMBAG_RENEW_INTERVAL` / `GYMBAG_RENEW_WITHIN_DAYS` | 更新チェック間隔秒数（`43200`）と更新しきい値日数（`30`） |
-| `GYMBAG_AUTO_HOSTS` | `localhost` & `*.internal` 用の `/etc/hosts` 自動管理（`on` / `off`、デフォルト `on`） |
-| `GYMBAG_HSTS` | `Strict-Transport-Security` ヘッダーの上書き（`on` / `off`） |
-| `GYMBAG_IP_SECURITY` / `GYMBAG_IP_SECURITY_ACTION` | 脅威フィードの有効/無効（`on`/`off`）とアクション（`verify` または `block`） |
-| `GYMBAG_IP_REPUTATION` | リアルタイム Shodan InternetDB + StopForumSpam 照会の有効/無効（`on`/`off`） |
-| `GYMBAG_AI_IP_LIST` | 公式 OpenAI / Anthropic / Perplexity / Google / Applebot IP リストの有効/無効（`on`/`off`） |
-| `GYMBAG_INTEL_REFRESH` | 脅威・AI フィードの更新間隔秒数（デフォルト `21600`） |
-| `GYMBAG_REDIS_URL` | オプションの Redis 接続 URL（`redis://[:password@]host:port/db`） |
-| `GYMBAG_SECRET` | クリアランス Cookie 用 HMAC シークレット（未設定時は `<cert_dir>/secret` に自動生成） |
-| `GYMBAG_ADMIN` | ローカル Admin REST API リッスンアドレス（例：`127.0.0.1:2019` または `off`） |
+| `GYMBAG_UPSTREAMS` | セミコロン区切りのホストマップ: `app.example.com=http://web:3000;api.example.com=http://api:8080` |
+| `GYMBAG_PROTECT` / `GYMBAG_PROTECT_DOMAINS` | WAF 保護の有効/無効（`on`/`off`）、または指定ドメインのみ保護 |
+| `GYMBAG_VERIFY_LEVEL` | 検証レベル `0`–`3` または `off`（別名: `GYMBAG_VERIFY`, `GYMBAG_VERIFY_MODE`, `GYMBAG_MODE`, `GYMBAG_TRIGGER`） |
+| `GYMBAG_DEFAULT_RULES` | 組み込みベースラインルール（`on` / `off`、デフォルト `on`） |
+| `GYMBAG_REMOTE_RULES` / `GYMBAG_REMOTE_RULES_REFRESH` | リモートファイアウォールルール URL と更新間隔（デフォルト `300`s / `5m`） |
+| `GYMBAG_RULES_WATCH_INTERVAL` | `dynamic` ローカルルールファイル/フォルダのポーリング間隔（デフォルト `2`s / `2s`） |
+| `GYMBAG_DIFFICULTY` | SHA-256 PoW 難易度（`1`–`5`、デフォルト `4`） |
+| `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | チャレンジ有効期限（`300`s / `5m`）とクリアランス有効期限（`86400`s / `24h`；別名: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`） |
+| `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | クリアランス Cookie 名（`waf_clearance`）と `Secure` フラグ（`true`） |
+| `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | IP あたりのリクエスト上限（`240`）とウィンドウ（`60`s） |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS モード（`auto`, `acme`, `local`, `selfsigned`, `file`）と CA（`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, または URL） |
+| `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 連絡先メール（ZeroSSL 自動 EAB 兼用）と明示的 ACME ディレクトリ URL |
+| `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | EAB Key ID と Base64/Base64URL HMAC 鍵 |
+| `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA/RSA ACME アカウント鍵 PEM のパス |
+| `GYMBAG_CERT_FILE` / `GYMBAG_KEY_FILE` / `GYMBAG_KEY_PASSWORD` | `file` モード用の証明書・秘密鍵・暗号化鍵パスフレーズ |
+| `GYMBAG_CERT_DIR` | 証明書・CA 鍵・シークレット・インテルキャッシュ・ルールキャッシュの保存ディレクトリ（デフォルト `certs`） |
+| `GYMBAG_RENEW_INTERVAL` / `GYMBAG_RENEW_WITHIN_DAYS` | 更新チェック間隔（`43200`s）と更新しきい値（`30` 日） |
+| `GYMBAG_AUTO_HOSTS` / `GYMBAG_HSTS` | `/etc/hosts` 自動管理（`on`/`off`）と `Strict-Transport-Security` 上書き（`on`/`off`） |
+| `GYMBAG_IP_SECURITY` / `GYMBAG_IP_SECURITY_ACTION` | 脅威フィード（`on`/`off`）と一致時アクション（`verify` または `block`） |
+| `GYMBAG_IP_REPUTATION` / `GYMBAG_AI_IP_LIST` | Shodan InternetDB + StopForumSpam ライブ照会（`on`/`off`）と公式 AI クローラー CIDR リスト（`on`/`off`） |
+| `GYMBAG_VPN_DETECTION` | 不審判定での無料 VPN/プロキシ/Tor 検出（`on`/`off`、デフォルト `on`） |
+| `GYMBAG_INTEL_REFRESH` | 脅威・VPN・AI フィードの更新間隔（デフォルト `21600`s / `6h`） |
+| `GYMBAG_VERIFY_URL` / `GYMBAG_VERIFY_PORT` | 共有 HTTPS 検証ポータル URL（空欄 = サーバー IP + IP 証明書）とポート（デフォルト `8443`） |
+| `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | SSH 保護の有効化（デフォルトポート `22`）とバックエンド `sshd` 宛先 |
+| `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 検証レベル（`0`–`3` または `off`）と保護の有効/無効（`on`/`off`） |
+| `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Minecraft 保護の有効化（デフォルトポート `25565`）とバックエンド宛先（`GYMBAG_MINECRAFT_*` 別名あり） |
+| `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 検証レベル（`0`–`3` または `off`）と保護の有効/無効（`on`/`off`） |
+| `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL（`redis://` または `rediss://`）、HMAC シークレット、Admin API 待受アドレス（`127.0.0.1:2019` や `off`） |
 
 ### REST API
 
-#### 公開 WAF エンドポイント（保護対象サイト上で提供）
+**公開 WAF・検証ポータルエンドポイント:**
 
 | メソッド | パス | 説明 |
 | :--- | :--- | :--- |
-| `GET` | `/.waf/v1/session` | 現在のサイトのクリアランス状態、`protected`、`verify_level`（`0`–`3`）、`verify_mode`、`clearance_ttl`、（認証済みの場合）`expires_at` / `expires_in` を返却 |
+| `GET` | `/.waf/v1/session` | クリアランス状態 (`cleared`)、`protected`、`verify_level`、`verify_mode`、`clearance_ttl`、`expires_at`、`expires_in` |
 | `DELETE` | `/.waf/v1/session` | 訪問者のクリアランス Cookie を削除（`204 No Content`） |
 | `POST` | `/.waf/v1/challenges` | 使い捨て SHA-256 PoW チャレンジを発行（`201 Created`） |
-| `POST` | `/.waf/v1/verifications` | PoW 解答を検証して署名 Cookie を設定し、`expires_in` を返却（`/.waf/verify` エイリアス対応） |
-| `GET` | `/.waf/assets/{name}` | 埋め込み PNG チャレンジアセットを配信（`/.waf/v1/assets/{name}` エイリアス対応、`ETag` キャッシュ付き） |
+| `POST` | `/.waf/v1/verifications` | PoW 解を検証し署名 Cookie を設定（`/.waf/verify` 別名対応） |
+| `GET` | `/v/{token}` | SSH/Minecraft 検証用の PoW ページを配信（`/verify/{token}` 別名対応） |
+| `POST` | `/.waf/gate/verify` | SSH/Minecraft PoW 解を検証し IP クリアランスを保存 |
+| `GET` | `/.waf/assets/{name}` | 埋め込みチャレンジ PNG アセットを配信（`/.waf/v1/assets/{name}` 別名、`ETag` キャッシュ付き） |
 
-#### ローカル管理 API（`admin 127.0.0.1:2019` または `--admin` で有効化）
+**ローカル Admin API (`admin 127.0.0.1:2019` または `--admin`):**
 
-管理 API はループバック（`127.0.0.1:2019`）または管理用 Unix/WireGuard インターフェースにバインドしてください。認証トークンなしでサーバーを再起動せずにライブのルーティングやファイアウォールルールを変更できます。
+Admin API は認証トークンなしで稼働中のルーティングやファイアウォール状態を変更するため、必ずループバック（`127.0.0.1:2019`）かプライベートネットワークにバインドしてください。
 
 | メソッド | パス | 説明 |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | ゲートウェイ状態、サイト数、アクティブな `tls_source`、ロード済み `threat_entries`・`ai_entries`・`remote_rules` |
-| `GET` | `/api/v1/tls` | アクティブな TLS ソース、証明書パス、SSL プロバイダ、HSTS 状態、対応 CA カタログ |
-| `POST` | `/api/v1/tls/renew` | 即時証明書更新とアトミックなホットリロードを強制実行 |
-| `GET` | `/api/v1/intel` | フィードごとの脅威・AI クローラー IP 数、最終更新日時、レピュテーションキャッシュ統計 |
-| `POST` | `/api/v1/intel/refresh` | バックグラウンドフィード更新を即時実行し最新カウントを返却 |
-| `GET` | `/api/v1/rules/remote` | URL ごとのリモートルール数、キャッシュ状態、更新間隔、直近のフェッチエラー |
-| `POST` | `/api/v1/rules/remote/refresh` | 全リモートルール URL の即時フェッチ＆WAF エンジンのアトミックリロードを実行 |
-| `GET` | `/api/v1/config` | 現在のランタイム設定を取得（`secret`、`key_password`、`eab_hmac_key` はマスク） |
-| `PUT` | `/api/v1/config` | ランタイム設定全体をアトミックに検証・置換 |
-| `GET` | `/api/v1/sites` | 設定済み全サイトと WAF ポリシーを一覧取得 |
-| `POST` | `/api/v1/sites` | 実行時に新しいサイトを追加（`201 Created`） |
-| `GET` | `/api/v1/sites/{domain}` | 単一サイトの設定詳細を取得 |
-| `PUT` | `/api/v1/sites/{domain}` | 単一サイトの設定を置換 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`rule_sources` をライブパッチ |
-| `DELETE` | `/api/v1/sites/{domain}` | サイトを削除（`204 No Content`；最後の 1 サイトは削除不可） |
-| `GET` | `/api/v1/sites/{domain}/rules` | サイトのカスタムファイアウォールルール一覧 |
-| `POST` | `/api/v1/sites/{domain}/rules` | カスタムファイアウォールルールをライブ追加（`201 Created`） |
-| `PUT` | `/api/v1/sites/{domain}/rules` | サイトの全カスタムファイアウォールルールを置換 |
-| `DELETE` | `/api/v1/sites/{domain}/rules/{index_or_name}` | インデックス番号またはルール `name` でカスタムルールを削除（`204 No Content`） |
-
-**緊急時のライブ緩和コマンド例：**
-
-```bash
-# トラフィックスパイク中に app.example.com を verify level 0（全リクエスト検証）へ引き上げ
-curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
-  -H "Content-Type: application/json" \
-  -d '{"verify_level": 0, "difficulty": 5}'
-
-# Gymbagfile を編集せず即座に攻撃元 CIDR をブロック
-curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \
-  -H "Content-Type: application/json" \
-  -d '{"name": "drop-abusive-subnet", "action": "block", "ips": ["198.51.100.0/24"]}'
-
-# IP 脅威・AI クローラーリストの即時更新を強制実行
-curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
-```
-
----
+| `GET` | `/api/v1/health` | ステータス、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries`、`remote_rules` |
+| `GET` / `POST` | `/api/v1/tls` / `/api/v1/tls/renew` | 有効な TLS 状態と CA 一覧／証明書の即時更新とアトミック差し替え |
+| `GET` / `POST` | `/api/v1/intel` / `/api/v1/intel/refresh` | フィード別 threat/AI/VPN 件数とキャッシュサイズ／即時更新実行 |
+| `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | リモートルール件数と取得エラー／即時更新と WAF リロード |
+| `GET` / `PUT` | `/api/v1/config` | マスク済み設定の出力／検証して稼働中ランタイム設定を置換 |
+| `GET` / `POST` | `/api/v1/sites` | サイト一覧／実行時サイト追加 |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | 取得・置換・ライブパッチ（`verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`routes`、`headers`、`rules`、`remote_rules`、`rule_sources`）・削除 |
+| `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` & `.../{index_or_name}` | サイトのカスタムルール一覧・末尾追加・置換・削除 |
 
 ## Caddy・Nginx とのベンチマーク比較
 
-Apple M4（10 コア、macOS、Go `1.27.0`）環境で、3 製品すべて同一の ECDSA P-256 証明書による TLS 1.3 終端、64 並列ワーカー、`1 KiB` レスポンス、`1024` アップストリーム keep-alive 接続で測定（全試行 `0` エラー）：
+Apple M4（10 コア、macOS、Go `1.27.0`）環境、同一 ECDSA P-256 証明書による TLS 1.3、64 並列ワーカー、`1 KiB` レスポンスボディ、アップストリーム keep-alive `1024` 接続、エラー `0` で計測しました。
 
 | サーバー＆モード | HTTP/1.1 TLS (RPS) | H1 p50 / p99 | HTTP/2 TLS (RPS) | H2 p50 / p99 | バイナリサイズ | 負荷時 RSS |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -693,40 +523,38 @@ Apple M4（10 コア、macOS、Go `1.27.0`）環境で、3 製品すべて同一
 | **Gymbag `v0.1.0`** (`verify 0`, Cookie 認証済) | **65,490** | 0.79 / 3.93 ms | **62,108** | 0.84 / 4.27 ms | 12.9 MB (静的) | ~54 MiB |
 | **Caddy `v2.11.9`** (Go, keep-alive 調整済) | **54,741** | 0.90 / 4.90 ms | **39,207** | 1.30 / 6.18 ms | 49.0 MB | 76.8 MiB |
 
-- **Caddy 比で HTTP/1.1 は +32%、HTTP/2 は +63%〜+69% 高速**でありながら、メモリ消費は約 30% 少なくバイナリサイズも 3.8 倍コンパクト（しかも Gymbag のフル WAF 有効状態での数値）。
-- **C 言語製 Nginx の HTTP/1.1 スループットの 85%** を発揮しつつ、p99 テールレイテンシは約 **2 倍低遅延**（`3.14 ms` vs `6.20 ms`）。
-- TLS 上の `/.env` スキャンに対して **140,680 req/s** のエッジ WAF 遮断性能（p50 `0.35 ms`、アップストリーム負荷ゼロ）。
+生のスループットでは C 製の Nginx が上回りますが、Gymbag は WAF をインラインで動かしながら HTTP/1.1 の p99 レイテンシで Nginx を下回り（`3.14 ms` vs `6.20 ms`）、Caddy に対しては HTTP/1.1 で `+32%`、HTTP/2 で `+63%`〜`+69%` 高速、メモリは約 30% 少なく、バイナリサイズは 3.8 倍小さくなっています。`/.env` のような既知の攻撃プローブは TLS 終端エッジで **140,680 req/s**（p50 `0.35 ms`）で落とすため、アップストリームへ届きません。
 
-詳細な測定手法、Go マイクロベンチマーク（`go test -bench`）、使用設定ファイルは [ベンチマークとパフォーマンス](docs/ja/guide/benchmarks.md) を参照してください。
-
----
+計測手法、`go test -bench` マイクロベンチマーク、検証に使用した設定ファイルは [ベンチマークとパフォーマンス](docs/ja/guide/benchmarks.md) にまとめています。
 
 ## プロジェクト構成
 
 ```text
 .
-├── cmd/gymbag/          # スタンドアロン CLI エントリポイント
+├── cmd/gymbag/          # CLI エントリポイント
 ├── docs/                # 多言語 VitePress ドキュメント（EN, 简体中文, 日本語, 한국어, Español）
 ├── internal/
-│   ├── cli/             # サブコマンド (init, service, run, reverse-proxy, validate, fmt, version)、.env ＆ウォッチャー
-│   ├── config/          # 設定モデル、Gymbagfile/Caddyfile・期間・リモートルールパーサー、GYMBAG_* ローダー
+│   ├── cli/             # サブコマンド (init, config, ruleset, service, run, reverse-proxy, validate, fmt, version)、.env ＆ --watch
+│   ├── config/          # 設定モデル、Gymbagfile/Caddyfile v2/nginx/Apache パーサー、期間＆ルールソース、GYMBAG_* ローダー
 │   ├── host/            # ドメイン正規化、IPv6 ブラケット処理、ワイルドカード一致
-│   ├── intel/           # O(1) プレフィックスセット、自動更新脅威＆AI クローラーフィード、リアルタイム IP レピュテーション
+│   ├── intel/           # O(1) プレフィックスセット、自動更新脅威/VPN/AI フィード、ライブ IP＆VPN レピュテーション
 │   ├── localpki/        # 2 階層ローカル CA ("Neuro-sama Headquarters Root CA") ＆ /etc/hosts マネージャー
-│   ├── proxy/           # ロックフリーマルチサイトルーター、プーリング HTTP ＆ RFC 6455 WebSocket プロキシ
-│   ├── server/          # 統合 HTTPS ゲートウェイ、HTTP->HTTPS/ACME リダイレクター、REST Admin API
-│   ├── service/         # システムサービス定義レンダラー＆マネージャー (systemd, launchd, openrc, supervisor)
-│   ├── store/           # StateStore インターフェース、64 シャードインメモリストア、純 Go RESP2 Redis クライアント
-│   ├── tlsmanager/      # マルチ CA ACME v2 (EAB ＆ ZeroSSL 自動 EAB)、ローカル PKI、ロックフリー SNI 証明書管理
-│   └── waf/             # PoW 検証、シャード化 HMAC クリアランスキャッシュ、Aho-Corasick DFA、リモートルール、UI
+│   ├── proxy/           # ロックフリーマルチサイト＆パスルーター、プーリング HTTP ＆ RFC 6455 WebSocket プロキシ
+│   ├── server/          # 統合 HTTPS ゲートウェイ、HTTP->HTTPS/ACME リダイレクター、Admin REST API
+│   ├── service/         # システムサービスレンダラー＆マネージャー (systemd, launchd, openrc, supervisor)
+│   ├── setup/           # sshd_config / ファイアウォール自動設定と Minecraft server.properties ポートランダム化
+│   ├── store/           # 64 シャードインメモリストア、純 Go RESP2 Redis クライアント (チャレンジ、レート制限、ゲートチケット/クリアランス)
+│   ├── tcpguard/        # SSH ＆ Minecraft Java TCP 保護プロキシ、ポリシーエンジン、共有 HTTPS 検証ポータル
+│   ├── tlsmanager/      # マルチ CA ACME v2 (RFC 8738 IP 証明書、EAB ＆ ZeroSSL 自動 EAB)、ローカル PKI、アトミック SNI 証明書管理
+│   └── waf/             # PoW 検証、シャード化 HMAC クリアランスキャッシュ、Aho-Corasick DFA、リモート/ローカルルール、埋め込み UI
+├── nix/                 # NixOS モジュール (services.gymbag)
+├── packaging/           # Arch Linux PKGBUILD ＆ Debian/Ubuntu .deb メンテナスクリプト/ユニット
 ├── Dockerfile
 ├── compose.yaml
 ├── flake.nix
 ├── Gymbagfile
 └── go.mod
 ```
-
----
 
 ## Star 履歴
 

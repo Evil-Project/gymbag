@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>纯 Go 编写的单二进制 HTTPS 反向代理与工作量证明（PoW）WAF</strong>
+  <strong>纯 Go 单二进制 HTTP/HTTPS、SSH 与 Minecraft 工作量证明防护网关</strong>
 </p>
 
 <p align="center">
@@ -27,88 +27,126 @@
   <sub>在线文档：<a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
-Gymbag 是一个内置类 Anubis 工作量证明（Proof-of-Work）Web 应用防火墙的单二进制 HTTPS 反向代理。它完全基于纯 Go 标准库开发 —— **零外部 Go 依赖**，所有 HTML 模板、浏览器 SHA-256 计算脚本和看板娘 PNG 素材均通过 `go:embed` 直接编译进可执行文件。
+Gymbag 是一个单二进制 HTTPS 反向代理与工作量证明（PoW）WAF（思路类似 Anubis），同时支持防护 SSH 和 Minecraft 服务器。它仅依赖 Go 标准库，没有第三方 Go 模块；HTML 页面、浏览器端 SHA-256 求解脚本以及吉祥物图片都通过 `go:embed` 直接编译进二进制文件。
 
-如果你自建了 Web 应用、Gitea/Forgejo 实例、文档站或内部工具，你很可能遇到过与 Anubis 相同的问题：无视 `robots.txt` 的激进大模型爬虫，以及全天候扫描 `/.env` 和 `/wp-admin` 的漏洞探测器。与其在 Nginx/Caddy、独立 PoW Sidecar 容器、fail2ban 和手工整理的 CIDR 列表之间来回拼凑，不如用 Gymbag 将 TLS 终结、多 CA ACME、HTTP/WebSocket 代理、本地与远程防火墙规则、IP 威胁情报和按站点配置的 PoW 策略集成进一个由简洁 `Gymbagfile` 驱动的二进制文件中。
+自建应用、Git 托管站、SSH 端口和 Minecraft 服务器面对的往往是同一批流量：无视 `robots.txt` 的 LLM 爬虫、四处扫 `/.env` 和 `/wp-admin` 的探测脚本、SSH 爆破工具以及登录洪水攻击。与其把 nginx 或 Caddy、独立的 PoW sidecar、fail2ban 和一堆自定义防火墙脚本拼在一起，不如直接用 Gymbag 在单个进程里搞定 TLS 终结、多 CA ACME、HTTP/WebSocket 代理、SSH/Minecraft TCP 拦截、IP 威胁/VPN/AI 列表和防火墙规则，配置使用 `gymbag.json` 或 Caddy 风格的 `Gymbagfile`。
 
----
+## 快速开始
 
-## 快速开始（开箱即用的安全防护）
-
-你可以从 [GitHub Releases](https://github.com/Evil-Project/gymbag/releases) 下载预编译静态二进制文件（支持 Linux/macOS/Windows，以及 Arch Linux 的 `.pkg.tar.zst`）、通过 Nix Flakes 安装，或者从源码编译：
+[GitHub Releases](https://github.com/Evil-Project/gymbag/releases) 上提供预编译静态二进制文件（`CGO_ENABLED=0`，覆盖 Linux、macOS 和 Windows 的 `amd64`/`arm64`）、Debian/Ubuntu `.deb` 包、Arch `.pkg.tar.zst` 包以及 NixOS tarball/NAR。也可以使用 GHCR 容器镜像、Nix flake，或直接从源码编译：
 
 ```bash
 go build -o gymbag ./cmd/gymbag
 ```
 
-**Arch Linux:**
+**Debian / Ubuntu：**
 ```bash
-# 安装预编译发行包（.pkg.tar.zst）
-sudo pacman -U gymbag-0.1.0-1-x86_64.pkg.tar.zst
-# 或使用 makepkg 本地构建
+sudo apt install ./gymbag_<version>_linux_amd64.deb
+sudo gymbag init -o /etc/gymbag/Gymbagfile --format gymbagfile
+sudo systemctl enable --now gymbag
+```
+
+**Arch Linux：**
+```bash
+sudo pacman -U gymbag-<version>-1-x86_64.pkg.tar.zst
+# 或从 packaging/arch 本地构建：
 cd packaging/arch && makepkg -si
 ```
 
-**Nix / NixOS:**
+**Nix / NixOS：**
 ```bash
-# 通过 flake 运行或安装
 nix run github:Evil-Project/gymbag -- --help
 nix profile install github:Evil-Project/gymbag
 ```
-静态编译的 `CGO_ENABLED=0` Linux 发行版无需 `patchelf` 或 `nix-ld` 即可在 NixOS 上直接运行，`nixosModules.default` 也提供了声明式的 `services.gymbag` 配置。
+静态编译的 Linux 发行二进制无需 `patchelf` 或 `nix-ld` 即可在 NixOS 上直接运行，同时 `nixosModules.default` 提供了声明式的 `services.gymbag` 模块。
 
-**两行命令**即可生成 `gymbag.json` 并启动服务：
+只需两条命令即可开始：先生成配置（默认写入 `gymbag.json`，传入 `--format gymbagfile` 则生成 `Gymbagfile`），再启动服务：
 
 ```bash
-# 1. 生成 JSON 配置（或传入 --format gymbagfile 生成 Caddy 风格的 Gymbagfile）
+# 防护 HTTP/HTTPS 网站
 ./gymbag init -d app.example.com -u http://localhost:3000
-
-# 2. 启动服务器（自动加载 ./gymbag.json、./Gymbagfile 或 ./Caddyfile）
 ./gymbag
+
+# 防护 SSH（将 sshd 迁到随机端口并配置主机防火墙）
+sudo ./gymbag init -t ssh
+sudo ./gymbag
+
+# 防护 Minecraft Java 版（随机修改 server.properties 中的 server-port）
+./gymbag init -t minecraft --server-properties /path/to/server.properties
+./gymbag
+
+# 在同一个进程中同时防护以上三类服务
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag
 ```
 
-Gymbag 还能原生读取现有的 **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）以及 **Caddyfile v2** 配置（包括 snippets、`import`、`@matchers`、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir` 和 `header`）。
-
-或者注册为系统服务（`systemd`、`launchd`、`openrc` 或 `supervisor`）并启动：
+也可以让 Gymbag 直接读取现有的 **nginx**（`nginx.conf`）、**Apache**（`httpd.conf` / `apache2.conf`）或 **Caddyfile v2** 配置，或者将其注册为系统服务（`systemd`、`launchd`、`openrc` 或 `supervisor`）：
 
 ```bash
 ./gymbag init -d app.example.com -u :3000 --service auto
 ./gymbag service start
 ```
 
-也可以跳过配置文件直接启动临时反向代理：
+不写配置文件做临时测试时，可以直接跑 `reverse-proxy`：
 
 ```bash
 ./gymbag reverse-proxy --from app.internal --to :3000 --verify 3
 ```
 
-### “开箱即用”在实战中意味着什么
+> **1024 以下端口权限：** `:80` 用于 HTTP 跳 HTTPS 重定向和 ACME HTTP-01 验证，`:443` 提供 HTTPS 服务，`:22` 监听 SSH。在 Linux 上运行 `sudo setcap 'cap_net_bind_service=+ep' ./gymbag` 后即可用非 root 身份绑定这些端口（`.deb` 和 Arch 软件包已自动设置该能力）。仅做本地无特权 Web 测试时，可改用 `--http-port 8080 --https-port 8443`。
 
-将 Gymbag 部署到公网前，你不需要手写一条正则表达式或手动导入任何黑名单。只要写上 `verify`（启用验证等级 `3`：`suspicious & ai`）或 `block`（对威胁情报命中 IP 直接返回 `403 Forbidden` 而非发起质询），即可立即激活三层防护：
+### 不写规则时默认生效的能力
 
-1. **内置基线防火墙规则（`default_rules on`）**
-   - **敏感文件防护（`403`）**：拦截对 `/.env`、`/.env.*`、`/.git/*`、`/.svn/*`、`/.hg/*`、`/.DS_Store`、`/.aws/*`、`/.ssh/*`、`/docker-compose.yml`、`/docker-compose.yaml`、`*.bak`、`*.sql` 和 `*.sqlite` 的请求。
-   - **CMS 与框架漏洞探测（`403`）**：直接丢弃 `/wp-admin/*`、`/wp-login.php`、`/xmlrpc.php`、`/phpmyadmin*`、`/vendor/phpunit*`、`/cgi-bin/*`、`/actuator/env*` 和 `/actuator/heapdump*`。
-   - **漏洞扫描器拦截（`403`）**：拒绝 `sqlmap`、`nikto`、`nuclei`、`masscan`、`zgrab`、`gobuster`、`dirbuster`、`ffuf`、`wfuzz`、`feroxbuster`、`acunetix`、`nessus` 和 `openvas`。
-   - **注入与路径穿越检测（`403`）**：拦截查询字符串中的 `UNION SELECT`、`<script`、`javascript:`、`/etc/passwd`、`information_schema`、`../`、`cmd.exe` 和 `/bin/sh`（同时执行严格的请求格式校验，拒绝空字节和 `%2e%2e` 路径穿越）。
-   - **自动化客户端质询（`PoW 质询`）**：当你尚未自定义规则时，CLI HTTP 客户端（`curl`、`wget`、`python-requests`、`python-httpx`、`go-http-client`、`scrapy`）、无头浏览器（`headlesschrome`、`playwright`、`puppeteer`、`selenium`）以及缺失 `User-Agent` 的请求都会进入工作量证明页面。
-2. **自动更新的 IP 威胁情报**
-   - 启动时及后台每 6 小时自动拉取 [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt)、[Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) & [IPv6](https://www.spamhaus.org/drop/dropv6.txt) 以及 [abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt)，并使用条件请求头 `ETag` / `If-Modified-Since` 将数据缓存在 `<cert_dir>/intel-cache`。
-   - 集成免密钥的实时 IP 信誉查询（**Shodan InternetDB** `internetdb.shodan.io` 与 **StopForumSpam** `api.stopforumspam.org`），带内存 TTL 缓存与故障放行（fail-open）超时控制，确保上游接口故障不会阻塞正常流量。
-3. **官方 AI 爬虫 IP 段追踪**
-   - 实时追踪 **OpenAI**（`gptbot`、`searchbot`、`chatgpt-user`）、**Anthropic**（`claude.com/crawling/bots.json`）、**Perplexity**（`perplexitybot`、`perplexity-user`）、**Google**（`user-triggered-agents`、`user-triggered-fetchers-google`）和 **Apple**（`applebot`）公开的 CIDR 列表。即使爬虫将 `User-Agent` 伪装成桌面版 Chrome，其来源 IP 依然会被精准识别。
+在流量前面挂上 Gymbag 之前，不需要自己写正则或导入黑名单。只要写上不带参数的 `verify`（启用级别 `3`：`suspicious & ai`）或 `block`（将威胁情报命中从质询改为直接返回 `403`），就会自动启用三层防护：
 
-> **关于 80 与 443 端口的运维提示：** Gymbag 默认监听 `:80`（HTTP 到 HTTPS 重定向 + ACME HTTP-01 验证响应）与 `:443`（HTTPS 网关）。在 Linux 上可授予二进制文件 `CAP_NET_BIND_SERVICE` 权限，从而避免以 root 身份运行：
-> ```bash
-> sudo setcap 'cap_net_bind_service=+ep' ./gymbag
-> ```
-> 在本地无特权环境测试且不使用 capabilities 或 `sudo` 时，可传入 `--http-port 8080 --https-port 8443`（或在 `Gymbagfile` 中设置 `http_port` / `https_port`）。
+1. **内置基线规则（`default_rules on`）**
+   - 敏感路径（`403`）：`/.env`、`/.env.*`、`/.git`、`/.git/*`、`/.svn/*`、`/.hg/*`、`/.DS_Store`、`/.aws/*`、`/.ssh/*`、`/docker-compose.yml`、`/docker-compose.yaml`、`*.bak`、`*.sql`、`*.sqlite`。
+   - CMS 与框架探测（`403`）：`/wp-admin`、`/wp-admin/*`、`/wp-login.php`、`/xmlrpc.php`、`/phpmyadmin*`、`/vendor/phpunit*`、`/cgi-bin/*`、`/actuator/env*`、`/actuator/heapdump*`。
+   - 漏洞扫描器（`403`）：`sqlmap`、`nikto`、`nuclei`、`masscan`、`zgrab`、`gobuster`、`dirbuster`、`ffuf`、`wfuzz`、`feroxbuster`、`acunetix`、`nessus`、`openvas`。
+   - 注入与路径穿越查询（`403`）：拦截查询字符串中的 `UNION SELECT`、`<script`、`javascript:`、`/etc/passwd`、`information_schema`、`../`、`cmd.exe`、`/bin/sh`，同时做请求格式检查，拒绝空字节和 `%2e%2e` 路径穿越。
+   - 自动化客户端（PoW 质询）：站点尚未配置自定义规则时，CLI 请求库（`curl`、`wget`、`python-requests`、`python-httpx`、`go-http-client`、`aiohttp`、`okhttp`、`axios`、`node-fetch`、`scrapy`）、无头浏览器（`headlesschrome`、`playwright`、`puppeteer`、`selenium`、`phantomjs`）以及空 `User-Agent` 都会进入工作量证明页面。
+2. **自动更新的 IP 威胁情报与 VPN/Tor 检测**
+   - 启动时及每 6 小时拉取一次 [IPsum (level 3+)](https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt)、[Spamhaus DROP IPv4](https://www.spamhaus.org/drop/drop_v4.json) / [IPv6](https://www.spamhaus.org/drop/dropv6.txt) 和 [abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/downloads/ipblocklist.txt)，利用 `ETag` 和 `If-Modified-Since` 缓存在 `<cert_dir>/intel-cache`。
+   - 接入免密钥的 **Shodan InternetDB**（`internetdb.shodan.io`）和 **StopForumSpam**（`api.stopforumspam.org`）实时信誉查询，带 1 小时内存缓存和故障放行（fail-open）超时，上游响应慢不会卡住正常访客。
+   - 免费 VPN/代理/Tor 检测（`vpn_detection on`）：加载自动更新的 X4BNet VPN IPv4/IPv6 列表和 Tor 出口节点列表，并结合免密钥实时查询（`api.ipquery.io` 和 `api.ipapi.is`，1 小时缓存，1.2s 故障放行超时）。命中的 IP 在 HTTP、SSH 和 Minecraft 的验证级别 `1` 和 `3` 下均被判定为 **suspicious**。
+3. **官方 AI 爬虫 IP 列表**
+   - 追踪 **OpenAI**（`gptbot`、`searchbot`、`chatgpt-user`）、**Anthropic**（`claude.com/crawling/bots.json`）、**Perplexity**（`perplexitybot`、`perplexity-user`）、**Google**（`user-triggered-agents`、`user-triggered-fetchers-google`）和 **Apple**（`applebot`）公开的 CIDR 网段，即便爬虫把 `User-Agent` 伪装成 Chrome，依然能按来源 IP 识别出来。
 
----
+## SSH 与 Minecraft 防护
+
+当未验证的 SSH 或 Minecraft 连接命中 Gymbag 并触发配置的验证级别时，Gymbag 不会将连接转给后端守护进程或游戏服务端，而是直接在对应协议自己的断开提示中返回一次性 HTTPS 链接（`/v/<token>`）：
+
+- **SSH（默认 `port` `22`）**：`sudo ./gymbag init -t ssh` 会挑选 `20000–59999` 范围内的空闲本地端口，将 `/etc/ssh/sshd_config` 备份到 `/etc/ssh/sshd_config.gymbag.bak`，把新 `Port` 写入所有 `Match` 块之前，执行 `sshd -t` 校验（失败会自动回滚），重载 `sshd`，并更新当前生效的 Linux 防火墙（`ufw`、`firewalld`、`nftables` 或 `iptables`+`ip6tables`），让后端端口仅允许回环访问，同时保持 `22` 和 `8443` 对外放行。（修改 `sshd_config` 时请保持另一个 SSH 终端不断开；如需手动接管，可传入 `--ssh-upstream 127.0.0.1:2222`、`--no-auto-setup` 或 `--no-firewall`。）IP 在浏览器通过质询后，后续连接直接走原始 TCP 透传，不干扰 SSH 握手。在级别 `1` 和 `3` 下，畸形 banner 或脚本化 SSH 客户端（`libssh`、`paramiko`、`zgrab`、`masscan`、`nmap`、`asyncssh`、`ssh2go`、`jsch`、`hydra`、`medusa`、`patator`、`python`、`curl`、`ssh-2.0-go`）会触发验证，终端内会直接打印带验证 URL 的 RFC 4253 `SSH_MSG_DISCONNECT` 消息。
+- **Minecraft Java（默认 `port` `25565`）**：`./gymbag init -t minecraft --server-properties ./server.properties` 会将 `server.properties` 备份为 `server.properties.gymbag.bak`，把 `server-port` 改为 `20000–59999` 间的空闲随机端口，并将空的或通配的 `server-ip` 设为 `127.0.0.1`。服务器列表 Ping（`nextState == 1` 与旧版 `0xFE`）默认直接放行（除非被规则拦截），MOTD 和在线人数正常显示。遇到 Login 或 Transfer 且需要验证时，Gymbag 返回 Minecraft Login Disconnect 数据包（`0x00`），在客户端 **“连接已丢失（Connection Lost）”** 弹窗里展示验证链接。
+- **共享 HTTPS 验证门户（默认 `:8443`）**：SSH 和 Minecraft 共用 `verify_port`（可用 `--verify-url https://verify.example.com:8443` 指定域名，留空则使用检测到的服务器 IP）。使用服务器 IP 走 ACME 时，Gymbag 会申请 **RFC 8738** IP 证书（如果 CA 支持则启用 `shortlived` profile）；若 HTTP-01 不可达，则回退到本地 CA 或自签名 IP 证书。当 `verify_port` 与 `https_port` 一致且配置了 HTTP 站点时，门户会直接复用 `443` 端口。
+
+```caddyfile
+{
+    verify_url https://verify.example.com:8443
+    verify_port 8443
+}
+
+ssh {
+    port 22
+    upstream 127.0.0.1:41822
+    verify 3
+    rate_limit 60 60s
+}
+
+minecraft {
+    port 25565
+    upstream 127.0.0.1:48291
+    server_properties /srv/mc/server.properties
+    verify 3
+    allow ip 192.168.1.0/24
+}
+```
+
+完整说明与 `gymbag.json` 示例请参阅 [SSH 与 Minecraft 防护指南](docs/zh/guide/ssh-minecraft.md)。
 
 ## 本地开发（`localhost` 与 `*.internal`）
 
-使用自定义域名进行本地 HTTPS 测试时，通常需要折腾 `mkcert`、手动编辑 `/etc/hosts` 以及忽略自签名证书警告。只要站点使用 `localhost`、`*.localhost`、`*.internal`（如 `app.internal` 或 `api.internal`）、`*.local` 或 `*.test`，Gymbag 即可开箱自动处理域名解析与本地 X.509 证书签发：
+只要站点域名属于 `localhost`、`*.localhost`、`*.internal`（如 `app.internal`、`api.internal`）、`*.local` 或 `*.test`，Gymbag 就会自动接管 `/etc/hosts` 和本地 TLS 证书：
 
 ```caddyfile
 app.internal {
@@ -122,59 +160,51 @@ api.internal {
 }
 ```
 
-### 自动管理与清理 `/etc/hosts`
+### 自动管理 `/etc/hosts`
 
-当启用 `auto_hosts`（默认开启）时，Gymbag 在启动时会检查 `/etc/hosts`（Windows 下为 `C:\Windows\System32\drivers\etc\hosts`）。对于任何尚未在 `/etc/hosts` 中解析的具体本地域名（如 `app.internal` 或 `api.internal`），Gymbag 会自动追加带实例 ID 标记的 IPv4 与 IPv6 回环记录：
+在默认 `auto_hosts on` 下，Gymbag 启动时会检查 `/etc/hosts`（Windows 为 `C:\Windows\System32\drivers\etc\hosts`），为尚未解析的本地域名写入 IPv4 和 IPv6 回环条目：
 
 ```text
 127.0.0.1 app.internal # gymbag-managed:9f3a1c2b
 ::1 app.internal # gymbag-managed:9f3a1c2b
 ```
 
-已存在的 `localhost` 条目会保持原样。当你停止 Gymbag（`Ctrl+C` / `SIGTERM`）时，它会重新读取 `/etc/hosts`（保留你在运行期间做的其他修改），并**仅移除**属于当前实例的 `# gymbag-managed:<instanceID>` 记录。
+既有的 `localhost` 条目保持不动。收到 `Ctrl+C` 或 `SIGTERM` 时，Gymbag 会重新读取该文件（保留你在此期间做的手动修改），仅删除带自身 `# gymbag-managed:<instanceID>` 标记的行。在 macOS/Linux 上写入 `/etc/hosts` 需要 root 权限；若以普通用户运行，Gymbag 会记录警告并继续运行。如果你通过 `dnsmasq` 或手动维护 `.internal` 解析，设置 `auto_hosts off`（或 `GYMBAG_AUTO_HOSTS=off`）即可关闭。
 
-- **macOS 与 Linux 权限说明：** 修改 `/etc/hosts` 需要 root 权限。如果你以普通用户身份运行 `./gymbag` 且没有 `/etc/hosts` 写权限，Gymbag 会输出清晰的警告日志并**继续正常运行** —— 不会崩溃。需要自动管理 `/etc/hosts`（以及绑定 `80`/`443` 端口）时请使用 `sudo ./gymbag`；如果你使用 `dnsmasq` 解析 `.internal` 或自行维护 `/etc/hosts`，可以设置 `auto_hosts off`（或 `GYMBAG_AUTO_HOSTS=off`）。
+### 本地 CA
 
-### 双层本地 PKI 与信任根证书（Root CA）
+Gymbag 不使用每次重启都作废的临时自签证书，而是在 `<cert_dir>/ca/`（默认为 `certs/ca/`）下维护一套双层 ECDSA P-256 CA：
 
-不同于浏览器拒绝缓存信任的临时自签名叶子证书，Gymbag 在 `<cert_dir>/ca/`（默认为 `certs/ca/`）下维护了一套完整的双层 ECDSA P-256 证书颁发机构（CA）：
+1. **Root CA**：`"Neuro-sama Headquarters Root CA"`（`certs/ca/neuro-sama-root-ca.pem`，有效期 10 年，`MaxPathLen: 1`）
+2. **Intermediate CA**：`"Gymbag & Swarm SSL Local CA"`（`certs/ca/gymbag-swarm-local-ca.pem`，有效期 5 年，`MaxPathLen: 0`）
+3. **Leaf Certificate**：`certs/local-fullchain.pem` + `certs/local-privkey.pem`（有效期 90 天，剩余不足 30 天续期，包含 DNS SAN 以及 `127.0.0.1` 和 `::1`）
 
-1. **根证书（Root CA）**：**`"Neuro-sama Headquarters Root CA"`**（`certs/ca/neuro-sama-root-ca.pem`，有效期 10 年，`MaxPathLen: 1`）
-2. **中间证书（Intermediate CA）**：**`"Gymbag & Swarm SSL Local CA"`**（`certs/ca/gymbag-swarm-local-ca.pem`，有效期 5 年，由 `"Neuro-sama Headquarters Root CA"` 签发，`MaxPathLen: 0`）
-3. **叶子证书（Leaf Certificate）**：`certs/local-fullchain.pem` + `certs/local-privkey.pem`（有效期 90 天，剩余不足 30 天时自动续期，包含完整证书链、DNS SAN 以及 `127.0.0.1` / `::1` IP SAN）
+只需将 `"Neuro-sama Headquarters Root CA"` 导入一次系统信任库，浏览器和 `curl` 就会认可所有本地站点：
 
-只需在操作系统信任库中信任一次 **`"Neuro-sama Headquarters Root CA"`**，Gymbag 提供的所有 `https://localhost` 与 `https://*.internal` 域名都会在浏览器和 `curl` 中显示绿色安全锁：
-
-**macOS（系统钥匙串）：**
 ```bash
+# macOS
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/ca/neuro-sama-root-ca.pem
-```
 
-**Debian / Ubuntu:**
-```bash
+# Debian / Ubuntu
 sudo cp certs/ca/neuro-sama-root-ca.pem /usr/local/share/ca-certificates/neuro-sama-root-ca.crt && sudo update-ca-certificates
-```
 
-**Fedora / RHEL / Arch Linux:**
-```bash
+# Fedora / RHEL / Arch Linux
 sudo trust anchor --store certs/ca/neuro-sama-root-ca.pem
 ```
 
-> **Firefox 提示：** 在 macOS 和 Windows 上，只要在 `about:config` 中将 `security.enterprise_roots.enabled` 设为 `true`，Firefox 就会自动信任系统根证书。在 Linux 上，如果 Firefox 使用独立的 NSS 数据库而非 p11-kit，可以开启 `security.enterprise_roots.enabled` 或在 *设置 -> 隐私与安全 -> 证书 -> 查看证书 -> 证书机构* 中手动导入一次 `certs/ca/neuro-sama-root-ca.pem`。
+> **Firefox 提示：** 在 macOS/Windows（以及启用 `p11-kit` 的 Linux）中，可在 `about:config` 将 `security.enterprise_roots.enabled` 设为 `true`；也可以在 *Settings -> Privacy & Security -> Certificates -> View Certificates -> Authorities* 中手动导入 `certs/ca/neuro-sama-root-ca.pem`。
 
----
+## 多站点与验证级别（`0`–`3`）
 
-## 保护多个站点与验证等级（`0`–`3`）
+单进程可同时托管多个域名，支持上游轮询负载均衡和 RFC 6455 WebSocket 升级。每个站点（以及 SSH/Minecraft 服务）均可设置验证级别（`0`–`3`），或用 `protect off` 关闭 PoW：
 
-单个 Gymbag 进程可同时托管和反向代理数十个域名，支持多上游轮询负载均衡以及全双工 RFC 6455 WebSocket 升级。每个站点都可以通过 `verify <0-3>` 独立选择验证策略（或通过 `protect off` 关闭 WAF 质询）：
-
-| 等级 | 名称 | 触发质询的对象 | 适用场景 |
+| 级别 | 名称 | 触发质询的对象 | 适用场景 |
 | :---: | :--- | :--- | :--- |
-| `0` | `always` | 所有未携带有效 HMAC 通行 Cookie 的访客。 | 私有工具、测试环境或正在遭受 L7 洪水攻击的站点。 |
-| `1` | `only suspicious` | 威胁情报/不良信誉 IP、扫描器、CLI HTTP 库、无头浏览器、缺失或伪造浏览器请求头以及漏洞探测请求。 | 希望普通浏览器完全无感知访问的公网 Web 应用与 API。 |
-| `2` | `only ai` | 通过**官方 AI 爬虫 IP 段** *或* AI 机器人 `User-Agent`/代理请求头识别出的 AI 爬虫与大模型 Agent。 | 希望对人类和 `curl` 用户零摩擦开放，同时拦截/消耗 LLM 抓取器的文档、博客与代码托管站。 |
-| `3` | `suspicious & ai` | 结合等级 `1` 与 `2`：同时质询可疑客户端/IP 与 AI 爬虫；正常人类浏览器直接放行。 | 推荐作为公网生产站点的默认配置（单独写 `verify` 即启用此等级）。 |
-| — | `protect off` | 关闭工作量证明质询，仅作为纯 HTTPS 与 WebSocket 反向代理运行（若配置了站点自定义规则，仍会执行）。 | 静态资源托管、Webhook 回调与公共软件包镜像源。 |
+| `0` | `always` | 所有未持有有效通行 Cookie 或未放行 IP 的访客 | 私有管理后台、预发环境、L7 洪水攻击缓解 |
+| `1` | `only suspicious` | 威胁情报、实时不良信誉 IP、VPN/代理/Tor IP、扫描器、CLI 工具库、无头浏览器、缺失/伪造请求头、漏洞探测 | 正常浏览器不应弹质询的公开应用与 API |
+| `2` | `only ai` | 官方 AI 爬虫 IP 段，或带 AI 机器人 `User-Agent` / `X-Ai-Agent` / `Sec-Agent` 请求头的客户端 | 人类和 `curl` 可直接访问的文档、博客和 Git 仓库 |
+| `3` | `suspicious & ai` | 组合 `1` 和 `2`（不带参数写 `verify` 以及 SSH、Minecraft 的默认值） | 公开生产站点 |
+| n/a | `protect off` | 不触发 PoW 质询，纯反向代理（显式配置的自定义规则仍会执行） | 静态资源站、Webhook、镜像站 |
 
 ```caddyfile
 app.example.com, www.example.com {
@@ -196,6 +226,7 @@ api.example.com {
 staging.example.com {
     reverse_proxy http://localhost:3002
     verify 0
+    verify_timeout 30m
 }
 
 static.example.com {
@@ -204,31 +235,11 @@ static.example.com {
 }
 ```
 
-一旦浏览器解出 SHA-256 工作量证明（`difficulty` 可选 `1`–`5`，默认 `4`），Gymbag 会下发一个绑定了主机名和客户端 IP 的 `HttpOnly`、`SameSite=Lax` HMAC 签名通行 Cookie（`waf_clearance`，默认有效期 `24h` / `86400s`）。
-
-### 自定义已验证状态有效期（`verify_timeout` / `clearance_ttl`）
-
-支持在全局或单站点级别通过整数秒**或**人类可读时长（`30m`、`12h`、`1h30m`、`7d`、`2w`）自定义访客验证通过后的有效时间：
-
-```caddyfile
-{
-    verify_timeout 12h     # 全局默认（别名：verified_timeout, clearance_ttl）
-}
-
-staging.example.com {
-    reverse_proxy http://localhost:3002
-    verify 0
-    verify_timeout 30m     # 单站点覆盖
-}
-```
-
-你也可以向 `gymbag init`、`gymbag run` 或 `gymbag reverse-proxy` 传递 `--verify-timeout 6h`（或 `--clearance-ttl 6h`），设置环境变量 `GYMBAG_VERIFY_TIMEOUT` / `GYMBAG_CLEARANCE_TTL`，或者通过 `PATCH /api/v1/sites/{domain}` 动态热更新 `clearance_ttl`。已通过验证的访客请求 `GET /.waf/v1/session` 将返回 `clearance_ttl`、`expires_at` 以及剩余 `expires_in` 秒数。
-
----
+通过 SHA-256 质询（`difficulty` `1`–`5`，默认 `4`）后，系统会下发绑定主机名和客户端 IP 的 `HttpOnly`、`SameSite=Lax` HMAC 通行 Cookie（`waf_clearance`，默认有效期 `24h` / `86400s`）。可通过 `verify_timeout` / `clearance_ttl`（支持整数秒或 `30m`、`12h`、`1h30m`、`7d`、`2w` 等时长格式）、`--verify-timeout`、`GYMBAG_VERIFY_TIMEOUT` 或 `PATCH /api/v1/sites/{domain}` 在全局或单站点覆盖该时长。已验证访客访问 `GET /.waf/v1/session` 会返回 `clearance_ttl`、`expires_at` 和 `expires_in`。
 
 ## 路径路由、静态文件、重定向与配置导入
 
-除了普通的 `reverse_proxy`，站点还可以包含有序的**路径路由（path routes）**。第一个路径匹配的路由负责处理请求；未匹配任何路由的请求会回落到站点的默认上游（若没有则返回 `404`）。每条路由有且仅有一种处理器：反向代理、静态文件服务（`root`）、固定响应 `respond` 或重定向 `redir`。
+除了 `reverse_proxy`，站点内还可以定义有序的**路径路由**。按从上到下第一条匹配的路径处理请求；未匹配到的路径会回落到站点默认上游（若未配置上游则返回 `404`）。每条路由对应一种处理器：反向代理、静态文件服务（`root`）、固定响应 `respond` 或重定向 `redir`。
 
 ```caddyfile
 app.example.com {
@@ -246,155 +257,97 @@ app.example.com {
         reverse_proxy http://localhost:8080
         header X-Served-By gymbag
     }
-    try_files {path} /index.html          # SPA 回退
+    try_files {path} /index.html
 }
 ```
 
-路径匹配器可以是精确路径（`/exact`）、通配符（`/api/*`、`*.php`），或以 `~` 开头的 Go RE2 正则（`~^/v[0-9]+/`）。重定向目标支持 `{scheme}`、`{host}`、`{uri}`、`{path}` 和 `{query}`。静态路由支持 `index`、`browse`（目录列表）和 `fallback`（例如为 SPA 设置 `/index.html`）；路由 `headers` 用于设置响应头，键名以 `-` 为前缀时则删除该响应头。WAF 规则与验证始终先于任何路由处理器执行。
+路径匹配器支持精确路径（`/exact`）、通配符（`/api/*`、`*.php`）以及 Go RE2 正则（`~^/v[0-9]+/`）。重定向支持展开 `{scheme}`、`{host}`、`{uri}`、`{path}` 和 `{query}`。静态路由支持 `index`、`browse` 以及 SPA `fallback`。`header` 用于设置响应头，前缀 `-` 则删除对应响应头。防火墙规则和 PoW 验证会在所有路由处理器之前执行。
 
-在 `gymbag.json` 中，等价写法是 `routes` 数组：
+`gymbag.json` 中对应的 `routes` 数组写法如下：
 
 ```json
-{"routes": [
-  {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
-  {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
-  {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
-]}
+{
+  "routes": [
+    {"path": "/static/*", "strip_prefix": "/static", "root": "./dist", "browse": true},
+    {"path": "/old/*", "redirect": {"to": "https://{host}/new{uri}", "code": 301}},
+    {"path": "/api/*", "upstreams": ["http://localhost:8080"]}
+  ]
+}
 ```
 
-可通过 CLI 的 `gymbag config route list|add|update|remove` 管理路由，或通过 `PATCH /api/v1/sites/{domain}`（`routes`、`headers`、`rule_sources`）实时修改。
+可使用 `gymbag config route list|add|update|remove` 或 `PATCH /api/v1/sites/{domain}` 管理路由。
 
-**导入现有配置：** `gymbag run -c /etc/nginx/nginx.conf`（或 `httpd.conf` / `apache2.conf`）可直接运行原生 nginx/Apache 配置；`gymbag config convert -c <file> -o gymbag.json --format json` 可将 nginx、Apache 或 Caddyfile v2（snippets、`import`、`@matchers`、`handle`、`route`）转换为 Gymbag 原生格式。
+**导入既有配置：** `gymbag run -c /etc/nginx/nginx.conf`（或 `httpd.conf` / `apache2.conf`）可直接加载原生 nginx 或 Apache 配置运行；`gymbag config convert -c <file> -o gymbag.json --format json` 支持转换 nginx、Apache 和 Caddyfile v2（包含 snippets、`import`、`@matchers`、`handle`、`route`、`file_server`、`respond`、`redir` 与 `header`）。
 
----
+## SSL 提供商、自定义密钥与续期
 
-## 切换 SSL 证书提供商、自定义密钥与自动续期
+公网域名默认使用 `tls auto`，通过 ACME HTTP-01 向 Let's Encrypt 申请证书。可通过 `ssl_provider`（别名：`acme_provider`、`ca`、`cert_issuer`）或 `tls <provider>` 切换 CA：
 
-对于公网域名，默认的 `tls auto` 会通过 RFC 8555 ACME HTTP-01 自动向 Let's Encrypt 申请证书。你可以通过一条 `ssl_provider` 指令（别名：`acme_provider`、`ca`、`cert_issuer`）或 `tls <provider>` 轻松切换 CA：
-
-| 提供商关键字 | 证书颁发机构（CA） | EAB 要求 |
+| 提供商关键字 | 证书颁发机构 | EAB 要求 |
 | :--- | :--- | :--- |
-| `letsencrypt` (`le`) | Let's Encrypt (生产环境) | 无需 |
-| `letsencrypt_staging` | Let's Encrypt (测试环境) | 无需 |
-| `zerossl` | ZeroSSL | 设置 `email` 后**自动获取**，或显式配置 `eab <kid> <hmac_key>` |
+| `letsencrypt` (`le`) | Let's Encrypt（生产环境） | 无 |
+| `letsencrypt_staging` | Let's Encrypt（测试环境） | 无 |
+| `zerossl` | ZeroSSL | 设置 `email` 后自动获取，或显式配置 `eab <kid> <hmac_key>` |
 | `google` (`gts`) | Google Trust Services | 需要 `eab <kid> <hmac_key>` |
-| `ssl.com` (`sslcom`, `ssl.com-rsa`) | SSL.com (ECC 或 RSA) | 需要 `eab <kid> <hmac_key>` |
-| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 标准 DV 无需（或通过 `acme_directory` 覆盖目录地址） |
-| `buypass` | Buypass Go SSL | 无需 |
-| `local` | 本地双层 PKI | 本地 CA（`Neuro-sama Headquarters Root CA` -> `Gymbag & Swarm SSL Local CA`） |
-| `https://...` | 任意 RFC 8555 ACME v2 CA | 可选 `eab <kid> <hmac_key>`（如 Smallstep `step-ca`、Pebble） |
+| `ssl.com` (`sslcom`, `ssl.com-rsa`) | SSL.com（ECC 或 RSA） | 需要 `eab <kid> <hmac_key>` |
+| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 标准 DV 无需 |
+| `buypass` | Buypass Go SSL | 无 |
+| `local` | 本地双层 PKI | 本地 CA（`Neuro-sama Headquarters Root CA`） |
+| `https://...` | 任意 RFC 8555 ACME v2 CA | 可选 `eab <kid> <hmac_key>`（如 `step-ca`、Pebble） |
 
-### 切换 ACME CA 与外部账户绑定（EAB）
+选择 **ZeroSSL** 并配置 `email` 时，除非手动传入 `eab`，否则 Gymbag 会自动拉取 EAB 凭据。使用 **Google Trust Services** 和 **SSL.com** 时需传入 `eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY`（支持标准填充 base64 和无填充 base64url，Admin API 输出中会自动脱敏 `eab_hmac_key`）。ACME 证书按提供商分别缓存在磁盘（如 `certs/acme-zerossl-fullchain.pem`，Let's Encrypt 为 `certs/acme-fullchain.pem`），切换 `ssl_provider` 后会立即向新 CA 申请。
 
-**ZeroSSL 零配置邮箱自动获取 EAB：**
-当你选择 `zerossl` 并填写了 `email` 时，如果未显式提供 EAB 密钥，Gymbag 会自动请求 ZeroSSL 的 EAB 接口（`https://api.zerossl.com/acme/eab-credentials-email`）换取凭据：
+也可以传入自有 PEM 文件：
+- `account_key /etc/gymbag/account.pem`：既有 ECDSA（P-256/P-384）或 RSA ACME 账户密钥。
+- `ssl_key /etc/gymbag/domain.key`：既有 ECDSA 或 RSA 密钥，用于签发 ACME CSR。
+- `tls <cert> <key>`：全局或按站点（SNI）使用外部管理的证书；若私钥带密码，配置 `key_password`（`GYMBAG_KEY_PASSWORD`）。
 
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider zerossl
-}
-
-example.com {
-    reverse_proxy http://localhost:3000
-    verify 3
-}
-```
-
-**Google Trust Services、SSL.com 或显式 EAB 凭据：**
-传入你的 Key ID 与 HMAC 密钥（同时支持无填充 URL-safe Base64 与标准填充 Base64，且 Admin API 返回时会自动脱敏 `eab_hmac_key`）：
-
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider google
-    eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY
-}
-```
-
-**LiteSSL by TrustAsia 或自定义 ACME 目录 URL：**
-
-```caddyfile
-{
-    email ops@example.com
-    ssl_provider litessl
-    # 或直接指向任意 ACME v2 目录 URL：
-    # acme_directory https://ca.internal.corp/acme/acme/directory
-}
-```
-
-Gymbag 会按提供商名称分别在磁盘中缓存 ACME 证书（例如 `certs/acme-zerossl-fullchain.pem`、`certs/acme-google-fullchain.pem`，Let's Encrypt 则使用 `certs/acme-fullchain.pem`）。一旦更改 `ssl_provider` 并重启或重载，Gymbag 会立即向新的 CA 申请证书，而不会继续复用旧提供商遗留的证书。
-
-### 使用自有密钥或证书
-
-- **自定义 ACME 账户密钥（`account_key`）**：默认情况下 Gymbag 会在 `certs/acme-account.pem` 创建并复用 ECDSA P-256 账户密钥。如果你的组织已有注册好的 ECDSA（P-256/P-384）或 RSA ACME 账户密钥，可通过 `account_key /etc/gymbag/account.pem`（或 `GYMBAG_ACCOUNT_KEY_FILE`）指定。
-- **自定义 CSR 私钥（`ssl_key`）**：使用 `ssl_key /etc/gymbag/domain.key` 可使用你自己的 ECDSA 或 RSA 私钥签发 ACME CSR，而不是每次生成新密钥。
-- **自定义 TLS 证书与私钥（`tls <cert> <key>`）**：支持全局或按站点（基于 SNI 路由）提供商业证书、Cloudflare Origin 证书或外部管理的 PEM 文件；若私钥已加密，可通过 `key_password`（或 `GYMBAG_KEY_PASSWORD`）解密：
-
-```caddyfile
-{
-    key_password super-secret-passphrase
-}
-
-corp.example.com {
-    reverse_proxy http://localhost:8080
-    tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
-    verify 1
-}
-```
-
-### 零停机后台自动续期
-
-Gymbag 每隔 `renew_interval` 秒（默认 `43200` = 12 小时）运行一次后台续期巡检。只要 ACME 证书、本地 PKI 叶子证书或文件证书距离过期不足 `renew_within_days` 天（默认 `30` 天），Gymbag 就会在后台完成续期或重新加载，并原子切换活动 `tls.Certificate` 指针。正在进行的 HTTP 流与 WebSocket 长连接不会出现任何 TCP 断连。
-
----
+后台任务每隔 `renew_interval` 秒（默认 `43200` / 12h）巡检证书，距过期不足 `renew_within_days`（`30` 天）时自动续期或重载，并原子替换 `tls.Certificate`，不中断既有 HTTP 流或 WebSocket 连接。
 
 ## 编写自定义防火墙规则
 
-对于受保护站点上的每一个入站请求，Gymbag 按严格可预期的顺序逐层评估：
+受保护站点上的 HTTP 请求按以下顺序逐层检查：
 
-1. **请求格式基础校验**（HTTP 方法合法性、最大 URI 长度、空字节与 `..` 路径穿越拦截）
-2. **ACME HTTP-01 放行**（`/.well-known/acme-challenge/*`）
-3. **本地自定义规则**（先全局规则，后站点规则，自上而下 —— 首条命中生效）
-4. **远程防火墙规则（`remote_rules`）**（支持自动刷新的 HTTP/HTTPS 规则集，兼容 Gymbagfile 语法与 JSON）
-5. **内置基线安全规则**（除非显式设置了 `default_rules off`）
-6. **按站点按 IP 速率限制**（`rate_limit` / `rate_window`）
-7. **IP 威胁情报拦截/质询**（`ip_security_action verify` 或 `block`）
-8. **工作量证明验证**（`verify` 等级 `0`–`3`）
+1. 请求基础合法性检查（HTTP 方法、最大 URI 长度、拦截空字节和 `..` / `%2e%2e`）
+2. ACME HTTP-01（`/.well-known/acme-challenge/*`）
+3. 本地自定义规则（先全局规则，再站点规则，从上到下，首条命中生效）
+4. 远程规则（`remote_rules`，通过 HTTP/HTTPS 自动刷新）
+5. 内置基线规则（除非配置 `default_rules off`）
+6. 按站点按 IP 限流器（`rate_limit` / `rate_window`）
+7. IP 威胁情报（`ip_security_action verify` 或 `block`）
+8. 工作量证明检查（`verify` `0`–`3`）
 
-由于你的自定义规则在内置基线规则、限流器和威胁情报**之前**执行，在站点配置顶部添加一条 `allow` 规则即可干净利落地放行受信任办公网 CIDR、内部健康检查或携带预览 Cookie 的请求。
+自定义规则排在基线规则、限流和威胁情报之前，因此在站点块顶部加一条 `allow` 就能直接放行办公网 CIDR、健康检查或带预览 Cookie 的请求。
 
 ### 单行简写规则
 
-语法：`<allow | verify | block> <field> <pattern...>`（同时支持别名 `bypass`/`pass`、`challenge`/`pow` 以及 `deny`/`drop`）。
+语法：`<allow | verify | block> <field> <pattern...>`（同时支持别名 `bypass`/`pass`、`challenge`/`pow`、`deny`/`drop`/`reject`）：
 
-| 字段 | 支持的值与模式匹配 | 示例 |
+| 字段 | 值与匹配方式 | 示例 |
 | :--- | :--- | :--- |
-| `ip` | IPv4、IPv6 或 CIDR 网段（空格或逗号分隔） | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
-| `user_agent` | 忽略大小写子串、`*` 通配符或 `~regex` 正则 | `block user_agent BadBot ~^(?i)python-urllib/` |
-| `path` | 精确/子串匹配、`*` 通配符或 `~regex` 正则 | `verify path /api/export* ~^/v[0-9]+/search` |
-| `query` | 原始查询字符串匹配、`*` 通配符或 `~regex` 正则 | `block query "union select" ~(?i)<script` |
-| `method` | HTTP 请求方法（忽略大小写） | `verify method POST DELETE` |
-| `header` | `<Header-Name> [pattern]`（`""` = 缺失或为空，`*` = 存在即可） | `verify header Accept-Language ""` |
-| `cookie` | `<cookie_name> [pattern]`（`""` = 缺失或为空，`*` = 存在即可） | `allow cookie vip_session *` |
+| `ip` | IPv4、IPv6 或 CIDR | `allow ip 127.0.0.1 10.0.0.0/8 2001:db8::/32` |
+| `user_agent` | 忽略大小写子串、`*` 通配符或 `~regex` | `block user_agent BadBot ~^(?i)python-urllib/` |
+| `path` | 精确/子串、`*` 通配符或 `~regex` | `verify path /api/export* ~^/v[0-9]+/search` |
+| `query` | 原始/解码查询匹配、`*` 通配符或 `~regex` | `block query "union select" ~(?i)<script` |
+| `method` | HTTP 方法（忽略大小写） | `verify method POST DELETE` |
+| `header` | `<Header-Name> [pattern]`（`""` = 缺失/为空，`*` = 存在） | `verify header Accept-Language ""` |
+| `cookie` | `<cookie_name> [pattern]`（`""` = 缺失/为空，`*` = 存在） | `allow cookie vip_session *` |
 
-### 多条件 `rule` 规则块
+### 多条件 `rule` 块
 
-当单个字段不足以精确描述条件时，可以使用 `rule "name" { ... }` 块。**同一字段**的多个匹配值之间为 **OR** 逻辑；同一个规则块内的**不同字段**之间为 **AND** 逻辑：
+在 `rule "name" { ... }` 块内，同一字段的多个值之间是 OR 关系，不同字段之间是 AND 关系：
 
 ```caddyfile
 app.example.com {
     reverse_proxy http://localhost:3000
     verify 3
 
-    # 对命中登录或重置密码接口的 POST 请求强制执行 PoW 验证
     rule "challenge-auth-mutations" {
         action verify
         method POST
         path /login* /api/auth/* /reset-password*
     }
 
-    # 拦截缺少 Origin 请求头的外部 /api/* POST 请求
     rule "block-headless-api-posts" {
         action block
         method POST
@@ -404,32 +357,16 @@ app.example.com {
 }
 ```
 
-### 远程防火墙规则（`remote_rules`）
+### 远程规则与动态本地规则文件
 
-支持在全局或单站点配置中从一个或多个 HTTP/HTTPS URL 自动拉取共享防火墙规则。Gymbag 同时支持 **Gymbagfile 规则语法**（`allow`/`verify`/`block` 单行规则与 `rule "name" { ... }` 规则块）以及 **JSON 格式**（`[ ... ]` 或 `{"rules": [ ... ]}`），通过 `ETag` / `If-Modified-Since` 条件请求将已校验的规则集缓存在 `<cert_dir>/rules-cache` 中；当远程源不可达或格式异常时，会自动保留上一次可用的有效规则集：
+可在全局或按站点配置 `remote_rules`，指向提供 Gymbagfile 规则语法或 JSON（`[ ... ]` 或 `{"rules": [ ... ]}`）的 HTTP/HTTPS URL。校验通过的规则集缓存在 `<cert_dir>/rules-cache` 下，通过 `ETag` / `If-Modified-Since` 进行条件请求；拉取或解析出错时会继续保留上一份可用规则。
+
+本地 `.rules` 或 `.json` 文件与目录也可通过 `rules_file`、`rules_dir` 或 `ruleset` 块（或 `gymbag ruleset add`）加载。加上 `dynamic` 标记后，每 `rules_watch_interval`（默认 `2s`）轮询变更并热重载：
 
 ```caddyfile
 {
     remote_rules https://rules.example.com/org-baseline.rules
     remote_rules_refresh 5m
-}
-
-app.example.com {
-    reverse_proxy http://localhost:3000
-    verify 3
-    allow ip 10.0.0.0/8                              # 本地规则始终优先执行
-    remote_rules https://rules.example.com/app.json  # 站点专属远程规则
-}
-```
-
-你可以通过 `GET /api/v1/rules/remote` 查看状态、通过 `POST /api/v1/rules/remote/refresh` 立即触发刷新，或者使用 `--remote-rules` 与 `GYMBAG_REMOTE_RULES`。
-
-### 本地规则文件、规则目录与动态热重载
-
-可将规则存放在独立的 `.rules`/`.json` 文件或整个规则目录中，并通过路径引用（也可使用 `gymbag ruleset add` 关联）。将某个来源标记为 `dynamic` 后，Gymbag 会自动监听并热重载磁盘上的改动，无需重启服务（若文件语法无效，则保留上一次可用的有效规则集）：
-
-```caddyfile
-{
     rules_watch_interval 2s
 }
 
@@ -437,37 +374,27 @@ app.example.com {
     reverse_proxy http://localhost:3000
     rules_file ./rules/custom.rules dynamic
     rules_dir ./rules.d dynamic
-    ruleset static-corp {
-        source ./rules/corp.json
-        dynamic off
-    }
 }
 ```
 
-在 `gymbag.json` 中可配置 `"rule_sources": [{"source": "./rules.d", "dynamic": true, "name": "shared"}]`，也可向 `gymbag init` 传入 `--rules-file`、`--rules-dir`、`--rules-dynamic` 和 `--rules-watch-interval`。
-
-### 控制内置规则（`default_rules on|off`）
-
-`default_rules` 默认为 `on`：
-- 当受保护站点**没有**配置自定义规则时，Gymbag 会同时启用内置拦截预设（`/.env`、`/wp-admin`、扫描器、SQLi/XSS 查询）和内置自动化客户端质询预设。
-- 当你添加了自定义规则后，你的规则会优先执行，同时内置**拦截预设**仍会追加在其后，避免仅因为加了一条 `verify path` 规则而意外放行 `/.git` 或 `/.env`。
-- 如果你希望在单个站点或全局彻底接管、完全禁用内置规则，可设置 `default_rules off`（或 `GYMBAG_DEFAULT_RULES=off`）。
-
----
+`default_rules` 默认开启（`on`）：为站点添加自定义规则后，自定义规则会优先执行，内置 **block** 规则仍会保留在后面，避免只写了一条 `verify path` 就意外放开 `/.env`。如需完全关闭内置规则，设置 `default_rules off`。
 
 ## CLI、Docker Compose、环境变量与 REST API
 
 ### CLI 参考
 
-若当前工作目录存在 `.env`，Gymbag 会自动加载，然后解析 `./gymbag.json`、`./Gymbagfile` 或 `./Caddyfile`（除非被命令行参数覆盖；也可通过 `-c` 直接传入原生 `nginx.conf` 或 Apache `httpd.conf`/`apache2.conf`）：
+若工作目录存在 `.env`，Gymbag 会先加载它，再依次探测 `./gymbag.json`、`./Gymbagfile` 和 `./Caddyfile`（也可通过 `-c` 指定 JSON、Gymbagfile、Caddyfile v2、`nginx.conf` 或 Apache 配置）：
 
 ```bash
-# 通过交互式向导或参数生成 gymbag.json（默认）或 Gymbagfile
+# 生成配置（默认写入 gymbag.json，传 --format gymbagfile 则写入 Gymbagfile）
 ./gymbag init
 ./gymbag init -d app.example.com -u http://localhost:3000 -l 3 --rules-dir ./rules.d --rules-dynamic
+./gymbag init -t ssh --verify-url https://verify.example.com:8443
+./gymbag init -t minecraft --server-properties ./server.properties
+./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties ./server.properties
 ./gymbag init --format gymbagfile -o Gymbagfile -d app.example.com -u :3000
 
-# 在 gymbag.json 或 Gymbagfile 中管理站点、路由与全局设置
+# 管理站点、路由、全局设置并转换配置
 ./gymbag config list
 ./gymbag config add -d api.example.com -u :8080 -l 1
 ./gymbag config update -d api.example.com -l 3 --verify-timeout 6h
@@ -476,7 +403,7 @@ app.example.com {
 ./gymbag config set admin 127.0.0.1:2019
 ./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 
-# 管理独立规则文件、规则目录与内联规则
+# 管理规则文件、目录及单条规则
 ./gymbag ruleset init ./rules/custom.rules
 ./gymbag ruleset add --source ./rules --dynamic --name local-dir
 ./gymbag ruleset update local-dir --static
@@ -484,54 +411,24 @@ app.example.com {
 ./gymbag ruleset validate ./rules
 ./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
 
-# 使用 ./gymbag.json、./Gymbagfile 或 ./Caddyfile 启动服务器
+# 运行、监听热重载、校验、格式化及系统服务管理
 ./gymbag
-
-# 指定配置文件（JSON、Gymbagfile、Caddyfile v2、nginx、Apache）启动并监听文件改动自动热重载
 ./gymbag run --config gymbag.json --watch
-
-# 注册并管理系统服务（systemd、launchd、openrc、supervisor）
 ./gymbag service install --config gymbag.json
 ./gymbag service start
-./gymbag service status
-./gymbag service render --type systemd   # 在任意系统上预览 systemd unit 文件
-
-# 无需配置文件直接启动临时反向代理
+./gymbag service render --type systemd
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
-
-# 校验配置与本地规则来源，并打印各站点的最终安全策略摘要
 ./gymbag validate --config gymbag.json
-
-# 原地格式化 Gymbagfile 为规范的 4 空格缩进
 ./gymbag fmt --overwrite Gymbagfile
-
-# 打印版本信息
 ./gymbag version
 ```
 
-| 参数 | 说明 |
-| :--- | :--- |
-| `-c`, `--config <path>` | 指定 `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf` 或 Apache 配置文件路径 |
-| `-d`, `--domain <list>` | 覆盖下游域名，多个域名以逗号分隔 |
-| `-u`, `--upstream <url>` | 覆盖上游目标 URL（如 `http://localhost:3000` 或 `:3000`） |
-| `-l`, `--verify <0-3>` | 覆盖验证等级（`0`、`1`、`2`、`3` 或 `off`） |
-| `--verify-timeout <dur>` | 覆盖已验证通行状态的过期时间（如 `30m`、`12h`、`7d` 或秒数；别名 `--clearance-ttl`） |
-| `--remote-rules <url>` | 附加远程防火墙规则 URL（支持 http/https，可重复传参或逗号分隔） |
-| `--remote-rules-refresh <dur>` | 远程规则刷新间隔（默认 `5m` / `300s`） |
-| `--no-protect` | 为 CLI 配置的站点禁用 WAF 验证 |
-| `--ssl-provider <name>` | 覆盖 ACME / SSL 提供商（如 `letsencrypt`、`zerossl`、`google`、`litessl`、`local`） |
-| `--admin <addr>` | 启用本地 REST Admin API（如 `127.0.0.1:2019` 或 `off`） |
-| `--http-port <port>` | HTTP 重定向与 ACME HTTP-01 监听端口（默认 `80`） |
-| `--https-port <port>` | HTTPS 网关监听端口（默认 `443`） |
-| `--watch` | 监听配置文件改动，自动热重载站点路由、规则与 SNI 证书 |
-
 ### Docker 与 Docker Compose
 
-官方多架构（`linux/amd64`、`linux/arm64`）Alpine 容器镜像已发布至 GitHub Container Registry（`ghcr.io/evil-project/gymbag`），以非 root 用户 UID `10001` 运行并带有 `cap_net_bind_service=+ep`。
-
-**挂载 `Gymbagfile` 快速执行 `docker run`：**
+多架构 Alpine 镜像（`linux/amd64`、`linux/arm64`）发布在 `ghcr.io/evil-project/gymbag`，容器内以 UID `10001` 运行并附带 `cap_net_bind_service=+ep`。
 
 ```bash
+# 挂载 Gymbagfile 快速运行
 docker run -d \
   --name gymbag \
   --restart unless-stopped \
@@ -543,190 +440,121 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-**仅使用环境变量的零配置文件 `docker run`：**
-
-```bash
-docker run -d \
-  --name gymbag \
-  -p 80:80 -p 443:443 \
-  --cap-add NET_BIND_SERVICE \
-  --add-host=host.docker.internal:host-gateway \
-  -e GYMBAG_DOMAIN=app.example.com \
-  -e GYMBAG_UPSTREAM=http://host.docker.internal:3000 \
-  -e GYMBAG_ACME_EMAIL=ops@example.com \
-  -e GYMBAG_VERIFY_LEVEL=3 \
-  -e GYMBAG_VERIFY_TIMEOUT=12h \
-  -e GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules \
-  -v gymbag-certs:/app/certs \
-  ghcr.io/evil-project/gymbag:latest
-```
-
-**搭配 Redis 的 Docker Compose：**
-
-仓库自带的 `compose.yaml` 会将 Gymbag 与 `redis:8-alpine` 一同启动，并利用 Gymbag 内置的纯 Go RESP2 Redis 客户端在容器重启或多实例副本之间共享一次性 PoW Nonce 与固定窗口限流状态：
-
-```bash
-docker compose up -d --build
-```
-
-配置默认读取 `./Gymbagfile`（只读挂载到 `/app/Gymbagfile`），证书、HMAC 密钥、威胁情报缓存及远程规则缓存均持久化在命名卷 `gymbag-certs` 中。本地 `.env` 文件中的任意 `GYMBAG_*` 变量都会干净地覆盖配置文件设置：
-
-```dotenv
-GYMBAG_ACME_EMAIL=ops@example.com
-GYMBAG_SSL_PROVIDER=zerossl
-GYMBAG_VERIFY_LEVEL=3
-GYMBAG_CLEARANCE_TTL=12h
-GYMBAG_REMOTE_RULES=https://rules.example.com/baseline.rules
-```
-
-完整部署指南（宿主机目录挂载权限 `chown 10001:10001`、`--watch` 热重载、多容器代理与本地构建）请参阅 [Docker 与 Docker Compose 指南](docs/zh/guide/docker.md)。
+`compose.yaml` 将 Gymbag 与 `redis:8-alpine` 组合在一起，通过内置的纯 Go RESP2 Redis 客户端在重启或多副本之间共享 PoW nonce、固定窗口限流计数以及 SSH/Minecraft 验证凭证和 IP 放行记录（`docker compose up -d --build`）。在 Docker 中防护 SSH 或 Minecraft 时，需同时映射 `-p 22:22` / `-p 25565:25565` 和 `-p 8443:8443`。宿主机挂载权限（`chown 10001:10001`）、`--watch` 以及纯环境变量启动方式详见 [Docker 与 Docker Compose 指南](docs/zh/guide/docker.md)。
 
 ### 环境变量（`GYMBAG_*`）
 
-优先级顺序为：**配置文件 -> `GYMBAG_*` 环境变量 -> CLI 命令行参数**。
+优先级顺序：**配置文件 -> `.env` / `GYMBAG_*` 环境变量 -> CLI 参数**。
 
 | 变量 | 说明 |
 | :--- | :--- |
-| `GYMBAG_CONFIG` | `Gymbagfile`、`Caddyfile` 或 `.json` 配置文件路径 |
-| `GYMBAG_BIND` | 绑定地址（仅本地域名时默认为 `127.0.0.1`，存在公网域名时为 `0.0.0.0`） |
-| `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP 与 HTTPS 监听端口（默认 `80` 与 `443`） |
-| `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | 逗号分隔的下游域名列表 |
+| `GYMBAG_CONFIG` | `gymbag.json`、`Gymbagfile`、`Caddyfile`、`nginx.conf` 或 Apache 配置文件路径 |
+| `GYMBAG_BIND` | 绑定 IP（仅本地 HTTP 时默认 `127.0.0.1`；启用公网域名、SSH 或 Minecraft 时为 `0.0.0.0`） |
+| `GYMBAG_HTTP_PORT` / `GYMBAG_HTTPS_PORT` | HTTP 与 HTTPS 监听端口（默认 `80` 和 `443`） |
+| `GYMBAG_DOMAIN` / `GYMBAG_DOMAINS` | 逗号分隔的下游域名 |
 | `GYMBAG_UPSTREAM` | 默认上游目标 URL |
-| `GYMBAG_UPSTREAMS` | 分号分隔的站点上游映射：`app.example.com=http://web:3000;api.example.com=http://api:8080` |
-| `GYMBAG_PROTECT` | 全局开启或关闭站点 WAF 防护（`on` / `off`） |
-| `GYMBAG_PROTECT_DOMAINS` | 启用 WAF 防护的站点域名子集（逗号分隔） |
-| `GYMBAG_VERIFY_LEVEL` | 验证等级：`0`（`always`）、`1`（`only suspicious`）、`2`（`only ai`）、`3`（`suspicious & ai`） |
-| `GYMBAG_DEFAULT_RULES` | 开启或关闭内置基线防火墙规则（`on` / `off`，默认 `on`） |
-| `GYMBAG_REMOTE_RULES` | 逗号或空格分隔的 HTTP/HTTPS 远程防火墙规则 URL |
-| `GYMBAG_REMOTE_RULES_REFRESH` | 远程规则刷新间隔（秒数或时长，默认 `300` / `5m`） |
-| `GYMBAG_RULES_WATCH_INTERVAL` | 动态本地规则文件/目录的轮询间隔（秒数或时长，默认 `2` / `2s`） |
-| `GYMBAG_DIFFICULTY` | SHA-256 PoW 前导零位数难度（`1`–`5`，默认 `4`） |
-| `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 质询有效期（`300`s / `5m`）与已验证状态超时（`86400`s / `24h`；别名 `GYMBAG_VERIFY_TIMEOUT`、`GYMBAG_VERIFIED_TIMEOUT`；支持 `30m`、`12h`、`7d` 等格式） |
+| `GYMBAG_UPSTREAMS` | 分号分隔的域名映射：`app.example.com=http://web:3000;api.example.com=http://api:8080` |
+| `GYMBAG_PROTECT` / `GYMBAG_PROTECT_DOMAINS` | 启停 WAF 防护（`on`/`off`），或仅对列出的域名启用防护 |
+| `GYMBAG_VERIFY_LEVEL` | 验证级别 `0`–`3` 或 `off`（别名：`GYMBAG_VERIFY`、`GYMBAG_VERIFY_MODE`、`GYMBAG_MODE`、`GYMBAG_TRIGGER`） |
+| `GYMBAG_DEFAULT_RULES` | 内置基线规则（`on` / `off`，默认 `on`） |
+| `GYMBAG_REMOTE_RULES` / `GYMBAG_REMOTE_RULES_REFRESH` | 远程防火墙规则 URL 及刷新间隔（默认 `300`s / `5m`） |
+| `GYMBAG_RULES_WATCH_INTERVAL` | `dynamic` 本地规则文件/目录轮询间隔（默认 `2`s / `2s`） |
+| `GYMBAG_DIFFICULTY` | SHA-256 PoW 难度（`1`–`5`，默认 `4`） |
+| `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 质询有效期（`300`s / `5m`）与通行有效期（`86400`s / `24h`；别名：`GYMBAG_VERIFY_TIMEOUT`、`GYMBAG_VERIFIED_TIMEOUT`） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | 通行 Cookie 名称（`waf_clearance`）与 `Secure` 标志（`true`） |
-| `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | 单 IP 请求上限（`240`）与统计窗口秒数（`60`） |
-| `GYMBAG_TLS_MODE` | `auto`、`acme`、`local`、`selfsigned` 或 `file` |
-| `GYMBAG_SSL_PROVIDER` | `letsencrypt`、`letsencrypt_staging`、`zerossl`、`google`、`ssl.com`、`litessl`、`buypass`、`local` 或自定义 URL |
-| `GYMBAG_ACME_EMAIL` | ACME 注册联系邮箱（同时用于 ZeroSSL 自动 EAB） |
-| `GYMBAG_ACME_DIRECTORY` | 显式指定 RFC 8555 ACME v2 目录 URL |
-| `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | EAB Key ID 与 Base64/Base64URL HMAC 密钥 |
-| `GYMBAG_ACCOUNT_KEY_FILE` | 用户提供的 ECDSA 或 RSA ACME 账户私钥 PEM 路径 |
-| `GYMBAG_CERT_FILE` / `GYMBAG_KEY_FILE` | `file` 模式下使用的 TLS 证书与私钥路径 |
-| `GYMBAG_KEY_PASSWORD` | 加密 PEM 私钥的解密口令 |
-| `GYMBAG_CERT_DIR` | 存放 CA 证书、ACME 状态与情报缓存的目录（默认 `certs`） |
-| `GYMBAG_RENEW_INTERVAL` / `GYMBAG_RENEW_WITHIN_DAYS` | 续期巡检间隔秒数（`43200`）与提前续期阈值天数（`30`） |
-| `GYMBAG_AUTO_HOSTS` | 自动管理 `localhost` 与 `*.internal` 的 `/etc/hosts`（`on` / `off`，默认 `on`） |
-| `GYMBAG_HSTS` | 覆盖 `Strict-Transport-Security` 响应头（`on` / `off`） |
-| `GYMBAG_IP_SECURITY` / `GYMBAG_IP_SECURITY_ACTION` | 威胁情报开关（`on`/`off`）与命中动作（`verify` 或 `block`） |
-| `GYMBAG_IP_REPUTATION` | 实时 Shodan InternetDB + StopForumSpam 查询开关（`on`/`off`） |
-| `GYMBAG_AI_IP_LIST` | 官方 OpenAI、Anthropic、Perplexity、Google 与 Applebot IP 列表开关（`on`/`off`） |
-| `GYMBAG_INTEL_REFRESH` | 威胁情报与 AI IP 列表刷新间隔秒数（默认 `21600`） |
-| `GYMBAG_REDIS_URL` | 可选的 Redis 连接地址（`redis://[:password@]host:port/db`） |
-| `GYMBAG_SECRET` | 通行 Cookie 签名 HMAC 密钥（未设置时自动生成于 `<cert_dir>/secret`） |
-| `GYMBAG_ADMIN` | 本地 Admin REST API 监听地址（如 `127.0.0.1:2019` 或 `off`） |
+| `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | 单 IP 请求上限（`240`）与窗口时长（`60`s） |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS 模式（`auto`、`acme`、`local`、`selfsigned`、`file`）与 CA（`letsencrypt`、`letsencrypt_staging`、`zerossl`、`google`、`ssl.com`、`litessl`、`buypass`、`local` 或 URL） |
+| `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 联系邮箱（启用 ZeroSSL 自动 EAB）及显式 ACME 目录 URL |
+| `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | 外部账户绑定 Key ID 与 base64/base64url HMAC 密钥 |
+| `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA/RSA ACME 账户密钥 PEM 路径 |
+| `GYMBAG_CERT_FILE` / `GYMBAG_KEY_FILE` / `GYMBAG_KEY_PASSWORD` | `file` 模式下使用的证书、私钥及加密私钥口令 |
+| `GYMBAG_CERT_DIR` | 证书、CA 密钥、密钥、情报缓存与规则缓存目录（默认 `certs`） |
+| `GYMBAG_RENEW_INTERVAL` / `GYMBAG_RENEW_WITHIN_DAYS` | 续期巡检间隔（`43200`s）与提前续期天数（`30` 天） |
+| `GYMBAG_AUTO_HOSTS` / `GYMBAG_HSTS` | 自动维护 `/etc/hosts`（`on`/`off`）与覆盖 `Strict-Transport-Security`（`on`/`off`） |
+| `GYMBAG_IP_SECURITY` / `GYMBAG_IP_SECURITY_ACTION` | 威胁情报源开关（`on`/`off`）与命中动作（`verify` 或 `block`） |
+| `GYMBAG_IP_REPUTATION` / `GYMBAG_AI_IP_LIST` | Shodan InternetDB + StopForumSpam 实时查询（`on`/`off`）与官方 AI 爬虫 CIDR 列表（`on`/`off`） |
+| `GYMBAG_VPN_DETECTION` | 可疑流量判定中启用免费 VPN/代理/Tor 检测（`on`/`off`，默认 `on`） |
+| `GYMBAG_INTEL_REFRESH` | 威胁、VPN 与 AI 情报刷新间隔（默认 `21600`s / `6h`） |
+| `GYMBAG_VERIFY_URL` / `GYMBAG_VERIFY_PORT` | 共享 HTTPS 验证门户 URL（留空则使用服务器 IP + IP 证书）与端口（默认 `8443`） |
+| `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | 启用 SSH 防护（默认端口 `22`）及后端 `sshd` 地址 |
+| `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
+| `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | 启用 Minecraft 防护（默认端口 `25565`）及后端目标（支持 `GYMBAG_MINECRAFT_*` 别名） |
+| `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
+| `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL（`redis://` 或 `rediss://`）、HMAC 密钥与 Admin API 监听地址（如 `127.0.0.1:2019` 或 `off`） |
 
 ### REST API
 
-#### 公共 WAF 接口（暴露在受保护站点下）
+**公共 WAF 与验证门户接口：**
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
-| `GET` | `/.waf/v1/session` | 返回当前站点验证状态、`protected`、`verify_level`（`0`–`3`）、`verify_mode`、`clearance_ttl`，以及（已验证时）`expires_at` / `expires_in` |
-| `DELETE` | `/.waf/v1/session` | 清除访客当前的通行 Cookie（`204 No Content`） |
+| `GET` | `/.waf/v1/session` | 通行状态（`cleared`）、`protected`、`verify_level`、`verify_mode`、`clearance_ttl`、`expires_at`、`expires_in` |
+| `DELETE` | `/.waf/v1/session` | 清除访客通行 Cookie（`204 No Content`） |
 | `POST` | `/.waf/v1/challenges` | 签发一次性 SHA-256 PoW 质询（`201 Created`） |
-| `POST` | `/.waf/v1/verifications` | 校验 PoW 解、签发签名通行 Cookie 并返回 `expires_in`（兼容 `/.waf/verify` 别名） |
-| `GET` | `/.waf/assets/{name}` | 提供内嵌 PNG 质询页素材（支持 `/.waf/v1/assets/{name}` 别名及 `ETag` 缓存） |
+| `POST` | `/.waf/v1/verifications` | 校验 PoW 解并下发签名通行 Cookie（兼容 `/.waf/verify` 别名） |
+| `GET` | `/v/{token}` | 返回 SSH/Minecraft 验证 PoW 页面（兼容 `/verify/{token}` 别名） |
+| `POST` | `/.waf/gate/verify` | 校验 SSH/Minecraft PoW 解并写入 IP 放行记录 |
+| `GET` | `/.waf/assets/{name}` | 提供内嵌质询 PNG 图片资源（支持 `/.waf/v1/assets/{name}` 别名及 `ETag` 缓存） |
 
-#### 本地管理 API（通过 `admin 127.0.0.1:2019` 或 `--admin` 启用）
+**本地管理 API（`admin 127.0.0.1:2019` 或 `--admin`）：**
 
-请将管理 API 绑定至回环地址（`127.0.0.1:2019`）或 Unix/WireGuard 管理网卡 —— 它无需认证令牌即可在不重启服务的情况下实时修改路由与防火墙规则。
+请务必将 Admin API 绑定在回环地址（`127.0.0.1:2019`）或私有管理网卡上——该接口无需鉴权令牌，且会直接修改运行中的路由和防火墙状态。
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | 网关健康状态、站点数量、活动 `tls_source`、已加载的 `threat_entries`、`ai_entries` 与 `remote_rules` |
-| `GET` | `/api/v1/tls` | 当前活动 TLS 来源、证书路径、配置的 SSL 提供商、HSTS 状态及支持的 CA 目录 |
-| `POST` | `/api/v1/tls/renew` | 强制立即执行证书续期并原子热重载 |
-| `GET` | `/api/v1/intel` | 各威胁情报与 AI 爬虫源计数、上次刷新时间戳与信誉缓存统计 |
-| `POST` | `/api/v1/intel/refresh` | 立即触发后台情报源刷新并返回最新计数 |
-| `GET` | `/api/v1/rules/remote` | 按 URL 列出远程防火墙规则数量、缓存状态、刷新间隔及最近拉取错误 |
-| `POST` | `/api/v1/rules/remote/refresh` | 立即拉取全部远程规则并原子重载 WAF 引擎 |
-| `GET` | `/api/v1/config` | 导出当前活动运行时配置（自动脱敏 `secret`、`key_password` 和 `eab_hmac_key`） |
-| `PUT` | `/api/v1/config` | 原子校验并替换整份运行时配置 |
-| `GET` | `/api/v1/sites` | 列出所有已配置站点及其 WAF 策略 |
-| `POST` | `/api/v1/sites` | 运行时动态新增站点（`201 Created`） |
-| `GET` | `/api/v1/sites/{domain}` | 查看单个站点的详细配置 |
-| `PUT` | `/api/v1/sites/{domain}` | 整体替换单个站点配置 |
-| `PATCH` | `/api/v1/sites/{domain}` | 实时热修补 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers` 或 `rule_sources` |
-| `DELETE` | `/api/v1/sites/{domain}` | 移除站点（`204 No Content`；拒绝删除最后一个剩余站点） |
-| `GET` | `/api/v1/sites/{domain}/rules` | 列出站点的自定义防火墙规则 |
-| `POST` | `/api/v1/sites/{domain}/rules` | 在线追加一条自定义防火墙规则（`201 Created`） |
-| `PUT` | `/api/v1/sites/{domain}/rules` | 整体替换站点的全部自定义防火墙规则 |
-| `DELETE` | `/api/v1/sites/{domain}/rules/{index_or_name}` | 按数字索引或规则 `name` 删除自定义规则（`204 No Content`） |
-
-**紧急热防护示例：**
-
-```bash
-# 遭遇异常流量高峰时，立即将 app.example.com 收紧为 verify level 0（全员质询）
-curl -X PATCH http://127.0.0.1:2019/api/v1/sites/app.example.com \
-  -H "Content-Type: application/json" \
-  -d '{"verify_level": 0, "difficulty": 5}'
-
-# 无需编辑 Gymbagfile，立即拉黑恶意 CIDR 网段
-curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \
-  -H "Content-Type: application/json" \
-  -d '{"name": "drop-abusive-subnet", "action": "block", "ips": ["198.51.100.0/24"]}'
-
-# 强制立即刷新 IP 威胁情报与 AI 爬虫列表
-curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
-```
-
----
+| `GET` | `/api/v1/health` | 状态、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries`、`remote_rules` |
+| `GET` / `POST` | `/api/v1/tls` / `/api/v1/tls/renew` | 当前 TLS 状态与 CA 目录；强制续期证书并原子切换 |
+| `GET` / `POST` | `/api/v1/intel` / `/api/v1/intel/refresh` | 各威胁/AI/VPN 源条目数与缓存大小；立即触发刷新 |
+| `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | 远程规则条数与拉取错误；立即刷新并重载 WAF |
+| `GET` / `PUT` | `/api/v1/config` | 导出脱敏后的配置；校验并替换运行中配置 |
+| `GET` / `POST` | `/api/v1/sites` | 列出站点或运行时新增站点 |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | 查看、替换、局部热更新（`verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`routes`、`headers`、`rules`、`remote_rules`、`rule_sources`）或删除站点 |
+| `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` 与 `.../{index_or_name}` | 列出、追加、替换或删除站点自定义规则 |
 
 ## 与 Caddy、Nginx 的性能基准对比
 
-测试环境为 Apple M4（10 核，macOS，Go `1.27.0`），三款代理统一使用同一张 ECDSA P-256 证书终结 TLS 1.3，64 并发压测、`1 KiB` 响应体与 `1024` 上游 keep-alive 连接（全部压测均实现 `0` 错误）：
+测试环境为 Apple M4（10 核，macOS，Go `1.27.0`），使用同一张 ECDSA P-256 证书终结 TLS 1.3，64 并发，`1 KiB` 响应体，`1024` 上游 keep-alive 连接，全程 `0` 错误：
 
-| 服务器与模式 | HTTP/1.1 TLS (RPS) | H1 p50 / p99 | HTTP/2 TLS (RPS) | H2 p50 / p99 | 二进制体积 | 负载下 RSS 内存 |
+| 服务器与模式 | HTTP/1.1 TLS (RPS) | H1 p50 / p99 | HTTP/2 TLS (RPS) | H2 p50 / p99 | 二进制体积 | 负载下 RSS |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
 | **Nginx `1.31.8`** (C, `worker_processes auto`) | **85,203** | 0.45 / 6.20 ms | **88,775** | 0.65 / 1.96 ms | 1.5 MB (+libs) | 5.8 MiB |
 | **Gymbag `v0.1.0`** (`verify 3`，全量 WAF 开启) | **72,517** | 0.74 / 3.14 ms | **66,096** | 0.82 / 3.48 ms | 12.9 MB (静态) | 54.3 MiB |
-| **Gymbag `v0.1.0`** (`protect off`，纯反代) | **72,479** | 0.74 / 3.15 ms | **64,048** | 0.83 / 3.94 ms | 12.9 MB (静态) | 52.1 MiB |
-| **Gymbag `v0.1.0`** (`verify 0`，已通过 Cookie) | **65,490** | 0.79 / 3.93 ms | **62,108** | 0.84 / 4.27 ms | 12.9 MB (静态) | ~54 MiB |
+| **Gymbag `v0.1.0`** (`protect off`，纯代理) | **72,479** | 0.74 / 3.15 ms | **64,048** | 0.83 / 3.94 ms | 12.9 MB (静态) | 52.1 MiB |
+| **Gymbag `v0.1.0`** (`verify 0`，已放行 Cookie) | **65,490** | 0.79 / 3.93 ms | **62,108** | 0.84 / 4.27 ms | 12.9 MB (静态) | ~54 MiB |
 | **Caddy `v2.11.9`** (Go，keep-alive 调优) | **54,741** | 0.90 / 4.90 ms | **39,207** | 1.30 / 6.18 ms | 49.0 MB | 76.8 MiB |
 
-- **比 Caddy 快 +32%（HTTP/1.1）与 +63% 至 +69%（HTTP/2）**，同时内存占用少约 30%，二进制体积缩小 3.8 倍 —— 而且这是在 **Gymbag 开启完整 WAF 检测** 的前提下。
-- **达到 C 语言 Nginx HTTP/1.1 吞吐量的 85%**，且 p99 尾延迟降低近 **2 倍**（`3.14 ms` vs `6.20 ms`）。
-- **140,680 req/s** 边缘 WAF 直接拦截能力（基于 TLS 下的 `/.env` 探测，`0.35 ms` p50，上游零流量穿透）。
+C 语言编写的 Nginx 在极限吞吐上仍占优势，但 Gymbag 在在线运行 WAF 的同时，HTTP/1.1 p99 延迟更低（`3.14 ms` vs `6.20 ms`），且吞吐超过 Caddy（HTTP/1.1 高 `+32%`，HTTP/2 高 `+63%` 到 `+69%`），内存少约 30%，二进制体积小 3.8 倍。对于 `/.env` 这类已知探测，Gymbag 在 TLS 边缘以 **140,680 req/s**（`0.35 ms` p50）直接丢弃，不消耗上游资源。
 
-完整测试方法论、Go 微基准测试（`go test -bench`）与确切配置请参阅 [基准测试与性能优化](docs/zh/guide/benchmarks.md)。
-
----
+测试方法、`go test -bench` 微基准数据及完整配置请参阅 [基准测试与性能](docs/zh/guide/benchmarks.md)。
 
 ## 项目结构
 
 ```text
 .
-├── cmd/gymbag/          # 独立 CLI 入口
+├── cmd/gymbag/          # CLI 入口
 ├── docs/                # 多语言 VitePress 文档（EN, 简体中文, 日本語, 한국어, Español）
 ├── internal/
-│   ├── cli/             # 子命令（init, service, run, reverse-proxy, validate, fmt, version）、.env 与热加载监听器
-│   ├── config/          # 配置模型、Gymbagfile/Caddyfile 与时长/远程规则解析器、GYMBAG_* 环境变量加载器
-│   ├── host/            # 域名归一化、IPv6 方括号处理、通配符匹配
-│   ├── intel/           # O(1) 前缀集合、自动更新威胁情报与 AI 爬虫列表、实时 IP 信誉查询
+│   ├── cli/             # 子命令（init, config, ruleset, service, run, reverse-proxy, validate, fmt, version）、.env 与 --watch
+│   ├── config/          # 配置结构、Gymbagfile/Caddyfile v2/nginx/Apache 解析器、时长与规则来源、GYMBAG_* 加载器
+│   ├── host/            # 域名归一化、IPv6 方括号、通配符匹配
+│   ├── intel/           # O(1) 前缀集合、自动更新威胁/VPN/AI 源、实时 IP 与 VPN 信誉查询
 │   ├── localpki/        # 双层本地 CA（"Neuro-sama Headquarters Root CA"）与 /etc/hosts 管理器
-│   ├── proxy/           # 无锁多站点路由器、池化 HTTP 与 RFC 6455 WebSocket 代理
-│   ├── server/          # 融合型 HTTPS 网关、HTTP->HTTPS/ACME 重定向器、REST 管理 API
-│   ├── service/         # 系统服务模板渲染与管理器（systemd, launchd, openrc, supervisor）
-│   ├── store/           # StateStore 接口、64 分片内存存储、纯 Go RESP2 Redis 客户端
-│   ├── tlsmanager/      # 多 CA ACME v2（支持 EAB 与 ZeroSSL 自动 EAB）、本地 PKI、无锁 SNI 证书管理器
-│   └── waf/             # PoW 校验器、分片 HMAC 通行缓存、Aho-Corasick DFA、远程规则、挑战页 UI
+│   ├── proxy/           # 无锁多站点与路径路由器、连接池化 HTTP 与 RFC 6455 WebSocket 代理
+│   ├── server/          # 融合 HTTPS 网关、HTTP->HTTPS/ACME 重定向器、Admin REST API
+│   ├── service/         # 系统服务渲染与管理器（systemd, launchd, openrc, supervisor）
+│   ├── setup/           # 自动配置 sshd_config/防火墙与 Minecraft server.properties 端口随机化
+│   ├── store/           # 64 分片内存存储、纯 Go RESP2 Redis 客户端（质询、限流、门户凭证/放行记录）
+│   ├── tcpguard/        # SSH 与 Minecraft Java TCP 防护代理、策略引擎、共享 HTTPS 验证门户
+│   ├── tlsmanager/      # 多 CA ACME v2（RFC 8738 IP 证书、EAB 与 ZeroSSL 自动 EAB）、本地 PKI、原子 SNI 证书管理
+│   └── waf/             # PoW 校验器、分片 HMAC 放行缓存、Aho-Corasick DFA、远程/本地规则、内嵌 UI
+├── nix/                 # NixOS 模块（services.gymbag）
+├── packaging/           # Arch Linux PKGBUILD 与 Debian/Ubuntu .deb 打包脚本/unit
 ├── Dockerfile
 ├── compose.yaml
 ├── flake.nix
 ├── Gymbagfile
 └── go.mod
 ```
-
----
 
 ## Star 趋势
 
