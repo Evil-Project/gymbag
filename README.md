@@ -71,12 +71,16 @@ Getting started takes two commands: generate a config (which writes `gymbag.json
 sudo ./gymbag init -t ssh
 sudo ./gymbag
 
-# Protect Minecraft Java Edition (randomizes server-port in server.properties)
+# Protect Minecraft Java Edition (auto-starts server.jar with auto-selected Java + randomizes port)
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# Protect an existing Minecraft server without managed startup (randomizes server.properties port)
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 
 # Protect all three from one process
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -479,6 +483,8 @@ Precedence order is **config file -> `.env` / `GYMBAG_*` environment variables -
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | Enable SSH protection (default port `22`) and backend `sshd` target |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Enable Minecraft protection (default port `25565`) and backend server target (`GYMBAG_MINECRAFT_*` aliases work) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Path to Minecraft `server.jar` (auto-starts server with auto-selected Java) and optional Java binary override |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Space-separated JVM flags, Minecraft working directory, and crash auto-restart toggle (`true`/`false`, default `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL (`redis://` or `rediss://`), HMAC secret, and Admin API listen address (e.g. `127.0.0.1:2019` or `off`) |
 

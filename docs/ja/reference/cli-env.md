@@ -31,7 +31,7 @@ gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 # 設定ファイルなしの単発 HTTP/HTTPS リバースプロキシ
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
 
-# 設定を検証し解決済みのサービスサマリーを出力
+# 設定を検証し解決済みのサービスサマリーを出力（`server_jar` 用に選択された Java も表示）
 gymbag validate --config Gymbagfile
 
 # Gymbagfile を上書き整形（4スペースインデント）
@@ -141,6 +141,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | SSH 保護を有効化（デフォルト `22`）してバックエンド `sshd` 宛先を設定 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 検証レベル（`0`–`3` または `off`）と保護の切替（`on`/`off`） |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Minecraft 保護を有効化（デフォルト `25565`）してバックエンド宛先を設定（`GYMBAG_MINECRAFT_*` 別名も可） |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` のパス（自動選択した Java でサーバーを自動起動；別名 `GYMBAG_MC_JAR`）と Java バイナリ上書き（別名 `GYMBAG_MC_JAVA_PATH`） |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | スペース区切りの JVM フラグ、Minecraft 作業ディレクトリ、クラッシュ時自動再起動の切替（`true`/`false`、デフォルト `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 検証レベル（`0`–`3` または `off`）と保護の切替（`on`/`off`） |
 | `GYMBAG_REDIS_URL` | Redis URL（`redis://` または `rediss://`） |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC クリアランスシークレットと Admin REST API 待受アドレス（`127.0.0.1:2019` または `off`） |

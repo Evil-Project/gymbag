@@ -2,7 +2,7 @@
 
 除了 HTTP/HTTPS，Gymbag 还可以把 OpenSSH 和 Minecraft Java 版服务器放到同一套 SHA-256 工作量证明质询、限流器、IP 威胁情报、VPN/代理/Tor 检测和自定义规则后面。
 
-Gymbag 不要求客户端在 SSH 或 Minecraft 协议数据包里直接计算 PoW，而是在连接未通过校验时使用协议自身的断开提示返回一次性 HTTPS 链接（`/v/<token>`）。用户在浏览器打开该链接并解出题目后，Gymbag 会为该 IP 记录有效期为 `clearance_ttl`（默认 `24h`）的放行状态，后续连接直接通过原始 TCP 转发直连后端。
+Gymbag 不要求客户端在 SSH 或 Minecraft 协议数据包里直接计算 PoW，而是在连接未通过校验时使用协议自身的断开提示返回简短、便于手动输入的一次性 HTTPS 链接（`/v/<token>`，8 位不易混淆的小写字符，匹配时不区分大小写）。用户在浏览器打开该链接并解出题目后，Gymbag 会为该 IP 记录有效期为 `clearance_ttl`（默认 `24h`）的放行状态，后续连接直接通过原始 TCP 转发直连后端。
 
 ## SSH 防护
 
@@ -36,14 +36,29 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 ## Minecraft Java 防护
 
-### 自动配置（`gymbag init -t minecraft`）
+### 托管启动（`--server-jar`）与既有服务端（`--server-properties`）
 
-将 `init` 指向服务端的 `server.properties`：
+如果希望由 Gymbag 直接托管 Minecraft 进程，可传入 `--server-jar`：
+
+```bash
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+```
+
+在托管模式下，Gymbag 会：
+
+1. **自动选择兼容的 Java 运行时**：通过检查 `version.json`、bundler 嵌套 JAR、`patch.properties` 或 `.class` 字节码版本头来区分传统 Java 8 服务端与现代 Java 17/21+ 服务端，并在主机上挑选匹配的 `java` 可执行文件（可通过 `--mc-java` / `java_path` 覆盖）。
+2. **安全接管 `server.properties`**：在 `20000–59999` 范围内挑选未占用的回环端口；若 `server.properties` 尚不存在则自动创建并写入 `server-ip=127.0.0.1`（若已存在则先备份再更新），并自动写入 `upstream`。
+3. **管理子进程生命周期**：使用你配置的 `jvm_args` 和 `server_args` 启动 JAR；默认在崩溃时自动重启（`auto_restart`），并在 Gymbag 关闭时向控制台发送优雅 `stop` 指令（15 秒超时）。
+
+如果服务器已经由 systemd、tmux、screen 或 Pterodactyl 等方式单独运行，只需将 `init` 指向其 `server.properties`：
 
 ```bash
 ./gymbag init -t minecraft --server-properties /srv/mc/server.properties
 ./gymbag
 ```
+
+针对既有的 `server.properties`，`init` 会：
 
 1. 在 `20000–59999` 范围内挑选空闲端口，并将 `server.properties` 备份为 `server.properties.gymbag.bak`。
 2. 更新 `server-port=<random>`，同时保留原有注释和其他配置项。
@@ -56,7 +71,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 - **服务器列表 Ping 透传**：新版状态握手（`nextState == 1`）和旧版 1.6 Ping（`0xFE`）默认都会转发给上游服务器（除非被规则或 `ip_security_action block` 拦截），因此服务器的 MOTD、图标和在线人数都能正常显示。
 - **登录与转移拦截（`nextState == 2` / `3`）**：Gymbag 会检查握手包与 Login Start 用户名。无效协议号（`<= 0`）、畸形登录包、非法用户名（为空、超过 32 个字符或包含控制字符）、威胁情报命中 IP 以及 VPN/代理/Tor IP 在级别 `1` 和 `3` 下均判定为可疑。
-- **质询响应**：发送包装成 JSON Chat Component 的 Minecraft Login Disconnect 数据包（`0x00`），让可点击或可读的验证 URL 直接显示在玩家的 **“连接已丢失（Connection Lost）”** 弹窗里。
+- **质询响应**：发送包装成 JSON Chat Component 的 Minecraft Login Disconnect 数据包（`0x00`），并在玩家的 **“连接已丢失（Connection Lost）”** 弹窗里展示可点击复制到剪贴板的验证 URL（1.21.5+ 使用 `click_event`/`hover_event`，1.21.4 及更早版本使用 `clickEvent`/`hoverEvent`）。
 
 ## 同时运行 HTTP、SSH 和 Minecraft
 
@@ -65,7 +80,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 ```bash
 sudo ./gymbag init -t http,ssh,minecraft \
   -d app.example.com -u http://localhost:3000 \
-  --server-properties /srv/mc/server.properties
+  --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -95,6 +110,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -123,6 +140,8 @@ minecraft {
   "minecraft": {
     "port": 25565,
     "upstream": "127.0.0.1:48291",
+    "server_jar": "/srv/mc/paper.jar",
+    "jvm_args": ["-Xms1G", "-Xmx4G"],
     "server_properties": "/srv/mc/server.properties",
     "verify_level": 3
   },

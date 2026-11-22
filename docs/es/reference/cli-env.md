@@ -31,7 +31,7 @@ gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 # Proxy inverso HTTP/HTTPS ad-hoc sin archivo de configuración
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
 
-# Validar la configuración e imprimir el resumen de servicios resuelto
+# Validar la configuración e imprimir el resumen de servicios resuelto (incluido el Java seleccionado para server_jar)
 gymbag validate --config Gymbagfile
 
 # Formatear Gymbagfile en su lugar (sangría de 4 espacios)
@@ -141,6 +141,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | Activa protección SSH (por defecto `22`) y fija destino backend `sshd` |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | Nivel de verificación SSH (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Activa protección Minecraft (por defecto `25565`) y fija destino backend (admite alias `GYMBAG_MINECRAFT_*`) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Ruta a `server.jar` de Minecraft (arranca el servidor con Java autoseleccionado; alias `GYMBAG_MC_JAR`) y anulación del binario Java (alias `GYMBAG_MC_JAVA_PATH`) |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Flags JVM separados por espacios, directorio de trabajo de Minecraft y reinicio automático ante caídas (`true`/`false`, por defecto `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Nivel de verificación Minecraft (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
 | `GYMBAG_REDIS_URL` | URL de Redis (`redis://` o `rediss://`) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Secreto HMAC de autorización y dirección de escucha de la Admin REST API (`127.0.0.1:2019` u `off`) |

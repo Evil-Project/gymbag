@@ -154,6 +154,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -164,8 +166,14 @@ minecraft {
 | :--- | :--- | :--- |
 | `enabled <bool>` | Enable or disable the block without removing it | `true` |
 | `port <port>` | Public listen port (can also be written as `ssh 2222 { ... }`) | `22` (SSH) / `25565` (Minecraft) |
-| `upstream <host:port>` | Backend TCP target (`reverse_proxy` / `proxy` also accepted, e.g. `:2222`, `tcp://127.0.0.1:25566`) | — (required) |
+| `upstream <host:port>` | Backend TCP target (`reverse_proxy` / `proxy` also accepted, e.g. `:2222`, `tcp://127.0.0.1:25566`) | — (`127.0.0.1:25566` when `server_jar` is set) |
 | `server_properties <path>` | Path to `server.properties` (`minecraft` block only) | — |
+| `server_jar <path>` / `jar` | Path to Minecraft `.jar` to auto-start alongside Gymbag (`minecraft` block only) | — |
+| `java_path <bin>` / `java` | Explicit Java binary override (`minecraft` block only) | Auto-selected |
+| `jvm_args <flags...>` | JVM arguments passed before `-jar` (`minecraft` block only) | — |
+| `server_args <args...>` | Extra arguments passed after the JAR path (`minecraft` block only) | — |
+| `work_dir <dir>` | Working directory for the managed Minecraft process (`minecraft` block only) | JAR directory |
+| `auto_restart <on\|off>` | Automatically restart the Minecraft server if it exits unexpectedly (`minecraft` block only) | `on` |
 | `verify [0\|1\|2\|3\|off]` | Verification level (bare `verify` sets `3`) | `3` |
 | `protect <on\|off>` | Toggle PoW verification for this service | `on` |
 | `difficulty <1-5>` | PoW leading-hex-zero difficulty | `4` |
@@ -200,7 +208,7 @@ Time directives (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, `rate_wind
 Top-level JSON keys (`DisallowUnknownFields` is enforced):
 - `sites`: array of `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}`, where `waf` holds `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
-- `minecraft`: `{enabled, port, upstream, server_properties, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
+- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
 - `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
 - `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.

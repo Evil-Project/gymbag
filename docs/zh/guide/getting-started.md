@@ -77,9 +77,14 @@ sudo ./gymbag
 
 ### Minecraft 服务器防护
 
-将 `server.properties` 中的 `server-port` 改为 `20000–59999` 间的空闲随机端口（并把空值、`0.0.0.0` 或 `::` 的 `server-ip` 设为 `127.0.0.1`），服务器列表 Ping 保持放行以正常显示 MOTD 和在线人数，玩家登录时会在 Minecraft **“连接已丢失（Connection Lost）”** 弹窗里看到 HTTPS 验证链接：
+传入 `--server-jar` 后，Gymbag 会随防护代理**自动拉起你的 Minecraft 服务端**，并**自动选择本机最兼容的 Java 运行时**（通过检查 `version.json`、bundler 嵌套 JAR、`patch.properties` 或 `.class` 字节码版本头区分 Java 8 旧版服务端与 Java 17/21+ 服务端，并在关闭时向控制台发送优雅 `stop` 指令）。同时 Gymbag 会把 `server.properties` 中的 `server-port` 改为 `20000–59999` 间的空闲随机端口（配置了 `server_jar` 且文件不存在时自动创建，并将空值、`0.0.0.0` 或 `::` 的 `server-ip` 绑定为 `127.0.0.1`），服务器列表 Ping 保持放行，玩家登录时会在 Minecraft **“连接已丢失（Connection Lost）”** 弹窗里看到 HTTPS 验证链接：
 
 ```bash
+# 自动选择 Java 启动 server.jar + 随机后端端口：
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# 或仅通过 server.properties 防护已在运行的服务器：
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
@@ -90,7 +95,7 @@ sudo ./gymbag
 
 ```bash
 # 非交互式生成组合配置：
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 
 # 或运行交互式向导：
@@ -151,6 +156,9 @@ Gymbag 可直接解析原生 `nginx.conf`、Apache `httpd.conf` / `apache2.conf`
 | `--ssh-upstream <addr>` / `--sshd-config <p>` | 显式指定 `sshd` 目标或 `sshd_config` 路径（默认 `/etc/ssh/sshd_config`） |
 | `--minecraft`, `--mc` / `--mc-port <port>` | 启用 Minecraft 防护（默认端口 `25565`） |
 | `--mc-upstream <addr>` / `--server-properties <p>` | 显式指定 Minecraft 后端或 `server.properties` 路径 |
+| `--mc-jar`, `--server-jar <path>` | Minecraft 服务端 `.jar` 路径（自动选择 Java 并拉起服务端） |
+| `--mc-java`, `--java <bin>` | 显式指定 Minecraft 服务端使用的 Java 可执行文件路径（默认自动选择） |
+| `--mc-jvm-args <args>` / `--mc-work-dir <dir>` | 托管 Minecraft 服务端使用的空格分隔 JVM 参数与工作目录 |
 | `--verify-url <url>` | 共享 HTTPS 验证门户 URL（留空则使用服务器 IP + IP SSL 证书） |
 | `--verify-port <port>` | 共享 HTTPS 验证门户端口（默认 `8443`） |
 | `--no-auto-setup` / `--no-firewall` | 跳过自动修改 `sshd_config`/防火墙或 `server.properties` |

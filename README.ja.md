@@ -71,12 +71,16 @@ nix profile install github:Evil-Project/gymbag
 sudo ./gymbag init -t ssh
 sudo ./gymbag
 
-# Minecraft Java Edition を保護（server.properties の server-port をランダム化）
+# Minecraft Java Edition を保護（自動選択した Java で server.jar を自動起動 + ポートをランダム化）
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# 管理起動を使わず既存の Minecraft サーバーを保護（server.properties のポートをランダム化）
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 
 # 3 つすべてを 1 プロセスで保護
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -479,6 +483,8 @@ docker run -d \
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | SSH 保護の有効化（デフォルトポート `22`）とバックエンド `sshd` 宛先 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 検証レベル（`0`–`3` または `off`）と保護の有効/無効（`on`/`off`） |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Minecraft 保護の有効化（デフォルトポート `25565`）とバックエンド宛先（`GYMBAG_MINECRAFT_*` 別名あり） |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` のパス（自動選択した Java でサーバーを自動起動）と任意の Java バイナリ上書き |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | スペース区切りの JVM フラグ、Minecraft 作業ディレクトリ、クラッシュ時自動再起動の有効/無効（`true`/`false`、デフォルト `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 検証レベル（`0`–`3` または `off`）と保護の有効/無効（`on`/`off`） |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL（`redis://` または `rediss://`）、HMAC シークレット、Admin API 待受アドレス（`127.0.0.1:2019` や `off`） |
 

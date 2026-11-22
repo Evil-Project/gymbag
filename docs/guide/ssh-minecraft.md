@@ -2,7 +2,7 @@
 
 Beyond HTTP/HTTPS, Gymbag can gate OpenSSH and Minecraft Java Edition behind the same SHA-256 proof-of-work challenge, rate limiter, IP threat feeds, VPN/proxy/Tor detection, and custom rules.
 
-Instead of requiring clients to solve PoW inside SSH or Minecraft packets, Gymbag rejects unverified connections using the protocol's own disconnect screen and prints a one-time HTTPS link (`/v/<token>`). Once the user opens that link in a browser and solves the puzzle, Gymbag clears their IP for `clearance_ttl` (default `24h`) and subsequent connections pass straight through over a raw TCP relay.
+Instead of requiring clients to solve PoW inside SSH or Minecraft packets, Gymbag rejects unverified connections using the protocol's own disconnect screen and prints a short, human-typable one-time HTTPS link (`/v/<token>`, 8 unambiguous lowercase characters matched case-insensitively). Once the user opens that link in a browser and solves the puzzle, Gymbag clears their IP for `clearance_ttl` (default `24h`) and subsequent connections pass straight through over a raw TCP relay.
 
 ## SSH Protection
 
@@ -36,14 +36,29 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 ## Minecraft Java Protection
 
-### Automated Setup (`gymbag init -t minecraft`)
+### Managed Startup (`--server-jar`) vs. Existing Server (`--server-properties`)
 
-Point `init` at your server's `server.properties`:
+If you want Gymbag to supervise the Minecraft process itself, pass `--server-jar`:
+
+```bash
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+```
+
+In managed mode, Gymbag:
+
+1. **Picks a compatible Java runtime automatically**: Inspects `version.json`, bundler nested JARs, `patch.properties`, or `.class` bytecode headers to distinguish legacy Java 8 servers from modern Java 17/21+ servers, and selects a matching `java` binary on the host (override with `--mc-java` / `java_path`).
+2. **Wires `server.properties` safely**: Picks an unused loopback port in `20000–59999`, creates `server.properties` with `server-ip=127.0.0.1` if it does not exist yet (or backs up and updates an existing file), and sets `upstream` automatically.
+3. **Manages the child process**: Starts the JAR with your `jvm_args` and `server_args`, restarts on crash by default (`auto_restart`), and sends a graceful console `stop` (15s timeout) when Gymbag shuts down.
+
+If you already run the Minecraft server separately (systemd, tmux, screen, Pterodactyl), point `init` at its `server.properties` instead:
 
 ```bash
 ./gymbag init -t minecraft --server-properties /srv/mc/server.properties
 ./gymbag
 ```
+
+For an existing `server.properties`, `init`:
 
 1. Picks an unused port in `20000–59999` and backs up `server.properties` to `server.properties.gymbag.bak`.
 2. Updates `server-port=<random>` while keeping comments and other keys intact.
@@ -56,7 +71,7 @@ Pass `--mc-upstream 127.0.0.1:25566` or `--no-auto-setup` if you prefer to manag
 
 - **Server List Ping passthrough**: Both modern status handshakes (`nextState == 1`) and legacy 1.6 pings (`0xFE`) are forwarded to the upstream server unless hard-blocked by a rule or `ip_security_action block`. Your server's MOTD, icon, and player count keep working normally.
 - **Login & Transfer gating (`nextState == 2` / `3`)**: Gymbag inspects the handshake and Login Start username. Invalid protocol versions (`<= 0`), malformed login packets, invalid usernames (empty, over 32 characters, or containing control characters), threat-feed IPs, and VPN/proxy/Tor IPs count as suspicious at levels `1` and `3`.
-- **Challenge response**: Sends a Minecraft Login Disconnect packet (`0x00`) formatted as a JSON Chat Component so the clickable/readable verification URL shows up in the player's **"Connection Lost"** dialog.
+- **Challenge response**: Sends a Minecraft Login Disconnect packet (`0x00`) formatted as a JSON Chat Component with a clickable copy-to-clipboard verification URL (`click_event`/`hover_event` on 1.21.5+ and `clickEvent`/`hoverEvent` on 1.21.4 and older) inside the player's **"Connection Lost"** dialog.
 
 ## Running HTTP, SSH, and Minecraft Together
 
@@ -65,7 +80,7 @@ One Gymbag process can run all three listeners at once:
 ```bash
 sudo ./gymbag init -t http,ssh,minecraft \
   -d app.example.com -u http://localhost:3000 \
-  --server-properties /srv/mc/server.properties
+  --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -95,6 +110,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -123,6 +140,8 @@ And the equivalent `gymbag.json`:
   "minecraft": {
     "port": 25565,
     "upstream": "127.0.0.1:48291",
+    "server_jar": "/srv/mc/paper.jar",
+    "jvm_args": ["-Xms1G", "-Xmx4G"],
     "server_properties": "/srv/mc/server.properties",
     "verify_level": 3
   },

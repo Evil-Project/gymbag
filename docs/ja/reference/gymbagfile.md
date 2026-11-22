@@ -154,6 +154,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -164,8 +166,14 @@ minecraft {
 | :--- | :--- | :--- |
 | `enabled <bool>` | ブロックを削除せずに有効/無効を切替 | `true` |
 | `port <port>` | 公開待受ポート（`ssh 2222 { ... }` のようにも記述可） | `22` (SSH) / `25565` (Minecraft) |
-| `upstream <host:port>` | バックエンド TCP 宛先（`reverse_proxy` / `proxy` も使用可、例: `:2222`、`tcp://127.0.0.1:25566`） | —（必須） |
+| `upstream <host:port>` | バックエンド TCP 宛先（`reverse_proxy` / `proxy` も使用可、例: `:2222`、`tcp://127.0.0.1:25566`） | —（`server_jar` 指定時は `127.0.0.1:25566`） |
 | `server_properties <path>` | `server.properties` のパス（`minecraft` ブロック専用） | — |
+| `server_jar <path>` / `jar` | Gymbag とあわせて自動起動する Minecraft `.jar` のパス（`minecraft` ブロック専用） | — |
+| `java_path <bin>` / `java` | 明示的な Java バイナリの上書き（`minecraft` ブロック専用） | 自動選択 |
+| `jvm_args <flags...>` | `-jar` の前に渡す JVM 引数（`minecraft` ブロック専用） | — |
+| `server_args <args...>` | JAR パスの後に渡す追加引数（`minecraft` ブロック専用） | — |
+| `work_dir <dir>` | 管理対象 Minecraft プロセスの作業ディレクトリ（`minecraft` ブロック専用） | JAR のディレクトリ |
+| `auto_restart <on\|off>` | Minecraft サーバーが予期せず終了した場合に自動再起動する（`minecraft` ブロック専用） | `on` |
 | `verify [0\|1\|2\|3\|off]` | 検証レベル（引数なし `verify` は `3`） | `3` |
 | `protect <on\|off>` | このサービスでの PoW 検証を切替 | `on` |
 | `difficulty <1-5>` | PoW の先頭 16 進ゼロ数難易度 | `4` |
@@ -200,7 +208,7 @@ minecraft {
 トップレベル JSON キー（`DisallowUnknownFields` が適用されます）:
 - `sites`: `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` の配列。`waf` には `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}` を含みます。
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`
-- `minecraft`: `{enabled, port, upstream, server_properties, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`
+- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`
 - `verify`: `{url, port, cert_file, key_file}`
 - `bind_host`、`http_port`、`https_port`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`
 - `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`

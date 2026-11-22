@@ -154,6 +154,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -164,8 +166,14 @@ minecraft {
 | :--- | :--- | :--- |
 | `enabled <bool>` | Activar o desactivar el bloque sin borrarlo | `true` |
 | `port <port>` | Puerto público de escucha (también puede escribirse `ssh 2222 { ... }`) | `22` (SSH) / `25565` (Minecraft) |
-| `upstream <host:port>` | Destino TCP backend (también acepta `reverse_proxy` / `proxy`, p. ej. `:2222`, `tcp://127.0.0.1:25566`) | — (obligatorio) |
+| `upstream <host:port>` | Destino TCP backend (también acepta `reverse_proxy` / `proxy`, p. ej. `:2222`, `tcp://127.0.0.1:25566`) | — (`127.0.0.1:25566` cuando se define `server_jar`) |
 | `server_properties <path>` | Ruta a `server.properties` (solo bloque `minecraft`) | — |
+| `server_jar <path>` / `jar` | Ruta al `.jar` de Minecraft para arrancarlo automáticamente junto a Gymbag (solo bloque `minecraft`) | — |
+| `java_path <bin>` / `java` | Anulación explícita del binario de Java (solo bloque `minecraft`) | Autoseleccionado |
+| `jvm_args <flags...>` | Argumentos JVM pasados antes de `-jar` (solo bloque `minecraft`) | — |
+| `server_args <args...>` | Argumentos extra pasados después de la ruta del JAR (solo bloque `minecraft`) | — |
+| `work_dir <dir>` | Directorio de trabajo para el proceso de Minecraft gestionado (solo bloque `minecraft`) | Directorio del JAR |
+| `auto_restart <on\|off>` | Reiniciar automáticamente el servidor de Minecraft si termina de forma inesperada (solo bloque `minecraft`) | `on` |
 | `verify [0\|1\|2\|3\|off]` | Nivel de verificación (`verify` sin argumentos fija `3`) | `3` |
 | `protect <on\|off>` | Activar o desactivar la verificación PoW en este servicio | `on` |
 | `difficulty <1-5>` | Dificultad PoW en ceros hexadecimales iniciales | `4` |
@@ -200,7 +208,7 @@ Las directivas temporales (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, 
 Claves JSON de nivel superior (se aplica `DisallowUnknownFields`):
 - `sites`: array de `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}`, donde `waf` contiene `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
-- `minecraft`: `{enabled, port, upstream, server_properties, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
+- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
 - `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
 - `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.

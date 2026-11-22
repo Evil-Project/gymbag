@@ -71,12 +71,16 @@ nix profile install github:Evil-Project/gymbag
 sudo ./gymbag init -t ssh
 sudo ./gymbag
 
-# Minecraft Java Edition 보호 (server.properties의 server-port를 임의 포트로 변경)
+# Minecraft Java Edition 보호 (자동 선택된 Java로 server.jar 자동 시작 + 포트 무작위화)
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# 관리형 시작 없이 기존 Minecraft 서버 보호 (server.properties 포트 무작위화)
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 
 # 한 프로세스에서 세 가지 모두 보호
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -479,6 +483,8 @@ docker run -d \
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | SSH 보호 활성화(기본 포트 `22`) 및 백엔드 `sshd` 대상 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 검증 레벨(`0`–`3` 또는 `off`) 및 보호 토글(`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Minecraft 보호 활성화(기본 포트 `25565`) 및 백엔드 대상(`GYMBAG_MINECRAFT_*` 별칭 지원) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` 경로(자동 선택된 Java로 서버 자동 시작) 및 선택적 Java 바이너리 재정의 |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 공백으로 구분된 JVM 플래그, Minecraft 작업 디렉터리, 비정상 종료 시 자동 재시작 토글(`true`/`false`, 기본 `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 검증 레벨(`0`–`3` 또는 `off`) 및 보호 토글(`on`/`off`) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL(`redis://` 또는 `rediss://`), HMAC 시크릿, Admin API 수신 주소(예: `127.0.0.1:2019` 또는 `off`) |
 

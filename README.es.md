@@ -71,12 +71,16 @@ Ponerlo en marcha lleva dos comandos: genera la configuración (por defecto escr
 sudo ./gymbag init -t ssh
 sudo ./gymbag
 
-# Proteger Minecraft Java Edition (asigna un server-port aleatorio en server.properties)
+# Proteger Minecraft Java Edition (arranca automáticamente server.jar con Java autoseleccionado y puerto aleatorio)
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# Proteger un servidor Minecraft existente sin arranque gestionado (asigna un server-port aleatorio en server.properties)
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 
 # Proteger los tres desde un mismo proceso
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -479,6 +483,8 @@ El orden de precedencia es **archivo de configuración -> `.env` / variables de 
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | Activa la protección SSH (puerto por defecto `22`) y fija el destino `sshd` |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | Nivel de verificación SSH (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Activa la protección Minecraft (puerto por defecto `25565`) y fija el servidor destino (admite alias `GYMBAG_MINECRAFT_*`) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Ruta a `server.jar` de Minecraft (arranca el servidor con Java autoseleccionado) y binario Java opcional |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Flags JVM separados por espacios, directorio de trabajo de Minecraft y reinicio automático ante caídas (`true`/`false`, por defecto `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Nivel de verificación Minecraft (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | URL de Redis (`redis://` o `rediss://`), secreto HMAC y dirección de escucha de la Admin API (p. ej. `127.0.0.1:2019` u `off`) |
 

@@ -18,7 +18,7 @@ Servidos en `verify_port` (por defecto `8443`), o en `https_port` (`443`) cuando
 
 | Método | Ruta | Descripción |
 | :--- | :--- | :--- |
-| `GET` | `/v/{token}` | Sirve la página PoW en el navegador para un ticket de puerta SSH o Minecraft (admite el alias `/verify/{token}`) |
+| `GET` | `/v/{token}` | Sirve la página PoW en el navegador para un ticket de puerta SSH o Minecraft (tokens de 8 caracteres insensibles a mayúsculas/minúsculas; admite el alias `/verify/{token}`) |
 | `POST` | `/.waf/gate/verify` | Verifica `{token, challenge_id, nonce, verified}` y guarda una autorización IP (`{"ok": true, "service": ..., "client_ip": ..., "expires_in": <ttl>}`) |
 | `GET` | `/.waf/assets/{name}` | PNGs de la mascota incrustados (admite el alias `/.waf/v1/assets/{name}`) |
 | `GET` | `/.well-known/acme-challenge/{token}` | Respuesta de desafío ACME HTTP-01 para el dominio del portal o certificados IP RFC 8738 |
@@ -33,7 +33,7 @@ La Admin API no solicita token de autenticación y modifica el enrutamiento en v
 
 | Método | Ruta | Descripción |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | Estado, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries` y conteo de `remote_rules` cargadas |
+| `GET` | `/api/v1/health` | Estado, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, conteo de `remote_rules` cargadas y estado de `minecraft_server` (`running`, `pid`, `java_major`, `required_java`, `mc_version`, `restarts`, `eula_blocked`, `last_error`) cuando `server_jar` está configurado |
 | `GET` | `/api/v1/tls` | Origen TLS activo, ruta de certificado, proveedor SSL, estado HSTS y catálogo de CAs soportadas |
 | `POST` | `/api/v1/tls/renew` | Fuerza renovación inmediata de certificado y recarga atómica |
 | `GET` | `/api/v1/intel` | Conteos de feeds de amenazas, rastreadores de IA y VPN/Tor (`vpn_detection_enabled`, `vpn_entries`, `vpn_cache_size`, `reputation_cache_size`), fechas de actualización y estado por feed (`threat`, `ai`, `vpn`) |

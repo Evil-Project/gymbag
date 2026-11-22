@@ -77,9 +77,14 @@ sudo ./gymbag
 
 ### Protección de servidor Minecraft
 
-Mueve `server-port` a un puerto libre aleatorio en `20000–59999` dentro de `server.properties` (y enlaza `server-ip` vacío/`0.0.0.0`/`::` a `127.0.0.1`), deja funcionando los Server List Pings para que sigan viéndose el MOTD y el número de jugadores, y muestra el enlace HTTPS de verificación en el diálogo **"Connection Lost"** de Minecraft al intentar entrar:
+Configura `--server-jar` para que Gymbag **arranque automáticamente tu servidor de Minecraft** junto con el proxy de protección y **seleccione de forma automática el runtime de Java compatible** en la máquina (inspeccionando `version.json`, JARs anidados del bundler, `patch.properties` o cabeceras de bytecode `.class` para distinguir servidores Java 8 heredados de servidores Java 17/21+, y enviando un `stop` limpio por consola al apagarse). Gymbag también mueve `server-port` a un puerto libre aleatorio en `20000–59999` dentro de `server.properties` (creándolo si no existe cuando se define `server_jar`, y enlazando `server-ip` vacío/`0.0.0.0`/`::` a `127.0.0.1`), deja pasar sin tocar los Server List Pings y muestra el enlace HTTPS de verificación en el diálogo **"Connection Lost"** de Minecraft al intentar entrar:
 
 ```bash
+# Arrancar server.jar automáticamente con Java autoseleccionado y puerto backend aleatorio:
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# O proteger un servidor que ya está en ejecución mediante server.properties:
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
@@ -90,7 +95,7 @@ Un mismo proceso puede proteger sitios web, SSH y Minecraft a la vez:
 
 ```bash
 # Configuración combinada no interactiva:
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 
 # O ejecuta el asistente interactivo:
@@ -151,6 +156,9 @@ Consulta [Rutas e importación de configuración](/es/guide/routes-and-imports) 
 | `--ssh-upstream <addr>` / `--sshd-config <p>` | Destino explícito de `sshd` o ruta a `sshd_config` (por defecto `/etc/ssh/sshd_config`) |
 | `--minecraft`, `--mc` / `--mc-port <port>` | Activar protección Minecraft (puerto por defecto `25565`) |
 | `--mc-upstream <addr>` / `--server-properties <p>` | Backend explícito de Minecraft o ruta a `server.properties` |
+| `--mc-jar`, `--server-jar <path>` | Ruta al `.jar` del servidor de Minecraft (arranca el servidor con Java autoseleccionado) |
+| `--mc-java`, `--java <bin>` | Ruta explícita al binario de Java para el servidor de Minecraft (por defecto se autoselecciona) |
+| `--mc-jvm-args <args>` / `--mc-work-dir <dir>` | Flags JVM separados por espacios y directorio de trabajo para el servidor de Minecraft gestionado |
 | `--verify-url <url>` | URL del portal HTTPS de verificación compartido (vacío = IP del servidor + cert SSL IP) |
 | `--verify-port <port>` | Puerto del portal HTTPS de verificación compartido (por defecto `8443`) |
 | `--no-auto-setup` / `--no-firewall` | Omitir ediciones automáticas de `sshd_config`/firewall o `server.properties` |

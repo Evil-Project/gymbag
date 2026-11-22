@@ -77,9 +77,14 @@ sudo ./gymbag
 
 ### Minecraft Server Protection
 
-Moves `server-port` to a random free port in `20000–59999` inside `server.properties` (and binds empty/`0.0.0.0`/`::` `server-ip` to `127.0.0.1`), leaves Server List Pings working so MOTD and player count still show, and displays the HTTPS verification link in Minecraft's **"Connection Lost"** dialog on login:
+Configure `--server-jar` to have Gymbag **automatically start your Minecraft server** alongside the protection proxy and **automatically select the best compatible Java runtime** on the machine (inspecting `version.json`, bundler nested JARs, `patch.properties`, or `.class` bytecode headers to distinguish Java 8 legacy servers from Java 17/21+ servers, and sending a graceful console `stop` on shutdown). Gymbag also moves `server-port` to a random free port in `20000–59999` inside `server.properties` (creating it if missing when `server_jar` is set, and binding empty/`0.0.0.0`/`::` `server-ip` to `127.0.0.1`), passes Server List Pings through untouched, and shows the HTTPS verification link inside Minecraft's **"Connection Lost"** dialog on login:
 
 ```bash
+# Auto-start server.jar with automatically selected Java + random backend port:
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# Or guard an already-running server via server.properties:
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
@@ -90,7 +95,7 @@ One process can guard websites, SSH, and Minecraft together:
 
 ```bash
 # Non-interactive combined config:
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 
 # Or run the interactive wizard:
@@ -151,6 +156,9 @@ See [Routes & Config Import](/guide/routes-and-imports) for path routes, static 
 | `--ssh-upstream <addr>` / `--sshd-config <p>` | Explicit `sshd` target or `sshd_config` path (default `/etc/ssh/sshd_config`) |
 | `--minecraft`, `--mc` / `--mc-port <port>` | Enable Minecraft protection (default port `25565`) |
 | `--mc-upstream <addr>` / `--server-properties <p>` | Explicit Minecraft backend or `server.properties` path |
+| `--mc-jar`, `--server-jar <path>` | Path to Minecraft server `.jar` (auto-starts server with auto-selected Java) |
+| `--mc-java`, `--java <bin>` | Explicit Java binary path for Minecraft server (defaults to auto-select) |
+| `--mc-jvm-args <args>` / `--mc-work-dir <dir>` | Space-separated JVM flags and working directory for managed Minecraft server |
 | `--verify-url <url>` | Shared HTTPS verification portal URL (blank = server IP + IP SSL cert) |
 | `--verify-port <port>` | Shared HTTPS verification portal port (default `8443`) |
 | `--no-auto-setup` / `--no-firewall` | Skip automatic `sshd_config`/firewall or `server.properties` edits |

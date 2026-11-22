@@ -31,7 +31,7 @@ gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 # 설정 파일 없는 임시 HTTP/HTTPS 리버스 프록시
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
 
-# 설정 검증 및 해석된 서비스 요약 출력
+# 설정 검증 및 해석된 서비스 요약 출력 (server_jar용으로 선택된 Java 포함)
 gymbag validate --config Gymbagfile
 
 # Gymbagfile 제자리 포맷팅 (4칸 들여쓰기)
@@ -141,6 +141,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | SSH 보호 활성화 (기본 `22`) 및 백엔드 `sshd` 대상 설정 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 검증 레벨 (`0`–`3` 또는 `off`) 및 보호 토글 (`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Minecraft 보호 활성화 (기본 `25565`) 및 백엔드 대상 설정 (`GYMBAG_MINECRAFT_*` 별칭 지원) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` 경로 (자동 선택된 Java로 서버 자동 시작; 별칭 `GYMBAG_MC_JAR`) 및 Java 바이너리 재정의 (별칭 `GYMBAG_MC_JAVA_PATH`) |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 공백으로 구분된 JVM 플래그, Minecraft 작업 디렉터리, 비정상 종료 시 자동 재시작 토글 (`true`/`false`, 기본 `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 검증 레벨 (`0`–`3` 또는 `off`) 및 보호 토글 (`on`/`off`) |
 | `GYMBAG_REDIS_URL` | Redis URL (`redis://` 또는 `rediss://`) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC 클리어런스 시크릿 및 Admin REST API 수신 주소 (`127.0.0.1:2019` 또는 `off`) |

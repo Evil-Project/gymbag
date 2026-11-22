@@ -154,6 +154,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -164,8 +166,14 @@ minecraft {
 | :--- | :--- | :--- |
 | `enabled <bool>` | 开关该服务块而不删除配置 | `true` |
 | `port <port>` | 对外监听端口（也可直接写成 `ssh 2222 { ... }`） | `22`（SSH）/ `25565`（Minecraft） |
-| `upstream <host:port>` | 后端 TCP 地址（也支持 `reverse_proxy` / `proxy`，如 `:2222`、`tcp://127.0.0.1:25566`） | —（必填） |
+| `upstream <host:port>` | 后端 TCP 地址（也支持 `reverse_proxy` / `proxy`，如 `:2222`、`tcp://127.0.0.1:25566`） | —（配置 `server_jar` 时默认 `127.0.0.1:25566`） |
 | `server_properties <path>` | `server.properties` 文件路径（仅 `minecraft` 块支持） | — |
+| `server_jar <path>` / `jar` | 随 Gymbag 自动启动的 Minecraft `.jar` 路径（仅 `minecraft` 块支持） | — |
+| `java_path <bin>` / `java` | 显式覆盖 Java 可执行文件路径（仅 `minecraft` 块支持） | 自动选择 |
+| `jvm_args <flags...>` | 传给 `-jar` 之前的 JVM 参数（仅 `minecraft` 块支持） | — |
+| `server_args <args...>` | 传给 JAR 路径之后的额外参数（仅 `minecraft` 块支持） | — |
+| `work_dir <dir>` | 托管 Minecraft 进程的工作目录（仅 `minecraft` 块支持） | JAR 所在目录 |
+| `auto_restart <on\|off>` | Minecraft 服务端意外退出时是否自动重启（仅 `minecraft` 块支持） | `on` |
 | `verify [0\|1\|2\|3\|off]` | 验证级别（不带参数写 `verify` 为 `3`） | `3` |
 | `protect <on\|off>` | 开关该服务的 PoW 验证 | `on` |
 | `difficulty <1-5>` | PoW 前导十六进制零难度 | `4` |
@@ -200,7 +208,7 @@ minecraft {
 顶层 JSON 字段（解析时强制开启 `DisallowUnknownFields`）：
 - `sites`：`{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` 对象数组，其中 `waf` 包含 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`。
 - `ssh`：`{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`。
-- `minecraft`：`{enabled, port, upstream, server_properties, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`。
+- `minecraft`：`{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`。
 - `verify`：`{url, port, cert_file, key_file}`。
 - `bind_host`、`http_port`、`https_port`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`。
 - `tls`：`{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`。

@@ -154,6 +154,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -164,8 +166,14 @@ minecraft {
 | :--- | :--- | :--- |
 | `enabled <bool>` | 블록을 지우지 않고 서비스 켜기/끄기 | `true` |
 | `port <port>` | 공개 수신 포트 (`ssh 2222 { ... }` 형태로도 작성 가능) | `22` (SSH) / `25565` (Minecraft) |
-| `upstream <host:port>` | 백엔드 TCP 대상 (`reverse_proxy` / `proxy`도 허용, 예: `:2222`, `tcp://127.0.0.1:25566`) | — (필수) |
+| `upstream <host:port>` | 백엔드 TCP 대상 (`reverse_proxy` / `proxy`도 허용, 예: `:2222`, `tcp://127.0.0.1:25566`) | — (`server_jar` 설정 시 `127.0.0.1:25566`) |
 | `server_properties <path>` | `server.properties` 경로 (`minecraft` 블록 전용) | — |
+| `server_jar <path>` / `jar` | Gymbag과 함께 자동 시작할 Minecraft `.jar` 경로 (`minecraft` 블록 전용) | — |
+| `java_path <bin>` / `java` | 명시적 Java 바이너리 재정의 (`minecraft` 블록 전용) | 자동 선택 |
+| `jvm_args <flags...>` | `-jar` 앞에 전달할 JVM 인수 (`minecraft` 블록 전용) | — |
+| `server_args <args...>` | JAR 경로 뒤에 전달할 추가 인수 (`minecraft` 블록 전용) | — |
+| `work_dir <dir>` | 관리형 Minecraft 프로세스의 작업 디렉터리 (`minecraft` 블록 전용) | JAR 디렉터리 |
+| `auto_restart <on\|off>` | Minecraft 서버가 예기치 않게 종료될 때 자동 재시작 (`minecraft` 블록 전용) | `on` |
 | `verify [0\|1\|2\|3\|off]` | 검증 레벨 (단독 `verify`는 `3`) | `3` |
 | `protect <on\|off>` | 이 서비스의 PoW 검증 토글 | `on` |
 | `difficulty <1-5>` | PoW 선행 16진수 `0` 난이도 | `4` |
@@ -200,7 +208,7 @@ minecraft {
 최상위 JSON 키(`DisallowUnknownFields` 적용):
 - `sites`: `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` 배열. 여기서 `waf`는 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`를 담습니다.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
-- `minecraft`: `{enabled, port, upstream, server_properties, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
+- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
 - `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
 - `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.

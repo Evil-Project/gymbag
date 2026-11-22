@@ -31,7 +31,7 @@ gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 # 无需配置文件启动临时 HTTP/HTTPS 反向代理
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
 
-# 校验配置并打印解析后的服务策略摘要
+# 校验配置并打印解析后的服务摘要（包含为 server_jar 选定的 Java）
 gymbag validate --config Gymbagfile
 
 # 原地格式化 Gymbagfile（4 空格缩进）
@@ -141,6 +141,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | 启用 SSH 防护（默认 `22`）及后端 `sshd` 地址 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | 启用 Minecraft 防护（默认 `25565`）及后端目标（支持 `GYMBAG_MINECRAFT_*` 别名） |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` 路径（自动选择 Java 并拉起服务端；别名 `GYMBAG_MC_JAR`）以及 Java 可执行文件覆盖路径（别名 `GYMBAG_MC_JAVA_PATH`） |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 空格分隔的 JVM 参数、Minecraft 工作目录以及崩溃自动重启开关（`true`/`false`，默认 `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
 | `GYMBAG_REDIS_URL` | Redis 连接地址（`redis://` 或 `rediss://`） |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC 通行签名密钥与 Admin REST API 监听地址（`127.0.0.1:2019` 或 `off`） |

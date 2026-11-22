@@ -71,12 +71,16 @@ nix profile install github:Evil-Project/gymbag
 sudo ./gymbag init -t ssh
 sudo ./gymbag
 
-# 防护 Minecraft Java 版（随机修改 server.properties 中的 server-port）
+# 防护 Minecraft Java 版（自动选择兼容 Java 启动 server.jar 并随机修改端口）
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# 防护既有的 Minecraft 服务器且不托管启动（随机修改 server.properties 中的端口）
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 
 # 在同一个进程中同时防护以上三类服务
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -479,6 +483,8 @@ docker run -d \
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | 启用 SSH 防护（默认端口 `22`）及后端 `sshd` 地址 |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | 启用 Minecraft 防护（默认端口 `25565`）及后端目标（支持 `GYMBAG_MINECRAFT_*` 别名） |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` 路径（自动选择 Java 并拉起服务端）以及可选的 Java 可执行文件覆盖路径 |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 空格分隔的 JVM 参数、Minecraft 工作目录以及崩溃自动重启开关（`true`/`false`，默认 `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL（`redis://` 或 `rediss://`）、HMAC 密钥与 Admin API 监听地址（如 `127.0.0.1:2019` 或 `off`） |
 

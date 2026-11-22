@@ -2,7 +2,7 @@
 
 Gymbag은 HTTP/HTTPS뿐만 아니라 OpenSSH와 Minecraft Java Edition 앞단에서도 SHA-256 작업 증명(PoW) 챌린지, 속도 제한, IP 위협 피드, VPN/프록시/Tor 탐지, 사용자 지정 규칙을 동일하게 적용합니다.
 
-SSH나 Minecraft 패킷 내부에서 PoW를 계산하게 하는 대신, 미인증 연결을 해당 프로토콜의 연결 해제 메시지로 거부하면서 일회용 HTTPS 링크(`/v/<token>`)를 출력합니다. 사용자가 브라우저에서 해당 링크를 열어 퍼즐을 풀면 Gymbag이 `clearance_ttl`(기본 `24h`) 동안 해당 IP를 인증 처리하며, 이후 연결은 원시 TCP 릴레이로 바로 통과합니다.
+SSH나 Minecraft 패킷 내부에서 PoW를 계산하게 하는 대신, 미인증 연결을 해당 프로토콜의 연결 해제 메시지로 거부하면서 사람이 직접 입력하기 쉬운 짧은 일회용 HTTPS 링크(`/v/<token>`, 대소문자를 구분하지 않고 매칭되는 혼동 없는 소문자 8자리)를 출력합니다. 사용자가 브라우저에서 해당 링크를 열어 퍼즐을 풀면 Gymbag이 `clearance_ttl`(기본 `24h`) 동안 해당 IP를 인증 처리하며, 이후 연결은 원시 TCP 릴레이로 바로 통과합니다.
 
 ## SSH 보호
 
@@ -36,14 +36,29 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 ## Minecraft Java 보호
 
-### 자동 설정 (`gymbag init -t minecraft`)
+### 관리형 시작 (`--server-jar`) vs. 기존 서버 (`--server-properties`)
 
-서버의 `server.properties` 경로를 지정해 `init`을 실행합니다.
+Gymbag이 Minecraft 프로세스를 직접 관리하도록 하려면 `--server-jar`를 전달하세요.
+
+```bash
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+```
+
+관리형 모드에서 Gymbag은 다음을 수행합니다.
+
+1. **호환되는 Java 런타임 자동 선택**: `version.json`, 번들러 중첩 JAR, `patch.properties`, `.class` 바이트코드 헤더를 검사해 레거시 Java 8 서버와 최신 Java 17/21+ 서버를 구분하고 호스트에서 일치하는 `java` 바이너리를 선택합니다(`--mc-java` / `java_path`로 재정의 가능).
+2. **안전한 `server.properties` 구성**: `20000–59999` 사이의 빈 루프백 포트를 고르고, `server.properties`가 아직 없으면 `server-ip=127.0.0.1`로 새로 생성하며(기존 파일이 있으면 백업 후 갱신), `upstream`을 자동으로 설정합니다.
+3. **자식 프로세스 관리**: `jvm_args`와 `server_args`를 적용해 JAR을 실행하고, 비정상 종료 시 기본 설정(`auto_restart`)에 따라 재시작하며, Gymbag 종료 시 콘솔 `stop`(15s 타임아웃)으로 안전하게 종료합니다.
+
+이미 별도로(systemd, tmux, screen, Pterodactyl 등) Minecraft 서버를 실행하고 있다면 대신 `server.properties`를 지정해 `init`을 실행하세요.
 
 ```bash
 ./gymbag init -t minecraft --server-properties /srv/mc/server.properties
 ./gymbag
 ```
+
+기존 `server.properties`에 대해 `init`은 다음을 수행합니다.
 
 1. `20000–59999` 사이의 빈 포트를 고르고 `server.properties`를 `server.properties.gymbag.bak`으로 백업합니다.
 2. 주석과 다른 설정은 유지한 채 `server-port=<random>`을 갱신합니다.
@@ -56,7 +71,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 - **서버 목록 핑 통과**: 최신 상태 핸드셰이크(`nextState == 1`)와 레거시 1.6 핑(`0xFE`)은 규칙이나 `ip_security_action block`에 걸리지 않는 한 업스트림 서버로 전달됩니다. 따라서 MOTD, 아이콘, 접속자 수 표시는 평소처럼 동작합니다.
 - **로그인 및 전송 게이트 (`nextState == 2` / `3`)**: 핸드셰이크와 Login Start 사용자 이름을 검사합니다. 잘못된 프로토콜 버전(`<= 0`), 기형적인 로그인 패킷, 잘못된 사용자 이름(빈 값, 32자 초과, 제어 문자 포함), 위협 피드 IP, VPN/프록시/Tor IP는 레벨 `1`과 `3`에서 의심 대상으로 처리됩니다.
-- **챌린지 응답**: JSON Chat Component 형식의 Minecraft Login Disconnect 패킷(`0x00`)을 반환해 플레이어의 **"Connection Lost"** 대화 상자에 인증 URL을 표시합니다.
+- **챌린지 응답**: JSON Chat Component 형식의 Minecraft Login Disconnect 패킷(`0x00`)을 반환해 플레이어의 **"Connection Lost"** 대화 상자에 클릭해 복사할 수 있는 인증 URL(1.21.5+에서는 `click_event`/`hover_event`, 1.21.4 이하에서는 `clickEvent`/`hoverEvent`)을 표시합니다.
 
 ## HTTP, SSH, Minecraft 함께 실행하기
 
@@ -65,7 +80,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 ```bash
 sudo ./gymbag init -t http,ssh,minecraft \
   -d app.example.com -u http://localhost:3000 \
-  --server-properties /srv/mc/server.properties
+  --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -95,6 +110,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -123,6 +140,8 @@ minecraft {
   "minecraft": {
     "port": 25565,
     "upstream": "127.0.0.1:48291",
+    "server_jar": "/srv/mc/paper.jar",
+    "jvm_args": ["-Xms1G", "-Xmx4G"],
     "server_properties": "/srv/mc/server.properties",
     "verify_level": 3
   },

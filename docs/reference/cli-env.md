@@ -31,7 +31,7 @@ gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
 # Ad-hoc HTTP/HTTPS reverse proxy without a config file
 gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3 --verify-timeout 12h
 
-# Validate config and print resolved service summary
+# Validate config and print resolved service summary (including selected Java for server_jar)
 gymbag validate --config Gymbagfile
 
 # Format Gymbagfile in place (4-space indentation)
@@ -141,6 +141,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_SSH_ENABLED` / `GYMBAG_SSH_PORT` / `GYMBAG_SSH_UPSTREAM` | Enable SSH protection (default `22`) and set backend `sshd` target |
 | `GYMBAG_SSH_VERIFY_LEVEL` / `GYMBAG_SSH_PROTECT` | SSH verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Enable Minecraft protection (default `25565`) and set backend target (`GYMBAG_MINECRAFT_*` aliases supported) |
+| `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Path to Minecraft `server.jar` (auto-starts server with auto-selected Java; alias `GYMBAG_MC_JAR`) and Java binary override (alias `GYMBAG_MC_JAVA_PATH`) |
+| `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Space-separated JVM flags, Minecraft working directory, and crash auto-restart toggle (`true`/`false`, default `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_REDIS_URL` | Redis URL (`redis://` or `rediss://`) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC clearance secret and Admin REST API listen address (`127.0.0.1:2019` or `off`) |

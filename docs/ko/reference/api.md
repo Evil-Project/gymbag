@@ -18,7 +18,7 @@
 
 | 메서드 | 경로 | 설명 |
 | :--- | :--- | :--- |
-| `GET` | `/v/{token}` | SSH 또는 Minecraft 게이트 티켓용 브라우저 PoW 페이지 제공 (`/verify/{token}` 별칭 지원) |
+| `GET` | `/v/{token}` | SSH 또는 Minecraft 게이트 티켓용 브라우저 PoW 페이지 제공 (8자리 토큰 대소문자 미구분 매칭; `/verify/{token}` 별칭 지원) |
 | `POST` | `/.waf/gate/verify` | `{token, challenge_id, nonce, verified}`를 검증하고 IP 인증 기록 저장 (`{"ok": true, "service": ..., "client_ip": ..., "expires_in": <ttl>}`) |
 | `GET` | `/.waf/assets/{name}` | 내장 마스코트 PNG 제공 (`/.waf/v1/assets/{name}` 별칭 지원) |
 | `GET` | `/.well-known/acme-challenge/{token}` | 포털 도메인 또는 RFC 8738 IP 인증서용 ACME HTTP-01 챌린지 응답 |
@@ -33,7 +33,7 @@ Admin API는 인증 토큰이 없으며 Gymbag 재시작 없이 실시간 라우
 
 | 메서드 | 경로 | 설명 |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | 상태, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, 로드된 `remote_rules` 수 |
+| `GET` | `/api/v1/health` | 상태, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, `remote_rules` 수, 그리고 `server_jar` 설정 시 `minecraft_server` 상태 (`running`, `pid`, `java_major`, `required_java`, `mc_version`, `restarts`, `eula_blocked`, `last_error`) |
 | `GET` | `/api/v1/tls` | 활성 TLS 소스, 인증서 경로, SSL 공급자, HSTS 상태, 지원 CA 카탈로그 |
 | `POST` | `/api/v1/tls/renew` | 즉시 인증서 갱신 및 원자적 리로드 강제 실행 |
 | `GET` | `/api/v1/intel` | 위협·AI 크롤러·VPN/Tor 피드 수 (`vpn_detection_enabled`, `vpn_entries`, `vpn_cache_size`, `reputation_cache_size`), 갱신 타임스탬프, 피드별 상태 (`threat`, `ai`, `vpn`) |

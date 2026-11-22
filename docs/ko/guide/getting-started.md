@@ -77,9 +77,14 @@ sudo ./gymbag
 
 ### Minecraft 서버 보호
 
-`server.properties`의 `server-port`를 `20000–59999` 사이의 빈 포트로 옮기고 비어 있거나 `0.0.0.0`/`::`인 `server-ip`를 `127.0.0.1`로 바꿉니다. 서버 목록 핑은 그대로 동작해 MOTD와 접속자 수가 표시되며, 로그인 시에는 Minecraft **"Connection Lost"** 대화 상자에 HTTPS 인증 링크를 띄웁니다.
+`--server-jar`를 지정하면 Gymbag이 보호 프록시와 함께 **Minecraft 서버를 자동으로 시작**하고 호스트에서 **가장 호환되는 Java 런타임을 자동으로 선택**합니다(`version.json`, 번들러 중첩 JAR, `patch.properties`, `.class` 바이트코드 헤더를 검사해 Java 8 레거시 서버와 Java 17/21+ 서버를 구분하며, 종료 시 콘솔 `stop`으로 안전하게 종료합니다). 또한 `server.properties`의 `server-port`를 `20000–59999` 사이의 빈 포트로 옮기고(`server_jar`가 설정되어 있는데 파일이 없으면 새로 생성하며, 비어 있거나 `0.0.0.0`/`::`인 `server-ip`를 `127.0.0.1`로 바꿉니다), 서버 목록 핑은 그대로 통과시켜 MOTD와 접속자 수를 표시하며, 로그인 시에는 Minecraft **"Connection Lost"** 대화 상자에 HTTPS 인증 링크를 띄웁니다.
 
 ```bash
+# 자동 선택된 Java로 server.jar 자동 시작 + 임의 백엔드 포트 설정:
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# 또는 이미 실행 중인 서버를 server.properties로 보호:
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
@@ -90,7 +95,7 @@ sudo ./gymbag
 
 ```bash
 # 비대화형 통합 설정:
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 
 # 또는 대화형 마법사 실행:
@@ -151,6 +156,9 @@ Gymbag은 네이티브 `nginx.conf`, Apache `httpd.conf` / `apache2.conf`, Caddy
 | `--ssh-upstream <addr>` / `--sshd-config <p>` | `sshd` 대상 주소 또는 `sshd_config` 경로 지정 (기본 `/etc/ssh/sshd_config`) |
 | `--minecraft`, `--mc` / `--mc-port <port>` | Minecraft 보호 활성화 (기본 포트 `25565`) |
 | `--mc-upstream <addr>` / `--server-properties <p>` | Minecraft 백엔드 주소 또는 `server.properties` 경로 지정 |
+| `--mc-jar`, `--server-jar <path>` | Minecraft 서버 `.jar` 경로 (자동 선택된 Java로 서버 자동 시작) |
+| `--mc-java`, `--java <bin>` | Minecraft 서버용 명시적 Java 바이너리 경로 (기본값은 자동 선택) |
+| `--mc-jvm-args <args>` / `--mc-work-dir <dir>` | 관리형 Minecraft 서버용 공백 구분 JVM 플래그 및 작업 디렉터리 |
 | `--verify-url <url>` | 공용 HTTPS 인증 포털 URL (빈 값 = 서버 IP + IP SSL 인증서) |
 | `--verify-port <port>` | 공용 HTTPS 인증 포털 포트 (기본 `8443`) |
 | `--no-auto-setup` / `--no-firewall` | 자동 `sshd_config`/방화벽 또는 `server.properties` 수정 건너뛰기 |

@@ -2,7 +2,7 @@
 
 Gymbag は HTTP/HTTPS だけでなく、OpenSSH と Minecraft Java Edition の手前にも同じ SHA-256 Proof-of-Work チャレンジ、レート制限、IP 脅威フィード、VPN/プロキシ/Tor 検出、カスタムルールを配置できます。
 
-SSH や Minecraft のパケット内で直接 PoW を計算させるのではなく、Gymbag は各プロトコル本来の切断画面を使って未認証の接続を拒否し、そこにワンタイム HTTPS リンク（`/v/<token>`）を表示します。ユーザーがブラウザでそのリンクを開いてパズルを解くと、Gymbag はその IP を `clearance_ttl`（デフォルト `24h`）の間クリア済みとして登録し、以降の接続は生の TCP リレーでそのまま通します。
+SSH や Minecraft のパケット内で直接 PoW を計算させるのではなく、Gymbag は各プロトコル本来の切断画面を使って未認証の接続を拒否し、そこに短く手で入力しやすいワンタイム HTTPS リンク（`/v/<token>`、大文字・小文字を区別せず一致する紛らわしくない 8 文字の小文字トークン）を表示します。ユーザーがブラウザでそのリンクを開いてパズルを解くと、Gymbag はその IP を `clearance_ttl`（デフォルト `24h`）の間クリア済みとして登録し、以降の接続は生の TCP リレーでそのまま通します。
 
 ## SSH 保護
 
@@ -36,14 +36,29 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 ## Minecraft Java 保護
 
-### 自動セットアップ（`gymbag init -t minecraft`）
+### 管理起動（`--server-jar`）と既存サーバー（`--server-properties`）
 
-サーバーの `server.properties` を指定して `init` を実行します。
+Gymbag 自身に Minecraft プロセスを監視・起動させたい場合は、`--server-jar` を指定します。
+
+```bash
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+```
+
+管理起動モードでは、Gymbag が以下を行います。
+
+1. **互換 Java ランタイムの自動選択**: `version.json`、バンドラー内のネストされた JAR、`patch.properties`、`.class` バイトコードヘッダを検査して、レガシーな Java 8 サーバーとモダンな Java 17/21+ サーバーを見分け、ホスト上の一致する `java` バイナリを選択します（`--mc-java` / `java_path` で上書き可能）。
+2. **`server.properties` の安全な配線**: `20000–59999` の未使用ループバックポートを 1 つ選び、`server.properties` がまだ存在しなければ `server-ip=127.0.0.1` 付きで新規作成し（既存ファイルがある場合はバックアップを取って更新）、`upstream` を自動設定します。
+3. **子プロセスの管理**: 指定した `jvm_args` と `server_args` を付けて JAR を起動し、クラッシュ時はデフォルトで自動再起動し（`auto_restart`）、Gymbag 終了時にはコンソールへ `stop` コマンドを送って安全に停止します（タイムアウト 15 秒）。
+
+すでに Minecraft サーバーを別で稼働させている場合（systemd、tmux、screen、Pterodactyl など）は、代わりに `server.properties` を指定して `init` を実行します。
 
 ```bash
 ./gymbag init -t minecraft --server-properties /srv/mc/server.properties
 ./gymbag
 ```
+
+既存の `server.properties` に対して、`init` は次を実行します。
 
 1. `20000–59999` から未使用ポートを選び、`server.properties` を `server.properties.gymbag.bak` にバックアップします。
 2. コメントや他の設定行を残したまま `server-port=<random>` を更新します。
@@ -56,7 +71,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 - **Server List Ping の透過**: 新形式のステータスハンドシェイク（`nextState == 1`）も 1.6 の旧形式 Ping（`0xFE`）も、カスタムルールや `ip_security_action block` で遮断されない限りアップストリームへ転送します。MOTD、サーバーアイコン、プレイヤー数表示はそのまま動作します。
 - **Login & Transfer のゲーティング（`nextState == 2` / `3`）**: ハンドシェイクと Login Start のユーザー名を検査します。不正なプロトコルバージョン（`<= 0`）、破損したログインパケット、不正なユーザー名（空文字、32 文字超、制御文字を含むもの）、脅威フィード IP、VPN/プロキシ/Tor IP はレベル `1` および `3` で不審（suspicious）として扱われます。
-- **チャレンジ応答**: JSON Chat Component 形式の Minecraft Login Disconnect パケット（`0x00`）を返し、プレイヤーの **「Connection Lost」**ダイアログ内に検証 URL を表示します。
+- **チャレンジ応答**: プレイヤーの **「Connection Lost」**ダイアログ内に、クリックでクリップボードへコピーできる検証 URL（1.21.5+ では `click_event`/`hover_event`、1.21.4 以前では `clickEvent`/`hoverEvent`）を含めた JSON Chat Component 形式の Minecraft Login Disconnect パケット（`0x00`）を返します。
 
 ## HTTP・SSH・Minecraft の同時運用
 
@@ -65,7 +80,7 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 ```bash
 sudo ./gymbag init -t http,ssh,minecraft \
   -d app.example.com -u http://localhost:3000 \
-  --server-properties /srv/mc/server.properties
+  --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 ```
 
@@ -95,6 +110,8 @@ ssh {
 minecraft {
     port 25565
     upstream 127.0.0.1:48291
+    server_jar /srv/mc/paper.jar
+    jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
     rate_limit 60 60s
@@ -123,6 +140,8 @@ minecraft {
   "minecraft": {
     "port": 25565,
     "upstream": "127.0.0.1:48291",
+    "server_jar": "/srv/mc/paper.jar",
+    "jvm_args": ["-Xms1G", "-Xmx4G"],
     "server_properties": "/srv/mc/server.properties",
     "verify_level": 3
   },

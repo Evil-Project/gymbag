@@ -77,9 +77,14 @@ sudo ./gymbag
 
 ### Minecraft サーバー保護
 
-`server.properties` 内の `server-port` を `20000–59999` の未使用ポートへ移動し（空欄・`0.0.0.0`・`::` の `server-ip` は `127.0.0.1` に書き換え）、Server List Ping はそのまま通して MOTD とプレイヤー数を表示しつつ、ログイン時には Minecraft の **「Connection Lost」**ダイアログに HTTPS 検証リンクを表示します。
+`--server-jar` を指定すると、Gymbag が保護プロキシとあわせて **Minecraft サーバーを自動起動**し、マシン上から**最適な互換 Java ランタイムを自動選択**します（`version.json`、バンドラー内のネストされた JAR、`patch.properties`、`.class` バイトコードヘッダを検査して Java 8 のレガシーサーバーと Java 17/21+ のサーバーを判別し、終了時にはコンソールへ `stop` を送って安全に停止します）。また `server.properties` 内の `server-port` を `20000–59999` の未使用ポートへ移動し（`server_jar` 指定時にファイルがなければ自動作成し、空欄・`0.0.0.0`・`::` の `server-ip` は `127.0.0.1` にバインド）、Server List Ping はそのまま通しつつ、ログイン時には Minecraft の **「Connection Lost」**ダイアログに HTTPS 検証リンクを表示します。
 
 ```bash
+# 自動選択した Java で server.jar を自動起動 + バックエンドポートをランダム化:
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
+./gymbag
+
+# すでに稼働中のサーバーを server.properties 経由で保護する場合:
 ./gymbag init -t minecraft --server-properties /path/to/server.properties
 ./gymbag
 ```
@@ -90,7 +95,7 @@ sudo ./gymbag
 
 ```bash
 # 非対話での統合設定:
-sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/paper.jar
 sudo ./gymbag
 
 # 対話ウィザードを起動する場合:
@@ -151,6 +156,9 @@ Gymbag は `nginx.conf`、Apache の `httpd.conf` / `apache2.conf`、Caddyfile v
 | `--ssh-upstream <addr>` / `--sshd-config <p>` | 明示的な `sshd` 宛先、または `sshd_config` のパス（デフォルト `/etc/ssh/sshd_config`） |
 | `--minecraft`, `--mc` / `--mc-port <port>` | Minecraft 保護を有効化（デフォルトポート `25565`） |
 | `--mc-upstream <addr>` / `--server-properties <p>` | 明示的な Minecraft バックエンド、または `server.properties` のパス |
+| `--mc-jar`, `--server-jar <path>` | Minecraft サーバー `.jar` のパス（自動選択した Java でサーバーを自動起動） |
+| `--mc-java`, `--java <bin>` | Minecraft サーバー用の明示的な Java バイナリパス（デフォルトは自動選択） |
+| `--mc-jvm-args <args>` / `--mc-work-dir <dir>` | 管理対象 Minecraft サーバー用のスペース区切り JVM フラグと作業ディレクトリ |
 | `--verify-url <url>` | 共有 HTTPS 検証ポータルの URL（空欄 = サーバー IP + IP SSL 証明書） |
 | `--verify-port <port>` | 共有 HTTPS 検証ポータルのポート（デフォルト `8443`） |
 | `--no-auto-setup` / `--no-firewall` | `sshd_config`/ファイアウォールや `server.properties` の自動書き換えをスキップ |

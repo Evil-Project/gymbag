@@ -18,7 +18,7 @@
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
-| `GET` | `/v/{token}` | 为 SSH 或 Minecraft 验证凭证返回浏览器 PoW 页面（支持 `/verify/{token}` 别名） |
+| `GET` | `/v/{token}` | 为 SSH 或 Minecraft 验证凭证返回浏览器 PoW 页面（8 位验证令牌匹配时不区分大小写；支持 `/verify/{token}` 别名） |
 | `POST` | `/.waf/gate/verify` | 校验 `{token, challenge_id, nonce, verified}` 并写入 IP 放行记录（`{"ok": true, "service": ..., "client_ip": ..., "expires_in": <ttl>}`） |
 | `GET` | `/.waf/assets/{name}` | 内嵌吉祥物 PNG 图片（支持 `/.waf/v1/assets/{name}` 别名） |
 | `GET` | `/.well-known/acme-challenge/{token}` | 用于门户域名或 RFC 8738 IP 证书签发的 ACME HTTP-01 验证响应 |
@@ -33,7 +33,7 @@ Admin API 不设鉴权令牌，可以直接在不重启进程的情况下修改�
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | 状态、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries` 与已加载 `remote_rules` 数量 |
+| `GET` | `/api/v1/health` | 状态、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries`、已加载 `remote_rules` 数量，以及在配置 `server_jar` 时返回 `minecraft_server` 状态（`running`、`pid`、`java_major`、`required_java`、`mc_version`、`restarts`、`eula_blocked`、`last_error`） |
 | `GET` | `/api/v1/tls` | 当前 TLS 来源、证书路径、SSL 提供商、HSTS 状态及支持的 CA 列表 |
 | `POST` | `/api/v1/tls/renew` | 强制立即执行证书续期并原子重载 |
 | `GET` | `/api/v1/intel` | 威胁、AI 爬虫及 VPN/Tor 条目数（`vpn_detection_enabled`、`vpn_entries`、`vpn_cache_size`、`reputation_cache_size`）、刷新时间戳与各源状态（`threat`、`ai`、`vpn`） |

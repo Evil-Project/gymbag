@@ -18,7 +18,7 @@
 
 | メソッド | パス | 説明 |
 | :--- | :--- | :--- |
-| `GET` | `/v/{token}` | SSH または Minecraft のゲートチケット向けブラウザ PoW ページを配信（`/verify/{token}` 別名対応） |
+| `GET` | `/v/{token}` | SSH または Minecraft のゲートチケット向けブラウザ PoW ページを配信（8 文字トークンは大文字・小文字を区別せず一致；`/verify/{token}` 別名対応） |
 | `POST` | `/.waf/gate/verify` | `{token, challenge_id, nonce, verified}` を検証し、IP クリアランスを保存（`{"ok": true, "service": ..., "client_ip": ..., "expires_in": <ttl>}`） |
 | `GET` | `/.waf/assets/{name}` | 埋め込みマスコット PNG を配信（`/.waf/v1/assets/{name}` 別名対応） |
 | `GET` | `/.well-known/acme-challenge/{token}` | ポータルドメインまたは RFC 8738 IP 証明書向けの ACME HTTP-01 チャレンジ応答 |
@@ -33,7 +33,7 @@ Admin API には認証トークンがなく、Gymbag を再起動せずに稼働
 
 | メソッド | パス | 説明 |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | ステータス、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries`、読み込み済み `remote_rules` 件数 |
+| `GET` | `/api/v1/health` | ステータス、`sites_count`、`ssh_enabled`、`minecraft_enabled`、`tls_source`、`threat_entries`、`ai_entries`、`vpn_entries`、`remote_rules` 件数、および `server_jar` 設定時の `minecraft_server` ステータス（`running`、`pid`、`java_major`、`required_java`、`mc_version`、`restarts`、`eula_blocked`、`last_error`） |
 | `GET` | `/api/v1/tls` | アクティブ TLS ソース、証明書パス、SSL プロバイダ、HSTS 状態、対応 CA カタログ |
 | `POST` | `/api/v1/tls/renew` | 即時証明書更新とアトミックリロードを実行 |
 | `GET` | `/api/v1/intel` | 脅威・AI クローラー・VPN/Tor フィード件数（`vpn_detection_enabled`, `vpn_entries`, `vpn_cache_size`, `reputation_cache_size`）、更新タイムスタンプ、フィード別ステータス（`threat`, `ai`, `vpn`） |
