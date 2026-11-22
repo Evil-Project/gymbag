@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"gymbag/internal/config"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/setup"
 )
 
@@ -411,18 +413,19 @@ func TestCLIInitSSHMinecraftAndCombinedTemplates(t *testing.T) {
 		dir := t.TempDir()
 		outCfgPath := filepath.Join(dir, "wizard-tcp.json")
 		answers := strings.Join([]string{
-			"ssh,minecraft",               // services
-			"2200",                        // ssh listen port
-			"127.0.0.1:2201",              // ssh upstream
-			"25570",                       // minecraft listen port
-			"127.0.0.1:25571",             // minecraft upstream
-			"1",                           // verify level (only suspicious)
+			"ssh,minecraft",                 // services
+			"2200",                          // ssh listen port
+			"127.0.0.1:2201",                // ssh upstream
+			"25570",                         // minecraft listen port
+			"",                              // optional server_jar
+			"127.0.0.1:25571",               // minecraft upstream
+			"1",                             // verify level (only suspicious)
 			"https://gate.example.com:9443", // verify URL
-			"9443",                        // verify port
-			"letsencrypt",                 // ssl provider (because verify URL host is public DNS)
-			"ops@example.com",             // acme email
-			"n",                           // admin API
-			"none",                        // service
+			"9443",                          // verify port
+			"letsencrypt",                   // ssl provider (because verify URL host is public DNS)
+			"ops@example.com",               // acme email
+			"n",                             // admin API
+			"none",                          // service
 		}, "\n") + "\n"
 
 		var out, errBuf bytes.Buffer
@@ -448,4 +451,97 @@ func TestCLIInitSSHMinecraftAndCombinedTemplates(t *testing.T) {
 			t.Fatalf("unexpected Verify config: %+v", cfg.Verify)
 		}
 	})
+}
+
+func TestCLIInitMinecraftServerJar(t *testing.T) {
+	origJavaResolver := mcJavaResolver
+	t.Cleanup(func() { mcJavaResolver = origJavaResolver })
+	mcJavaResolver = func(_ context.Context, jarPath, explicitJava string, _ mcserver.DiscoverOptions) (mcserver.SelectionResult, error) {
+		req, err := mcserver.InspectServerJar(jarPath)
+		if err != nil {
+			return mcserver.SelectionResult{}, err
+		}
+		return mcserver.SelectionResult{
+			Java: mcserver.JavaInstall{
+				Path:       "/opt/jdk-21/bin/java",
+				Major:      21,
+				RawVersion: "21.0.5",
+				Source:     "system",
+			},
+			Requirement: req,
+		}, nil
+	}
+
+	dir := t.TempDir()
+	mcDir := filepath.Join(dir, "paper-server")
+	if err := os.MkdirAll(mcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jarPath := filepath.Join(mcDir, "paper-1.21.4.jar")
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("version.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte(`{"id":"1.21.4","java_version":21}`))
+	_ = zw.Close()
+	if err := os.WriteFile(jarPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outCfgPath := filepath.Join(dir, "mc-jar.json")
+	var out, errBuf bytes.Buffer
+	code := ExecuteWithIO([]string{
+		"init", "-t", "minecraft",
+		"--server-jar", jarPath,
+		"--mc-jvm-args", "-Xms1G -Xmx2G",
+		"-o", outCfgPath,
+	}, strings.NewReader(""), &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("init -t minecraft --server-jar failed (%d): stdout=%s stderr=%s", code, out.String(), errBuf.String())
+	}
+	if !strings.Contains(out.String(), "Selected Java 21 (/opt/jdk-21/bin/java)") ||
+		!strings.Contains(out.String(), "Initialized Minecraft backend:") {
+		t.Fatalf("expected Java selection and seeded server.properties in output:\n%s", out.String())
+	}
+
+	propsBytes, err := os.ReadFile(filepath.Join(mcDir, "server.properties"))
+	if err != nil || !strings.Contains(string(propsBytes), "server-ip=127.0.0.1") || !strings.Contains(string(propsBytes), "server-port=") {
+		t.Fatalf("expected initialized server.properties in jar directory (%v):\n%s", err, string(propsBytes))
+	}
+
+	rawJSON, err := os.ReadFile(outCfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasDefaults := doc["defaults"]; hasDefaults {
+		t.Fatalf("expected concise JSON without defaults boilerplate:\n%s", string(rawJSON))
+	}
+	mcMap, ok := doc["minecraft"].(map[string]any)
+	if !ok || mcMap["server_jar"] != jarPath {
+		t.Fatalf("expected minecraft.server_jar in concise JSON:\n%s", string(rawJSON))
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := Execute([]string{"validate", "-c", outCfgPath}, &out, &errBuf); code != 0 {
+		t.Fatalf("validate failed (%d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "server_jar="+jarPath) {
+		t.Fatalf("expected server_jar in validate output:\n%s", out.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := Execute([]string{"config", "list", "-c", outCfgPath}, &out, &errBuf); code != 0 {
+		t.Fatalf("config list failed (%d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "jar="+jarPath) {
+		t.Fatalf("expected jar= in config list output:\n%s", out.String())
+	}
 }

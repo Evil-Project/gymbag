@@ -192,3 +192,27 @@ func TestGenerateConfigConciseTemplates(t *testing.T) {
 		t.Fatalf("reparsed all-in-one mismatch: %+v", reparsedAll)
 	}
 }
+
+func TestGenerateConfigMinecraftServerJarFields(t *testing.T) {
+	f := false
+	raw, cfg, err := RenderGeneratedConfig(GenerateOptions{
+		Templates: []string{"minecraft"},
+		Minecraft: &TCPSpec{
+			Upstream:    "127.0.0.1:41234",
+			ServerJar:   "/srv/mc/paper.jar",
+			JVMArgs:     []string{"-Xms1G", "-Xmx2G"},
+			WorkDir:     "/srv/mc",
+			AutoRestart: &f,
+		},
+		Format: "json",
+	})
+	if err != nil {
+		t.Fatalf("RenderGeneratedConfig MC jar failed: %v", err)
+	}
+	if cfg.Minecraft.ServerJar != "/srv/mc/paper.jar" || cfg.Minecraft.WorkDir != "/srv/mc" || cfg.Minecraft.AutoRestartEnabled() {
+		t.Fatalf("unexpected generated MC config: %+v", cfg.Minecraft)
+	}
+	if !strings.Contains(string(raw), `"server_jar": "/srv/mc/paper.jar"`) || !strings.Contains(string(raw), `"auto_restart": false`) {
+		t.Fatalf("expected server_jar and auto_restart in concise JSON:\n%s", string(raw))
+	}
+}

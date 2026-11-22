@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -16,12 +17,14 @@ type MinecraftSetupOptions struct {
 	MinecraftListenPort int
 	VerifyPort          int
 	BindLoopbackIfEmpty bool
+	CreateIfMissing     bool
 }
 
 // MinecraftSetupResult summarizes updates applied to a Minecraft server.properties file.
 type MinecraftSetupResult struct {
 	PropertiesPath string
 	BackupPath     string
+	Created        bool
 	PreviousPort   string
 	BackendPort    int
 	UpstreamHost   string
@@ -115,6 +118,24 @@ func SetupMinecraftProtection(opts MinecraftSetupOptions) (*MinecraftSetupResult
 
 	info, err := os.Stat(propPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && opts.CreateIfMissing {
+			if dir := filepath.Dir(propPath); dir != "" && dir != "." {
+				if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+					return nil, fmt.Errorf("failed to create directory for %s: %w", propPath, mkErr)
+				}
+			}
+			initial := fmt.Sprintf("# Minecraft server properties (initialized by gymbag)\nserver-ip=127.0.0.1\nserver-port=%d\n", backendPort)
+			if wErr := writeFilePreserveMode(propPath, []byte(initial), 0o644); wErr != nil {
+				return nil, fmt.Errorf("failed to create %s: %w", propPath, wErr)
+			}
+			return &MinecraftSetupResult{
+				PropertiesPath: propPath,
+				Created:        true,
+				BackendPort:    backendPort,
+				UpstreamHost:   "127.0.0.1",
+				Upstream:       fmt.Sprintf("127.0.0.1:%d", backendPort),
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to stat %s: %w", propPath, err)
 	}
 	origBytes, err := os.ReadFile(propPath)

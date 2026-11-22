@@ -27,6 +27,12 @@ type TCPSpec struct {
 	Port             int
 	Upstream         string
 	ServerProperties string
+	ServerJar        string
+	JavaPath         string
+	JVMArgs          []string
+	ServerArgs       []string
+	WorkDir          string
+	AutoRestart      *bool
 	VerifyLevel      string
 	Protect          *bool
 	Difficulty       int
@@ -418,6 +424,25 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 			}
 			if opts.Minecraft.ServerProperties != "" {
 				mcCfg.ServerProperties = opts.Minecraft.ServerProperties
+			}
+			if opts.Minecraft.ServerJar != "" {
+				mcCfg.ServerJar = opts.Minecraft.ServerJar
+			}
+			if opts.Minecraft.JavaPath != "" {
+				mcCfg.JavaPath = opts.Minecraft.JavaPath
+			}
+			if len(opts.Minecraft.JVMArgs) > 0 {
+				mcCfg.JVMArgs = append([]string(nil), opts.Minecraft.JVMArgs...)
+			}
+			if len(opts.Minecraft.ServerArgs) > 0 {
+				mcCfg.ServerArgs = append([]string(nil), opts.Minecraft.ServerArgs...)
+			}
+			if opts.Minecraft.WorkDir != "" {
+				mcCfg.WorkDir = opts.Minecraft.WorkDir
+			}
+			if opts.Minecraft.AutoRestart != nil {
+				b := *opts.Minecraft.AutoRestart
+				mcCfg.AutoRestart = &b
 			}
 			if opts.Minecraft.VerifyLevel != "" {
 				lvl, p, vErr := ParseVerifyLevel(opts.Minecraft.VerifyLevel)

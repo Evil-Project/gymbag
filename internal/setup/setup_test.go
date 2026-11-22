@@ -284,3 +284,27 @@ func TestSetupMinecraftProtection(t *testing.T) {
 		}
 	})
 }
+
+func TestSetupMinecraftProtectionCreateIfMissing(t *testing.T) {
+	dir := t.TempDir()
+	propPath := filepath.Join(dir, "fresh", "server.properties")
+	res, err := SetupMinecraftProtection(MinecraftSetupOptions{
+		PropertiesPath:      propPath,
+		BackendPort:         45123,
+		BindLoopbackIfEmpty: true,
+		CreateIfMissing:     true,
+	})
+	if err != nil {
+		t.Fatalf("SetupMinecraftProtection CreateIfMissing failed: %v", err)
+	}
+	if !res.Created || res.BackupPath != "" || res.Upstream != "127.0.0.1:45123" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	raw, err := os.ReadFile(propPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "server-ip=127.0.0.1\n") || !strings.Contains(string(raw), "server-port=45123\n") {
+		t.Fatalf("unexpected created server.properties:\n%s", string(raw))
+	}
+}

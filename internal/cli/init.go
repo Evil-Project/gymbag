@@ -15,6 +15,7 @@ import (
 
 	"gymbag/internal/config"
 	"gymbag/internal/localpki"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/service"
 	"gymbag/internal/setup"
 )
@@ -22,6 +23,7 @@ import (
 var (
 	sshSetupRunner = setup.SetupSSHProtection
 	mcSetupRunner  = setup.SetupMinecraftProtection
+	mcJavaResolver = mcserver.ResolveJavaForJar
 )
 
 type multiStringFlag []string
@@ -55,6 +57,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mcPort             int
 		mcUpstream         string
 		mcPropertiesPath   string
+		mcJar              string
+		mcJava             string
+		mcJVMArgs          string
+		mcWorkDir          string
 		verifyURL          string
 		verifyPort         int
 		noAutoSetup        bool
@@ -119,6 +125,12 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&mcUpstream, "minecraft-upstream", "", "Alias for --mc-upstream")
 	fs.StringVar(&mcPropertiesPath, "mc-properties", "", "Path to server.properties for automatic random-port setup (default server.properties)")
 	fs.StringVar(&mcPropertiesPath, "server-properties", "", "Alias for --mc-properties")
+	fs.StringVar(&mcJar, "mc-jar", "", "Path to Minecraft server .jar (enables auto-start & automatic Java selection)")
+	fs.StringVar(&mcJar, "server-jar", "", "Alias for --mc-jar")
+	fs.StringVar(&mcJava, "mc-java", "", "Explicit Java binary path for Minecraft server (defaults to auto-select)")
+	fs.StringVar(&mcJava, "java", "", "Alias for --mc-java")
+	fs.StringVar(&mcJVMArgs, "mc-jvm-args", "", "Space-separated JVM flags for Minecraft server (e.g. '-Xms1G -Xmx2G')")
+	fs.StringVar(&mcWorkDir, "mc-work-dir", "", "Working directory for managed Minecraft server (defaults to JAR directory)")
 	fs.StringVar(&verifyURL, "verify-url", "", "Public HTTPS verification portal URL for SSH/Minecraft (defaults to server IP)")
 	fs.IntVar(&verifyPort, "verify-port", 0, "Shared HTTPS verification portal port (default 8443)")
 	fs.BoolVar(&noAutoSetup, "no-auto-setup", false, "Skip automatic sshd_config/firewall and server.properties modifications")
@@ -239,7 +251,8 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if enableSSH || sshPort != 0 || sshUpstream != "" || sshdConfigPath != "" {
 		useSSH = true
 	}
-	if enableMC || mcPort != 0 || mcUpstream != "" || mcPropertiesPath != "" {
+	if enableMC || mcPort != 0 || mcUpstream != "" || mcPropertiesPath != "" ||
+		mcJar != "" || mcJava != "" || mcJVMArgs != "" || mcWorkDir != "" {
 		useMC = true
 	}
 	if domain != "" || upstream != "" || len(parsedSites) > 0 {
@@ -308,7 +321,14 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		opts.SSH = &config.TCPSpec{Port: sshPort, Upstream: sshUpstream}
 	}
 	if useMC {
-		opts.Minecraft = &config.TCPSpec{Port: mcPort, Upstream: mcUpstream}
+		opts.Minecraft = &config.TCPSpec{
+			Port:      mcPort,
+			Upstream:  mcUpstream,
+			ServerJar: mcJar,
+			JavaPath:  mcJava,
+			JVMArgs:   strings.Fields(mcJVMArgs),
+			WorkDir:   mcWorkDir,
+		}
 	}
 
 	hasConfigFlags := len(templateFlags) > 0 || preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
@@ -408,24 +428,53 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				_, _ = fmt.Fprintf(stderr, "WARN gymbag init: %s\n", w)
 			}
 		}
-		if useMC && opts.Minecraft != nil && strings.TrimSpace(opts.Minecraft.Upstream) == "" {
+		if useMC && opts.Minecraft != nil {
 			listenPort := opts.Minecraft.Port
 			if listenPort <= 0 {
 				listenPort = config.DefaultMinecraftPort
 			}
-			res, mErr := mcSetupRunner(setup.MinecraftSetupOptions{
-				PropertiesPath:      mcPropertiesPath,
-				MinecraftListenPort: listenPort,
-				VerifyPort:          effectiveVerifyPort,
-				BindLoopbackIfEmpty: true,
-			})
-			if mErr != nil {
-				_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: automatic Minecraft setup failed: %v\nHint: pass --server-properties <path/to/server.properties>, pass --mc-upstream 127.0.0.1:<port>, or use --no-auto-setup\n", mErr)
-				return 1
+			hasJar := strings.TrimSpace(opts.Minecraft.ServerJar) != ""
+			if strings.TrimSpace(opts.Minecraft.Upstream) == "" {
+				propsPath := strings.TrimSpace(mcPropertiesPath)
+				if propsPath == "" && hasJar {
+					baseDir := strings.TrimSpace(opts.Minecraft.WorkDir)
+					if baseDir == "" {
+						baseDir = filepath.Dir(opts.Minecraft.ServerJar)
+					}
+					propsPath = filepath.Join(baseDir, "server.properties")
+				}
+				res, mErr := mcSetupRunner(setup.MinecraftSetupOptions{
+					PropertiesPath:      propsPath,
+					MinecraftListenPort: listenPort,
+					VerifyPort:          effectiveVerifyPort,
+					BindLoopbackIfEmpty: true,
+					CreateIfMissing:     hasJar,
+				})
+				if mErr != nil {
+					_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: automatic Minecraft setup failed: %v\nHint: pass --server-properties <path/to/server.properties>, pass --mc-upstream 127.0.0.1:<port>, or use --no-auto-setup\n", mErr)
+					return 1
+				}
+				opts.Minecraft.Upstream = res.Upstream
+				if res.Created {
+					_, _ = fmt.Fprintf(stdout, "Initialized Minecraft backend: %s server-port=%d -> %s\n",
+						res.PropertiesPath, res.BackendPort, res.Upstream)
+				} else {
+					_, _ = fmt.Fprintf(stdout, "Configured Minecraft backend: %s server-port=%d -> %s (backup: %s)\n",
+						res.PropertiesPath, res.BackendPort, res.Upstream, res.BackupPath)
+				}
 			}
-			opts.Minecraft.Upstream = res.Upstream
-			_, _ = fmt.Fprintf(stdout, "Configured Minecraft backend: %s server-port=%d -> %s (backup: %s)\n",
-				res.PropertiesPath, res.BackendPort, res.Upstream, res.BackupPath)
+			if hasJar {
+				sel, jErr := mcJavaResolver(context.Background(), opts.Minecraft.ServerJar, opts.Minecraft.JavaPath, mcserver.DiscoverOptions{})
+				if jErr != nil {
+					_, _ = fmt.Fprintf(stderr, "WARN gymbag init: Java auto-selection note for %s: %v\n", opts.Minecraft.ServerJar, jErr)
+				} else {
+					_, _ = fmt.Fprintf(stdout, "Selected Java %d (%s) for %s (requires Java %d+)\n",
+						sel.Java.Major, sel.Java.Path, opts.Minecraft.ServerJar, sel.Requirement.MinMajor)
+					if sel.Warning != "" {
+						_, _ = fmt.Fprintf(stderr, "WARN gymbag init: %s\n", sel.Warning)
+					}
+				}
+			}
 		}
 	}
 
@@ -472,7 +521,11 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if !cfg.Minecraft.Protect {
 			mode = "protect off"
 		}
-		summaries = append(summaries, fmt.Sprintf("minecraft :%d -> %s (%s)", cfg.Minecraft.Port, cfg.Minecraft.Upstream, mode))
+		jarNote := ""
+		if cfg.Minecraft.ServerJar != "" {
+			jarNote = ", jar: " + cfg.Minecraft.ServerJar
+		}
+		summaries = append(summaries, fmt.Sprintf("minecraft :%d -> %s (%s%s)", cfg.Minecraft.Port, cfg.Minecraft.Upstream, mode, jarNote))
 	}
 	_, _ = fmt.Fprintf(stdout, "Generated %s (%s)\n", outputPath, strings.Join(summaries, "; "))
 	if cfg.NeedsVerifyServer() {
@@ -639,6 +692,13 @@ func runInitWizard(
 			}
 			opts.Minecraft.Port = p
 		}
+		if opts.Minecraft.ServerJar == "" {
+			ans, err := promptLine(r, out, "Minecraft server .jar path (optional; auto-starts server & selects Java automatically)", "")
+			if err != nil {
+				return "", err
+			}
+			opts.Minecraft.ServerJar = ans
+		}
 		if opts.Minecraft.Upstream == "" {
 			ans, err := promptLine(r, out, "Minecraft backend upstream ('auto' to randomize server.properties port, or host:port)", "auto")
 			if err != nil {
@@ -649,7 +709,13 @@ func runInitWizard(
 			}
 		}
 		if opts.Minecraft.Upstream == "" && !skipAutoSetup && *mcPropertiesPath == "" {
-			ans, err := promptLine(r, out, "Path to Minecraft server.properties", "server.properties")
+			defProps := "server.properties"
+			if opts.Minecraft.WorkDir != "" {
+				defProps = filepath.Join(opts.Minecraft.WorkDir, "server.properties")
+			} else if opts.Minecraft.ServerJar != "" {
+				defProps = filepath.Join(filepath.Dir(opts.Minecraft.ServerJar), "server.properties")
+			}
+			ans, err := promptLine(r, out, "Path to Minecraft server.properties", defProps)
 			if err != nil {
 				return "", err
 			}
@@ -855,17 +921,18 @@ Two-command quickstart:
   SSH protection (moves sshd to random port + configures firewall):
     1. sudo gymbag init -t ssh
     2. sudo gymbag
-  Minecraft protection (moves server-port in server.properties to random port):
-    1. gymbag init -t minecraft --server-properties /path/to/server.properties
+  Minecraft protection (auto-starts server jar with best Java + randomizes port):
+    1. gymbag init -t minecraft --server-jar /srv/mc/server.jar
     2. gymbag
   All-in-One (HTTP + SSH + Minecraft in one process):
-    1. gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+    1. gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-jar /srv/mc/server.jar
     2. gymbag
 
 Examples:
   gymbag init                                         # Interactive wizard -> ./gymbag.json
   gymbag init --yes                                   # Non-interactive default localhost JSON config
   gymbag init -t ssh --verify-url https://verify.example.com:8443
+  gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-jvm-args "-Xms1G -Xmx4G"
   gymbag init -t minecraft --server-properties ./server.properties --verify-port 8443
   gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --ssh-upstream 127.0.0.1:2222 --mc-upstream 127.0.0.1:25566
   gymbag init --format gymbagfile                     # Generate Caddyfile-style Gymbagfile instead of JSON
@@ -888,6 +955,10 @@ Flags:
       --mc-port <port>         Minecraft listen port (default 25565)
       --mc-upstream <addr>     Explicit Minecraft upstream (skips automatic server.properties changes)
       --server-properties <p>  Path to Minecraft server.properties (default server.properties)
+      --mc-jar, --server-jar   Path to Minecraft server .jar (auto-starts server & selects Java automatically)
+      --mc-java, --java <bin>  Explicit Java binary path for Minecraft server (defaults to auto-select)
+      --mc-jvm-args <args>     Space-separated JVM flags (e.g. "-Xms1G -Xmx4G")
+      --mc-work-dir <dir>      Working directory for managed Minecraft server (defaults to JAR directory)
       --verify-url <url>       Public HTTPS verify portal URL for SSH/Minecraft (defaults to server IP + IP SSL cert)
       --verify-port <port>     Shared HTTPS verify portal port for SSH/Minecraft (default 8443)
       --no-auto-setup          Skip automatic sshd_config/firewall and server.properties modifications

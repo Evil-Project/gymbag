@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"gymbag/internal/config"
 	"gymbag/internal/localpki"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/server"
 )
 
@@ -285,6 +287,20 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 			mcState = "unprotected"
 		}
 		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s [%s]\n", cfg.Minecraft.Port, cfg.Minecraft.Upstream, mcState)
+		if cfg.Minecraft.ServerJar != "" {
+			jarResolved := cfg.Minecraft.ServerJar
+			if !filepath.IsAbs(jarResolved) && cfg.BaseDir != "" {
+				jarResolved = filepath.Join(cfg.BaseDir, jarResolved)
+			}
+			if sel, jErr := mcserver.ResolveJavaForJar(context.Background(), jarResolved, cfg.Minecraft.JavaPath, mcserver.DiscoverOptions{}); jErr == nil {
+				_, _ = fmt.Fprintf(stdout, "    server_jar=%s, java=%d (%s)\n", cfg.Minecraft.ServerJar, sel.Java.Major, sel.Java.Path)
+				if sel.Warning != "" {
+					_, _ = fmt.Fprintf(stdout, "    java_warning=%s\n", sel.Warning)
+				}
+			} else {
+				_, _ = fmt.Fprintf(stdout, "    server_jar=%s (note: %v)\n", cfg.Minecraft.ServerJar, jErr)
+			}
+		}
 	}
 	if cfg.NeedsVerifyServer() {
 		vTarget := cfg.Verify.URL
@@ -500,8 +516,8 @@ Quick Start (Two Commands):
   SSH Protection (randomizes sshd port + sets firewall):
     1. sudo gymbag init -t ssh
     2. sudo gymbag
-  Minecraft Protection (randomizes server.properties port):
-    1. gymbag init -t minecraft --server-properties /path/to/server.properties
+  Minecraft Protection (auto-starts server jar with best Java + randomizes port):
+    1. gymbag init -t minecraft --server-jar /srv/mc/server.jar
     2. gymbag
   All-in-One (HTTP + SSH + Minecraft in one process):
     1. gymbag init -t http,ssh,minecraft -d app.example.com -u :3000

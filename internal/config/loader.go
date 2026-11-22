@@ -786,9 +786,15 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 	rawEnabled := firstNonEmpty(getenv("GYMBAG_MC_ENABLED"), getenv("GYMBAG_MINECRAFT_ENABLED"))
 	rawPort := firstNonEmpty(getenv("GYMBAG_MC_PORT"), getenv("GYMBAG_MINECRAFT_PORT"))
 	rawUp := firstNonEmpty(getenv("GYMBAG_MC_UPSTREAM"), getenv("GYMBAG_MINECRAFT_UPSTREAM"))
+	rawJar := firstNonEmpty(getenv("GYMBAG_MC_SERVER_JAR"), getenv("GYMBAG_MINECRAFT_SERVER_JAR"), getenv("GYMBAG_MC_JAR"))
+	rawJava := firstNonEmpty(getenv("GYMBAG_MC_JAVA"), getenv("GYMBAG_MINECRAFT_JAVA"), getenv("GYMBAG_MC_JAVA_PATH"))
+	rawJVM := firstNonEmpty(getenv("GYMBAG_MC_JVM_ARGS"), getenv("GYMBAG_MINECRAFT_JVM_ARGS"))
+	rawWorkDir := firstNonEmpty(getenv("GYMBAG_MC_WORK_DIR"), getenv("GYMBAG_MINECRAFT_WORK_DIR"))
+	rawAutoRestart := firstNonEmpty(getenv("GYMBAG_MC_AUTO_RESTART"), getenv("GYMBAG_MINECRAFT_AUTO_RESTART"))
 	rawVerify := firstNonEmpty(getenv("GYMBAG_MC_VERIFY_LEVEL"), getenv("GYMBAG_MINECRAFT_VERIFY_LEVEL"))
 	rawProtect := firstNonEmpty(getenv("GYMBAG_MC_PROTECT"), getenv("GYMBAG_MINECRAFT_PROTECT"))
-	if rawEnabled == "" && rawPort == "" && rawUp == "" && rawVerify == "" && rawProtect == "" {
+	if rawEnabled == "" && rawPort == "" && rawUp == "" && rawJar == "" && rawJava == "" &&
+		rawJVM == "" && rawWorkDir == "" && rawAutoRestart == "" && rawVerify == "" && rawProtect == "" {
 		return false, nil
 	}
 	if cfg.Minecraft == nil {
@@ -801,7 +807,7 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 			return false, err
 		}
 		cfg.Minecraft.Enabled = b
-	} else if rawUp != "" || rawPort != "" {
+	} else if rawUp != "" || rawPort != "" || rawJar != "" {
 		cfg.Minecraft.Enabled = true
 	}
 	if rawPort != "" {
@@ -817,6 +823,28 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 			return false, err
 		}
 		cfg.Minecraft.Upstream = norm
+	}
+	if rawJar != "" {
+		cfg.Minecraft.ServerJar = rawJar
+		if cfg.Minecraft.Upstream == "" {
+			cfg.Minecraft.Upstream = "127.0.0.1:25566"
+		}
+	}
+	if rawJava != "" {
+		cfg.Minecraft.JavaPath = rawJava
+	}
+	if rawJVM != "" {
+		cfg.Minecraft.JVMArgs = strings.Fields(rawJVM)
+	}
+	if rawWorkDir != "" {
+		cfg.Minecraft.WorkDir = rawWorkDir
+	}
+	if rawAutoRestart != "" {
+		b, err := parseBool(rawAutoRestart, "GYMBAG_MC_AUTO_RESTART")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.AutoRestart = &b
 	}
 	if rawVerify != "" {
 		lvl, prot, err := ParseVerifyLevel(rawVerify)

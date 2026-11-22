@@ -24,6 +24,7 @@ import (
 	"gymbag/internal/host"
 	"gymbag/internal/intel"
 	"gymbag/internal/localpki"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/proxy"
 	"gymbag/internal/store"
 	"gymbag/internal/tcpguard"
@@ -32,7 +33,7 @@ import (
 )
 
 // RuntimeOptions allows dependency injection of custom transports, stores, intelligence managers,
-// remote rules managers, ACME clients, hosts file paths, and loggers.
+// remote rules managers, ACME clients, hosts file paths, managed Minecraft options, and loggers.
 type RuntimeOptions struct {
 	Store                store.Store
 	Intel                *intel.Manager
@@ -46,12 +47,13 @@ type RuntimeOptions struct {
 	HostsFilePath        string
 	DisablePublicIPProbe bool
 	ServerIPs            []string
+	MCServerOptions      *mcserver.Options
 	Logger               *slog.Logger
 }
 
 // Runtime is the composition root wiring configuration, WAF, IP intelligence, remote rules,
-// reverse proxy, SSH/Minecraft protection proxies, verify portal, TLS, local PKI hosts management,
-// and HTTP handlers.
+// reverse proxy, SSH/Minecraft protection proxies, managed Minecraft server, verify portal, TLS,
+// local PKI hosts management, and HTTP handlers.
 type Runtime struct {
 	mu                  sync.RWMutex
 	cfg                 config.Config
@@ -79,6 +81,7 @@ type Runtime struct {
 	VerifyPortal      *tcpguard.VerifyPortal
 	SSHProxy          *tcpguard.SSHProxy
 	MinecraftProxy    *tcpguard.MinecraftProxy
+	MinecraftServer   *mcserver.Manager
 	Hosts             *localpki.HostsManager
 	HSTS              atomic.Bool
 
@@ -300,6 +303,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		verifyPortal        *tcpguard.VerifyPortal
 		sshProxy            *tcpguard.SSHProxy
 		mcProxy             *tcpguard.MinecraftProxy
+		mcServer            *mcserver.Manager
 	)
 	if cfg.NeedsVerifyServer() {
 		gateStore, ok := st.(store.GateStore)
@@ -349,6 +353,19 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		}
 		if cfg.MinecraftEnabled() {
 			mcProxy = tcpguard.NewMinecraftProxy(*cfg.Minecraft, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
+			if cfg.Minecraft.ServerJar != "" {
+				mcOpts := mcserver.Options{
+					BaseDir: cfg.BaseDir,
+					Config:  *cfg.Minecraft,
+					Logger:  logger,
+				}
+				if opts.MCServerOptions != nil {
+					mcOpts.Discover = opts.MCServerOptions.Discover
+					mcOpts.CommandBuilder = opts.MCServerOptions.CommandBuilder
+					mcOpts.RestartBaseDelay = opts.MCServerOptions.RestartBaseDelay
+				}
+				mcServer = mcserver.NewManager(mcOpts)
+			}
 		}
 	}
 
@@ -377,6 +394,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		VerifyPortal:        verifyPortal,
 		SSHProxy:            sshProxy,
 		MinecraftProxy:      mcProxy,
+		MinecraftServer:     mcServer,
 		Hosts:               hostsMgr,
 	}
 	if cfg.TLS.HSTS != nil {
@@ -762,8 +780,21 @@ func (rt *Runtime) RefreshRemoteRules(ctx context.Context) waf.RemoteRulesStatus
 	return rt.RemoteRules.RefreshNow(ctx)
 }
 
-// Close removes any managed hosts entries and releases underlying state store resources.
+// MinecraftServerStatus returns live managed Minecraft server subprocess status, or nil when unused.
+func (rt *Runtime) MinecraftServerStatus() *mcserver.Status {
+	if rt.MinecraftServer == nil {
+		return nil
+	}
+	st := rt.MinecraftServer.Status()
+	return &st
+}
+
+// Close stops any managed Minecraft server, removes managed hosts entries, and releases state store resources.
 func (rt *Runtime) Close() error {
+	var mcErr error
+	if rt.MinecraftServer != nil {
+		mcErr = rt.MinecraftServer.Stop(5 * time.Second)
+	}
 	hostsErr := rt.CleanupHosts()
 	if errors.Is(hostsErr, localpki.ErrPermissionDenied) {
 		hostsErr = nil
@@ -773,7 +804,7 @@ func (rt *Runtime) Close() error {
 	if rt.fallbackGateStore != nil {
 		fallbackErr = rt.fallbackGateStore.Close()
 	}
-	return errors.Join(hostsErr, storeErr, fallbackErr)
+	return errors.Join(mcErr, hostsErr, storeErr, fallbackErr)
 }
 
 // Serve starts automatic /etc/hosts setup (when enabled), background IP/AI/VPN feed auto-updates,
@@ -858,6 +889,7 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 			"configured Minecraft protection",
 			"port", cfg.Minecraft.Port,
 			"upstream", cfg.Minecraft.Upstream,
+			"server_jar", cfg.Minecraft.ServerJar,
 			"protected", cfg.Minecraft.Protect,
 			"verify_level", int(cfg.Minecraft.VerifyLevel),
 		)
@@ -896,6 +928,9 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 		}
 		if mcLn != nil {
 			_ = mcLn.Close()
+		}
+		if rt.MinecraftServer != nil {
+			_ = rt.MinecraftServer.Stop(timeout)
 		}
 		shutCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
@@ -1041,6 +1076,12 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 	}
 
 	if cfg.MinecraftEnabled() && rt.MinecraftProxy != nil {
+		if rt.MinecraftServer != nil {
+			if startErr := rt.MinecraftServer.Start(serveCtx); startErr != nil {
+				shutdownAll(5 * time.Second)
+				return fmt.Errorf("failed to start Minecraft server: %w", startErr)
+			}
+		}
 		mcAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.Minecraft.Port))
 		ln, err := net.Listen("tcp", mcAddr)
 		if err != nil {

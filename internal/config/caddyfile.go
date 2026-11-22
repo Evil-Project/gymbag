@@ -1959,6 +1959,12 @@ type tcpBlockFields struct {
 	port             int
 	upstream         string
 	serverProperties string
+	serverJar        string
+	javaPath         string
+	jvmArgs          []string
+	serverArgs       []string
+	workDir          string
+	autoRestart      *bool
 	protect          bool
 	waf              SiteWAFConfig
 	verifyURL        string
@@ -2040,6 +2046,66 @@ func parseTCPServiceBlock(block *parsedBlock, service string, defaultPort int, s
 				return out, fmt.Errorf("server_properties requires a file path")
 			}
 			out.serverProperties = strings.TrimSpace(args[0])
+		case "server_jar", "jar":
+			if service != "minecraft" {
+				return out, fmt.Errorf("%s is only valid inside minecraft block", dname)
+			}
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s requires a path to the server .jar file", dname)
+			}
+			out.serverJar = strings.TrimSpace(args[0])
+		case "java_path", "java":
+			if service != "minecraft" {
+				return out, fmt.Errorf("%s is only valid inside minecraft block", dname)
+			}
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s requires a path to the java binary", dname)
+			}
+			out.javaPath = strings.TrimSpace(args[0])
+		case "jvm_args":
+			if service != "minecraft" {
+				return out, fmt.Errorf("jvm_args is only valid inside minecraft block")
+			}
+			if len(args) == 0 {
+				return out, fmt.Errorf("jvm_args requires at least one argument")
+			}
+			if len(args) == 1 && strings.ContainsAny(args[0], " \t") {
+				out.jvmArgs = append(out.jvmArgs, strings.Fields(args[0])...)
+			} else {
+				out.jvmArgs = append(out.jvmArgs, args...)
+			}
+		case "server_args":
+			if service != "minecraft" {
+				return out, fmt.Errorf("server_args is only valid inside minecraft block")
+			}
+			if len(args) == 0 {
+				return out, fmt.Errorf("server_args requires at least one argument")
+			}
+			if len(args) == 1 && strings.ContainsAny(args[0], " \t") {
+				out.serverArgs = append(out.serverArgs, strings.Fields(args[0])...)
+			} else {
+				out.serverArgs = append(out.serverArgs, args...)
+			}
+		case "work_dir":
+			if service != "minecraft" {
+				return out, fmt.Errorf("work_dir is only valid inside minecraft block")
+			}
+			if len(args) != 1 {
+				return out, fmt.Errorf("work_dir requires a directory path")
+			}
+			out.workDir = strings.TrimSpace(args[0])
+		case "auto_restart":
+			if service != "minecraft" {
+				return out, fmt.Errorf("auto_restart is only valid inside minecraft block")
+			}
+			if len(args) != 1 {
+				return out, fmt.Errorf("auto_restart requires on/off or true/false")
+			}
+			b, err := parseBool(args[0], "minecraft auto_restart")
+			if err != nil {
+				return out, err
+			}
+			out.autoRestart = &b
 		case "verify_url":
 			if len(args) != 1 {
 				return out, fmt.Errorf("%s verify_url requires a hostname or https:// URL", service)
@@ -2108,6 +2174,12 @@ func parseMinecraftBlock(block *parsedBlock, st *parseState) (MinecraftConfig, e
 		Port:             f.port,
 		Upstream:         f.upstream,
 		ServerProperties: f.serverProperties,
+		ServerJar:        f.serverJar,
+		JavaPath:         f.javaPath,
+		JVMArgs:          f.jvmArgs,
+		ServerArgs:       f.serverArgs,
+		WorkDir:          f.workDir,
+		AutoRestart:      f.autoRestart,
 		Protect:          f.protect,
 		VerifyLevel:      f.waf.VerifyLevel,
 		Difficulty:       f.waf.Difficulty,
@@ -2464,63 +2536,139 @@ func FormatConfig(cfg Config) string {
 		if wroteBlock {
 			b.WriteByte('\n')
 		}
-		formatTCPServiceBlock(&b, "ssh", DefaultSSHPort, cfg.SSH.Port, cfg.SSH.Upstream, "", cfg.SSH.Protect, cfg.SSH.VerifyLevel, cfg.SSH.Difficulty, cfg.SSH.RateLimit, cfg.SSH.RateWindow, cfg.SSH.ChallengeTTL, cfg.SSH.ClearanceTTL, cfg.SSH.VerifyURL, cfg.SSH.VerifyPort, cfg.SSH.Rules)
+		formatTCPServiceBlock(&b, tcpFormatSpec{
+			name:         "ssh",
+			defaultPort:  DefaultSSHPort,
+			port:         cfg.SSH.Port,
+			upstream:     cfg.SSH.Upstream,
+			protect:      cfg.SSH.Protect,
+			verifyLevel:  cfg.SSH.VerifyLevel,
+			difficulty:   cfg.SSH.Difficulty,
+			rateLimit:    cfg.SSH.RateLimit,
+			rateWindow:   cfg.SSH.RateWindow,
+			challengeTTL: cfg.SSH.ChallengeTTL,
+			clearanceTTL: cfg.SSH.ClearanceTTL,
+			verifyURL:    cfg.SSH.VerifyURL,
+			verifyPort:   cfg.SSH.VerifyPort,
+			rules:        cfg.SSH.Rules,
+		})
 		wroteBlock = true
 	}
 	if cfg.MinecraftEnabled() {
 		if wroteBlock {
 			b.WriteByte('\n')
 		}
-		formatTCPServiceBlock(&b, "minecraft", DefaultMinecraftPort, cfg.Minecraft.Port, cfg.Minecraft.Upstream, cfg.Minecraft.ServerProperties, cfg.Minecraft.Protect, cfg.Minecraft.VerifyLevel, cfg.Minecraft.Difficulty, cfg.Minecraft.RateLimit, cfg.Minecraft.RateWindow, cfg.Minecraft.ChallengeTTL, cfg.Minecraft.ClearanceTTL, cfg.Minecraft.VerifyURL, cfg.Minecraft.VerifyPort, cfg.Minecraft.Rules)
+		formatTCPServiceBlock(&b, tcpFormatSpec{
+			name:         "minecraft",
+			defaultPort:  DefaultMinecraftPort,
+			port:         cfg.Minecraft.Port,
+			upstream:     cfg.Minecraft.Upstream,
+			serverProps:  cfg.Minecraft.ServerProperties,
+			serverJar:    cfg.Minecraft.ServerJar,
+			javaPath:     cfg.Minecraft.JavaPath,
+			jvmArgs:      cfg.Minecraft.JVMArgs,
+			serverArgs:   cfg.Minecraft.ServerArgs,
+			workDir:      cfg.Minecraft.WorkDir,
+			autoRestart:  cfg.Minecraft.AutoRestart,
+			protect:      cfg.Minecraft.Protect,
+			verifyLevel:  cfg.Minecraft.VerifyLevel,
+			difficulty:   cfg.Minecraft.Difficulty,
+			rateLimit:    cfg.Minecraft.RateLimit,
+			rateWindow:   cfg.Minecraft.RateWindow,
+			challengeTTL: cfg.Minecraft.ChallengeTTL,
+			clearanceTTL: cfg.Minecraft.ClearanceTTL,
+			verifyURL:    cfg.Minecraft.VerifyURL,
+			verifyPort:   cfg.Minecraft.VerifyPort,
+			rules:        cfg.Minecraft.Rules,
+		})
 	}
 	return b.String()
 }
 
-func formatTCPServiceBlock(
-	b *strings.Builder,
-	name string,
-	defaultPort, port int,
-	upstream, serverProps string,
-	protect bool,
-	verifyLevel VerifyLevel,
-	difficulty, rateLimit, rateWindow, challengeTTL, clearanceTTL int,
-	verifyURL string,
-	verifyPort int,
-	rules []CustomRule,
-) {
-	b.WriteString(name)
+type tcpFormatSpec struct {
+	name         string
+	defaultPort  int
+	port         int
+	upstream     string
+	serverProps  string
+	serverJar    string
+	javaPath     string
+	jvmArgs      []string
+	serverArgs   []string
+	workDir      string
+	autoRestart  *bool
+	protect      bool
+	verifyLevel  VerifyLevel
+	difficulty   int
+	rateLimit    int
+	rateWindow   int
+	challengeTTL int
+	clearanceTTL int
+	verifyURL    string
+	verifyPort   int
+	rules        []CustomRule
+}
+
+func formatQuotedArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = quoteIfNeeded(a)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func formatTCPServiceBlock(b *strings.Builder, s tcpFormatSpec) {
+	b.WriteString(s.name)
 	b.WriteString(" {\n")
-	if port != 0 && port != defaultPort {
-		b.WriteString(fmt.Sprintf("    port %d\n", port))
+	if s.port != 0 && s.port != s.defaultPort {
+		b.WriteString(fmt.Sprintf("    port %d\n", s.port))
 	}
-	b.WriteString(fmt.Sprintf("    upstream %s\n", upstream))
-	if serverProps != "" {
-		b.WriteString(fmt.Sprintf("    server_properties %s\n", quoteIfNeeded(serverProps)))
+	b.WriteString(fmt.Sprintf("    upstream %s\n", s.upstream))
+	if s.serverProps != "" {
+		b.WriteString(fmt.Sprintf("    server_properties %s\n", quoteIfNeeded(s.serverProps)))
 	}
-	if !protect {
+	if s.serverJar != "" {
+		b.WriteString(fmt.Sprintf("    server_jar %s\n", quoteIfNeeded(s.serverJar)))
+	}
+	if s.javaPath != "" {
+		b.WriteString(fmt.Sprintf("    java_path %s\n", quoteIfNeeded(s.javaPath)))
+	}
+	if len(s.jvmArgs) > 0 {
+		b.WriteString(fmt.Sprintf("    jvm_args %s\n", formatQuotedArgs(s.jvmArgs)))
+	}
+	if len(s.serverArgs) > 0 {
+		b.WriteString(fmt.Sprintf("    server_args %s\n", formatQuotedArgs(s.serverArgs)))
+	}
+	if s.workDir != "" {
+		b.WriteString(fmt.Sprintf("    work_dir %s\n", quoteIfNeeded(s.workDir)))
+	}
+	if s.autoRestart != nil && !*s.autoRestart {
+		b.WriteString("    auto_restart off\n")
+	}
+	if !s.protect {
 		b.WriteString("    protect off\n")
 	} else {
-		b.WriteString(fmt.Sprintf("    verify %d\n", int(verifyLevel)))
-		if difficulty != 0 && difficulty != 4 {
-			b.WriteString(fmt.Sprintf("    difficulty %d\n", difficulty))
+		b.WriteString(fmt.Sprintf("    verify %d\n", int(s.verifyLevel)))
+		if s.difficulty != 0 && s.difficulty != 4 {
+			b.WriteString(fmt.Sprintf("    difficulty %d\n", s.difficulty))
 		}
-		if (rateLimit != 0 && rateLimit != 60) || (rateWindow != 0 && rateWindow != 60) {
-			b.WriteString(fmt.Sprintf("    rate_limit %d %d\n", rateLimit, rateWindow))
+		if (s.rateLimit != 0 && s.rateLimit != 60) || (s.rateWindow != 0 && s.rateWindow != 60) {
+			b.WriteString(fmt.Sprintf("    rate_limit %d %d\n", s.rateLimit, s.rateWindow))
 		}
-		if challengeTTL != 0 && challengeTTL != 300 {
-			b.WriteString(fmt.Sprintf("    challenge_ttl %d\n", challengeTTL))
+		if s.challengeTTL != 0 && s.challengeTTL != 300 {
+			b.WriteString(fmt.Sprintf("    challenge_ttl %d\n", s.challengeTTL))
 		}
-		if clearanceTTL != 0 && clearanceTTL != 86400 {
-			b.WriteString(fmt.Sprintf("    clearance_ttl %d\n", clearanceTTL))
+		if s.clearanceTTL != 0 && s.clearanceTTL != 86400 {
+			b.WriteString(fmt.Sprintf("    clearance_ttl %d\n", s.clearanceTTL))
 		}
 	}
-	if verifyURL != "" {
-		b.WriteString(fmt.Sprintf("    verify_url %s\n", quoteIfNeeded(verifyURL)))
+	if s.verifyURL != "" {
+		b.WriteString(fmt.Sprintf("    verify_url %s\n", quoteIfNeeded(s.verifyURL)))
 	}
-	if verifyPort != 0 {
-		b.WriteString(fmt.Sprintf("    verify_port %d\n", verifyPort))
+	if s.verifyPort != 0 {
+		b.WriteString(fmt.Sprintf("    verify_port %d\n", s.verifyPort))
 	}
-	for _, r := range rules {
+	for _, r := range s.rules {
 		formatCustomRule(b, r)
 	}
 	b.WriteString("}\n")

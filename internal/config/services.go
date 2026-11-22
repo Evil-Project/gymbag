@@ -231,12 +231,18 @@ func (s *SSHConfig) Validate() error {
 	return nil
 }
 
-// MinecraftConfig configures Gymbag's Minecraft Java Edition protection proxy.
+// MinecraftConfig configures Gymbag's Minecraft Java Edition protection proxy and optional managed server process.
 type MinecraftConfig struct {
 	Enabled          bool         `json:"enabled"`
 	Port             int          `json:"port,omitempty"`
 	Upstream         string       `json:"upstream"`
 	ServerProperties string       `json:"server_properties,omitempty"`
+	ServerJar        string       `json:"server_jar,omitempty"`
+	JavaPath         string       `json:"java_path,omitempty"`
+	JVMArgs          []string     `json:"jvm_args,omitempty"`
+	ServerArgs       []string     `json:"server_args,omitempty"`
+	WorkDir          string       `json:"work_dir,omitempty"`
+	AutoRestart      *bool        `json:"auto_restart,omitempty"`
 	Protect          bool         `json:"protect"`
 	VerifyLevel      VerifyLevel  `json:"verify_level"`
 	Difficulty       int          `json:"difficulty,omitempty"`
@@ -247,6 +253,14 @@ type MinecraftConfig struct {
 	VerifyURL        string       `json:"verify_url,omitempty"`
 	VerifyPort       int          `json:"verify_port,omitempty"`
 	Rules            []CustomRule `json:"rules,omitempty"`
+}
+
+// AutoRestartEnabled reports whether the managed Minecraft server process should restart on exit (default true).
+func (m MinecraftConfig) AutoRestartEnabled() bool {
+	if m.AutoRestart == nil {
+		return true
+	}
+	return *m.AutoRestart
 }
 
 // DefaultMinecraftConfig returns baseline defaults for Minecraft protection (port 25565, verify level 3).
@@ -269,6 +283,16 @@ func (m *MinecraftConfig) Clone() *MinecraftConfig {
 		return nil
 	}
 	cp := *m
+	if len(m.JVMArgs) > 0 {
+		cp.JVMArgs = append([]string(nil), m.JVMArgs...)
+	}
+	if len(m.ServerArgs) > 0 {
+		cp.ServerArgs = append([]string(nil), m.ServerArgs...)
+	}
+	if m.AutoRestart != nil {
+		b := *m.AutoRestart
+		cp.AutoRestart = &b
+	}
 	if len(m.Rules) > 0 {
 		cp.Rules = make([]CustomRule, len(m.Rules))
 		for i, r := range m.Rules {
@@ -283,7 +307,7 @@ func (m *MinecraftConfig) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return nil
 	}
-	if m.Port == 0 && m.Upstream == "" && !m.Enabled && !m.Protect && m.Difficulty == 0 {
+	if m.Port == 0 && m.Upstream == "" && m.ServerJar == "" && !m.Enabled && !m.Protect && m.Difficulty == 0 {
 		*m = DefaultMinecraftConfig()
 		m.Enabled = true
 	}
@@ -298,6 +322,12 @@ func (m *MinecraftConfig) Validate() error {
 	if m == nil {
 		return nil
 	}
+	m.ServerProperties = strings.TrimSpace(m.ServerProperties)
+	m.ServerJar = strings.TrimSpace(m.ServerJar)
+	m.JavaPath = strings.TrimSpace(m.JavaPath)
+	m.WorkDir = strings.TrimSpace(m.WorkDir)
+	m.JVMArgs = compactNonEmpty(m.JVMArgs)
+	m.ServerArgs = compactNonEmpty(m.ServerArgs)
 	if !m.Enabled {
 		if m.Port < 0 || m.Port > 65535 {
 			return fmt.Errorf("minecraft port must be between 1 and 65535")
@@ -310,12 +340,18 @@ func (m *MinecraftConfig) Validate() error {
 	if m.Port < 1 || m.Port > 65535 {
 		return fmt.Errorf("minecraft port must be between 1 and 65535")
 	}
+	if strings.TrimSpace(m.Upstream) == "" && m.ServerJar != "" {
+		if m.Port == 25566 {
+			m.Upstream = "127.0.0.1:25567"
+		} else {
+			m.Upstream = "127.0.0.1:25566"
+		}
+	}
 	up, err := NormalizeTCPUpstream(m.Upstream, "minecraft upstream")
 	if err != nil {
 		return err
 	}
 	m.Upstream = up
-	m.ServerProperties = strings.TrimSpace(m.ServerProperties)
 	if !m.VerifyLevel.Valid() {
 		return fmt.Errorf("minecraft verify_level must be from 0 to 3")
 	}
@@ -511,6 +547,12 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		Port             int          `json:"port,omitempty"`
 		Upstream         string       `json:"upstream"`
 		ServerProperties string       `json:"server_properties,omitempty"`
+		ServerJar        string       `json:"server_jar,omitempty"`
+		JavaPath         string       `json:"java_path,omitempty"`
+		JVMArgs          []string     `json:"jvm_args,omitempty"`
+		ServerArgs       []string     `json:"server_args,omitempty"`
+		WorkDir          string       `json:"work_dir,omitempty"`
+		AutoRestart      *bool        `json:"auto_restart,omitempty"`
 		Protect          *bool        `json:"protect,omitempty"`
 		VerifyLevel      *VerifyLevel `json:"verify_level,omitempty"`
 		Difficulty       int          `json:"difficulty,omitempty"`
@@ -631,6 +673,15 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 			Port:             c.Minecraft.Port,
 			Upstream:         c.Minecraft.Upstream,
 			ServerProperties: c.Minecraft.ServerProperties,
+			ServerJar:        c.Minecraft.ServerJar,
+			JavaPath:         c.Minecraft.JavaPath,
+			JVMArgs:          c.Minecraft.JVMArgs,
+			ServerArgs:       c.Minecraft.ServerArgs,
+			WorkDir:          c.Minecraft.WorkDir,
+		}
+		if c.Minecraft.AutoRestart != nil && !*c.Minecraft.AutoRestart {
+			f := false
+			ct.AutoRestart = &f
 		}
 		if !c.Minecraft.Protect {
 			f := false
@@ -808,4 +859,17 @@ func checkPortConflict(c *Config) error {
 	// Check duplicate upstream ports vs listen ports when loopback
 	_ = slices.Clip(ports)
 	return nil
+}
+
+func compactNonEmpty(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	var out []string
+	for _, s := range in {
+		if t := strings.TrimSpace(s); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

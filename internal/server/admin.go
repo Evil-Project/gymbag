@@ -13,6 +13,7 @@ import (
 	"gymbag/internal/config"
 	"gymbag/internal/host"
 	"gymbag/internal/intel"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/tlsmanager"
 	"gymbag/internal/waf"
 )
@@ -127,6 +128,12 @@ func NewAdminHandler(ctrl ConfigController) http.Handler {
 	return ServerHeaderMiddleware("gymbag", core)
 }
 
+// MinecraftServerStatusProvider is an optional interface implemented by Runtime to report
+// managed Minecraft server subprocess health in /api/v1/health.
+type MinecraftServerStatusProvider interface {
+	MinecraftServerStatus() *mcserver.Status
+}
+
 func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -136,7 +143,7 @@ func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigContro
 	snap := ctrl.Snapshot()
 	intelSt := ctrl.IntelStatus()
 	remoteSt := ctrl.RemoteRulesStatus()
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":            "ok",
 		"sites_count":       len(snap.Sites),
 		"ssh_enabled":       snap.SSHEnabled(),
@@ -146,7 +153,13 @@ func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigContro
 		"ai_entries":        intelSt.AIEntries,
 		"vpn_entries":       intelSt.VPNEntries,
 		"remote_rules":      remoteSt.TotalRules,
-	})
+	}
+	if prov, ok := ctrl.(MinecraftServerStatusProvider); ok {
+		if mcSt := prov.MinecraftServerStatus(); mcSt != nil {
+			resp["minecraft_server"] = mcSt
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleAdminTLSStatus(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {

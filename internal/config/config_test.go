@@ -683,3 +683,74 @@ func TestSSHMinecraftAndVerifyConfigParsingFormattingAndEnv(t *testing.T) {
 		t.Fatal("expected error when verify_port conflicts with minecraft.port")
 	}
 }
+
+func TestMinecraftServerJarConfigParsingFormattingAndEnv(t *testing.T) {
+	// 1. JSON with only server_jar defaults upstream cleanly and marshals concisely
+	jarOnlyJSON := []byte(`{
+		"minecraft": {
+			"server_jar": "/srv/mc/paper-1.21.4.jar",
+			"jvm_args": ["-Xms1G", "-Xmx2G"],
+			"auto_restart": false
+		}
+	}`)
+	cfg, err := ParseConfigBytes(jarOnlyJSON, "gymbag.json", "")
+	if err != nil {
+		t.Fatalf("ParseConfigBytes minecraft server_jar JSON failed: %v", err)
+	}
+	if !cfg.MinecraftEnabled() || cfg.Minecraft.ServerJar != "/srv/mc/paper-1.21.4.jar" ||
+		cfg.Minecraft.Upstream != "127.0.0.1:25566" || cfg.Minecraft.AutoRestartEnabled() {
+		t.Fatalf("unexpected minecraft jar config: %+v", cfg.Minecraft)
+	}
+	conciseBytes, err := MarshalConciseJSONConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsedConcise, err := ParseConfigBytes(conciseBytes, "gymbag.json", "")
+	if err != nil {
+		t.Fatalf("reparsed concise JSON failed: %v\n%s", err, string(conciseBytes))
+	}
+	if reparsedConcise.Minecraft.ServerJar != cfg.Minecraft.ServerJar || reparsedConcise.Minecraft.AutoRestartEnabled() {
+		t.Fatalf("concise JSON roundtrip mismatch: %+v", reparsedConcise.Minecraft)
+	}
+
+	// 2. Gymbagfile parsing & formatting roundtrip
+	gf, err := ParseCaddyfile(`
+		minecraft {
+			server_jar ./mc/paper.jar
+			java_path /opt/jdk-21/bin/java
+			jvm_args -Xms2G -Xmx2G
+			server_args nogui --world main
+			work_dir ./mc
+			auto_restart off
+			verify 1
+		}
+	`)
+	if err != nil {
+		t.Fatalf("ParseCaddyfile minecraft server_jar failed: %v", err)
+	}
+	if gf.Minecraft.ServerJar != "./mc/paper.jar" || gf.Minecraft.JavaPath != "/opt/jdk-21/bin/java" ||
+		len(gf.Minecraft.JVMArgs) != 2 || len(gf.Minecraft.ServerArgs) != 3 || gf.Minecraft.WorkDir != "./mc" || gf.Minecraft.AutoRestartEnabled() {
+		t.Fatalf("unexpected Gymbagfile minecraft config: %+v", gf.Minecraft)
+	}
+	gfFormatted := FormatConfig(gf)
+	if !strings.Contains(gfFormatted, "server_jar ./mc/paper.jar") || !strings.Contains(gfFormatted, "auto_restart off") {
+		t.Fatalf("expected server_jar and auto_restart off in FormatConfig:\n%s", gfFormatted)
+	}
+
+	// 3. Env var loading for GYMBAG_MC_SERVER_JAR
+	envMap := map[string]string{
+		"GYMBAG_MC_SERVER_JAR":   "/opt/mc/server.jar",
+		"GYMBAG_MC_JAVA":         "/opt/jdk-21/bin/java",
+		"GYMBAG_MC_JVM_ARGS":     "-Xms1G -Xmx4G",
+		"GYMBAG_MC_WORK_DIR":     "/opt/mc",
+		"GYMBAG_MC_AUTO_RESTART": "false",
+	}
+	envCfg, err := LoadWithEnv(LoadOptions{}, func(k string) string { return envMap[k] })
+	if err != nil {
+		t.Fatalf("LoadWithEnv MC jar failed: %v", err)
+	}
+	if envCfg.HTTPEnabled() || !envCfg.MinecraftEnabled() || envCfg.Minecraft.ServerJar != "/opt/mc/server.jar" ||
+		envCfg.Minecraft.JavaPath != "/opt/jdk-21/bin/java" || len(envCfg.Minecraft.JVMArgs) != 2 || envCfg.Minecraft.AutoRestartEnabled() {
+		t.Fatalf("env MC jar config mismatch: %+v mc=%+v", envCfg, envCfg.Minecraft)
+	}
+}

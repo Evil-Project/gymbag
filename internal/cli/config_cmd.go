@@ -252,8 +252,12 @@ func runConfigList(args []string, stdout, stderr io.Writer) int {
 		if !cfg.Minecraft.Protect {
 			prot = "protect off"
 		}
-		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s (%s, rules=%d)\n",
-			cfg.Minecraft.Port, cfg.Minecraft.Upstream, prot, len(cfg.Minecraft.Rules))
+		jarNote := ""
+		if cfg.Minecraft.ServerJar != "" {
+			jarNote = ", jar=" + cfg.Minecraft.ServerJar
+		}
+		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s (%s, rules=%d%s)\n",
+			cfg.Minecraft.Port, cfg.Minecraft.Upstream, prot, len(cfg.Minecraft.Rules), jarNote)
 	}
 	if cfg.NeedsVerifyServer() {
 		vTarget := cfg.Verify.URL

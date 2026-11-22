@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -25,6 +26,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -36,6 +38,7 @@ import (
 	"gymbag/internal/config"
 	"gymbag/internal/intel"
 	"gymbag/internal/localpki"
+	"gymbag/internal/mcserver"
 	"gymbag/internal/tcpguard"
 	"gymbag/internal/tlsmanager"
 	"gymbag/internal/waf"
@@ -1799,5 +1802,129 @@ func TestRuntimeSharedHTTPSAndVerifyPort(t *testing.T) {
 	cancel()
 	if err := <-serveDone; err != nil {
 		t.Fatalf("Serve error: %v", err)
+	}
+}
+
+func TestServerFakeMCProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_SERVER_MC_HELPER") != "1" {
+		return
+	}
+	fmt.Println("[Server thread/INFO]: Fake MC server ready")
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == "stop" {
+			os.Exit(0)
+		}
+	}
+	os.Exit(0)
+}
+
+func TestRuntimeMinecraftAutoStartWithServerJar(t *testing.T) {
+	dir := t.TempDir()
+	jarPath := filepath.Join(dir, "paper-1.21.4.jar")
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("version.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte(`{"id":"1.21.4","java_version":21}`))
+	_ = zw.Close()
+	if err := os.WriteFile(jarPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mcPort := reserveFreePort(t)
+	verifyPort := reserveFreePort(t)
+	adminAddr := fmt.Sprintf("127.0.0.1:%d", reserveFreePort(t))
+
+	cfg := config.Config{
+		BindHost:  "127.0.0.1",
+		HTTPPort:  reserveFreePort(t),
+		HTTPSPort: reserveFreePort(t),
+		AdminAddr: adminAddr,
+		Secret:    "mc-autostart-secret",
+		Defaults:  config.DefaultSiteWAFConfig(),
+		TLS: config.TLSConfig{
+			Mode:    "local",
+			CertDir: t.TempDir(),
+		},
+		Intel: config.IntelConfig{
+			IPSecurity:       false,
+			LiveReputation:   false,
+			AIIPList:         false,
+			VPNDetection:     false,
+			IPSecurityAction: "verify",
+		},
+		Verify: config.VerifyServerConfig{Port: verifyPort},
+		Minecraft: &config.MinecraftConfig{
+			Enabled:     true,
+			Port:        mcPort,
+			Upstream:    fmt.Sprintf("127.0.0.1:%d", reserveFreePort(t)),
+			ServerJar:   jarPath,
+			Protect:     true,
+			VerifyLevel: config.VerifyLevelSuspiciousAndAI,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt, err := BuildRuntime(ctx, cfg, RuntimeOptions{
+		DisablePublicIPProbe: true,
+		ServerIPs:            []string{"127.0.0.1"},
+		MCServerOptions: &mcserver.Options{
+			Discover: mcserver.DiscoverOptions{
+				Installs: []mcserver.JavaInstall{
+					{Path: "/usr/bin/java17", Major: 17, RawVersion: "17.0.10", Source: "system"},
+					{Path: "/usr/bin/java21", Major: 21, RawVersion: "21.0.5", Source: "system"},
+				},
+			},
+			CommandBuilder: func(cmdCtx context.Context, _ string, _ []string) *exec.Cmd {
+				cmd := exec.CommandContext(cmdCtx, os.Args[0], "-test.run=^TestServerFakeMCProcess$")
+				cmd.Env = append(os.Environ(), "GO_WANT_SERVER_MC_HELPER=1")
+				return cmd
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRuntime (MC server_jar): %v", err)
+	}
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- rt.Serve(ctx) }()
+
+	waitForTCPReady(t, adminAddr)
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", mcPort))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		st := rt.MinecraftServerStatus()
+		if st != nil && st.Running && st.JavaMajor == 21 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	resp, err := http.Get("http://" + adminAddr + "/api/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var health map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	mcHealth, ok := health["minecraft_server"].(map[string]any)
+	if !ok || mcHealth["running"] != true || mcHealth["java_major"] != float64(21) {
+		t.Fatalf("unexpected minecraft_server in /api/v1/health: %+v", health["minecraft_server"])
+	}
+
+	cancel()
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Runtime.Serve error on shutdown: %v", err)
+	}
+	if st := rt.MinecraftServerStatus(); st == nil || st.Running {
+		t.Fatalf("expected managed minecraft server stopped after Serve shutdown, got %+v", st)
 	}
 }
