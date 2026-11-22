@@ -14,7 +14,6 @@ import (
 	"gymbag/internal/config"
 	"gymbag/internal/host"
 	"gymbag/internal/proxy"
-	"gymbag/internal/tlsmanager"
 	"gymbag/internal/waf"
 )
 
@@ -43,13 +42,32 @@ func WriteACMEChallenge(w http.ResponseWriter, r *http.Request, board ACMEChalle
 	}
 }
 
+// HTTPForwarder streams HTTP requests to per-site upstreams.
+type HTTPForwarder interface {
+	Forward(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, clientIP, scheme string)
+	ForwardUpstream(
+		w http.ResponseWriter,
+		r *http.Request,
+		domain string,
+		up proxy.ParsedUpstream,
+		reqPath, clientIP, scheme string,
+		headerSets ...map[string]string,
+	)
+}
+
+// WebSocketForwarder tunnels upgraded WebSocket connections to per-site upstreams.
+type WebSocketForwarder interface {
+	Forward(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, clientIP, scheme string)
+	ForwardUpstream(w http.ResponseWriter, r *http.Request, domain, upstreamBase, reqPath, clientIP, scheme string)
+}
+
 // GatewayHandler handles ACME challenges, RESTful WAF verification endpoints, static assets,
 // WebSocket upgrades, and HTTP reverse proxying.
 type GatewayHandler struct {
 	challenges     waf.ChallengeManager
 	clearance      waf.ClearanceManager
-	httpProxy      *proxy.HTTPProxy
-	wsProxy        *proxy.WebSocketProxy
+	httpProxy      HTTPForwarder
+	wsProxy        WebSocketForwarder
 	acmeBoard      ACMEChallengeLookup
 	trustedProxies []netip.Prefix
 }
@@ -58,9 +76,9 @@ type GatewayHandler struct {
 func NewGatewayHandler(
 	challenges waf.ChallengeManager,
 	clearance waf.ClearanceManager,
-	httpProxy *proxy.HTTPProxy,
-	wsProxy *proxy.WebSocketProxy,
-	acmeBoard *tlsmanager.HTTP01Board,
+	httpProxy HTTPForwarder,
+	wsProxy WebSocketForwarder,
+	acmeBoard ACMEChallengeLookup,
 	trustedProxies []netip.Prefix,
 ) *GatewayHandler {
 	return &GatewayHandler{
