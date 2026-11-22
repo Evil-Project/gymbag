@@ -60,6 +60,12 @@ func AssetData(name string) (data []byte, etag string, ok bool) {
 	return a.data, a.etag, true
 }
 
+// SolverJS returns the embedded browser proof-of-work SHA-256 solver JavaScript source.
+func SolverJS() string {
+	b, _ := embeddedAssets.ReadFile("assets/solver.js")
+	return string(b)
+}
+
 // Renderer renders HTML challenge and rejection responses using embedded templates and solver JS.
 type Renderer struct {
 	prefix       string
