@@ -11,6 +11,11 @@ type challengeEntry struct {
 	expiresAt time.Time
 }
 
+type ticketEntry struct {
+	ticket    GateTicket
+	expiresAt time.Time
+}
+
 type windowEntry struct {
 	startedAt time.Time
 	count     int
@@ -32,6 +37,11 @@ type MemoryStore struct {
 	challenges map[string]challengeEntry
 	chalOps    uint64
 
+	gateMu     sync.Mutex
+	tickets    map[string]ticketEntry
+	clearances map[string]int64
+	gateOps    uint64
+
 	shards [rateShardCount]rateShard
 	now    func() time.Time
 }
@@ -45,6 +55,8 @@ func NewMemoryStore() *MemoryStore {
 func NewMemoryStoreWithClock(clock func() time.Time) *MemoryStore {
 	m := &MemoryStore{
 		challenges: make(map[string]challengeEntry),
+		tickets:    make(map[string]ticketEntry),
+		clearances: make(map[string]int64),
 		now:        clock,
 	}
 	for i := range m.shards {
@@ -98,6 +110,101 @@ func (m *MemoryStore) DeleteChallenge(_ context.Context, challengeID string) err
 	defer m.chalMu.Unlock()
 	delete(m.challenges, challengeID)
 	return nil
+}
+
+// SaveGateTicket stores a short-lived verification ticket for SSH or Minecraft clients.
+func (m *MemoryStore) SaveGateTicket(_ context.Context, token string, ticket GateTicket, ttlSeconds int) error {
+	if ttlSeconds <= 0 {
+		ttlSeconds = 300
+	}
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+
+	now := m.now()
+	m.maybeSweepGateLocked(now)
+	m.tickets[token] = ticketEntry{
+		ticket:    ticket,
+		expiresAt: now.Add(time.Duration(ttlSeconds) * time.Second),
+	}
+	return nil
+}
+
+// GetGateTicket retrieves an active GateTicket by token, returning nil if missing or expired.
+func (m *MemoryStore) GetGateTicket(_ context.Context, token string) (*GateTicket, error) {
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+
+	cur, ok := m.tickets[token]
+	if !ok {
+		return nil, nil
+	}
+	if !cur.expiresAt.After(m.now()) {
+		delete(m.tickets, token)
+		return nil, nil
+	}
+	t := cur.ticket
+	return &t, nil
+}
+
+// DeleteGateTicket removes a verification ticket so it cannot be replayed.
+func (m *MemoryStore) DeleteGateTicket(_ context.Context, token string) error {
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	delete(m.tickets, token)
+	return nil
+}
+
+// SaveClearance marks (service, clientIP) as cleared for ttlSeconds.
+func (m *MemoryStore) SaveClearance(_ context.Context, service, clientIP string, ttlSeconds int) error {
+	if ttlSeconds <= 0 {
+		ttlSeconds = 86400
+	}
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+
+	now := m.now()
+	m.maybeSweepGateLocked(now)
+	m.clearances[clearanceKey(service, clientIP)] = now.Add(time.Duration(ttlSeconds) * time.Second).Unix()
+	return nil
+}
+
+// IsCleared reports whether (service, clientIP) currently holds an active clearance and its expiry Unix timestamp.
+func (m *MemoryStore) IsCleared(_ context.Context, service, clientIP string) (int64, bool, error) {
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+
+	key := clearanceKey(service, clientIP)
+	exp, ok := m.clearances[key]
+	if !ok {
+		return 0, false, nil
+	}
+	if exp <= m.now().Unix() {
+		delete(m.clearances, key)
+		return 0, false, nil
+	}
+	return exp, true, nil
+}
+
+func (m *MemoryStore) maybeSweepGateLocked(now time.Time) {
+	m.gateOps++
+	if m.gateOps&255 != 0 {
+		return
+	}
+	for k, v := range m.tickets {
+		if !v.expiresAt.After(now) {
+			delete(m.tickets, k)
+		}
+	}
+	nowUnix := now.Unix()
+	for k, exp := range m.clearances {
+		if exp <= nowUnix {
+			delete(m.clearances, k)
+		}
+	}
+}
+
+func clearanceKey(service, clientIP string) string {
+	return service + "|" + clientIP
 }
 
 func (m *MemoryStore) Increment(_ context.Context, key string, windowSeconds int) (int, error) {

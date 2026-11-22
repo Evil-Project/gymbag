@@ -36,6 +36,40 @@ func UnmarshalChallengeRecord(payload string) (ChallengeRecord, error) {
 	return r, err
 }
 
+// GateTicket stores state for a pending browser verification link issued to an SSH or Minecraft client.
+type GateTicket struct {
+	Service    string `json:"service"`
+	ClientIP   string `json:"ip"`
+	Username   string `json:"username,omitempty"`
+	Difficulty int    `json:"difficulty"`
+	ClearTTL   int    `json:"clear_ttl"`
+}
+
+// Marshal serializes GateTicket to compact JSON.
+func (t GateTicket) Marshal() (string, error) {
+	b, err := json.Marshal(t)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// UnmarshalGateTicket deserializes GateTicket from JSON.
+func UnmarshalGateTicket(payload string) (GateTicket, error) {
+	var t GateTicket
+	err := json.Unmarshal([]byte(payload), &t)
+	return t, err
+}
+
+// GateStore manages verification tickets and IP clearances for non-HTTP protocol gates (SSH, Minecraft).
+type GateStore interface {
+	SaveGateTicket(ctx context.Context, token string, ticket GateTicket, ttlSeconds int) error
+	GetGateTicket(ctx context.Context, token string) (*GateTicket, error)
+	DeleteGateTicket(ctx context.Context, token string) error
+	SaveClearance(ctx context.Context, service, clientIP string, ttlSeconds int) error
+	IsCleared(ctx context.Context, service, clientIP string) (expiresAt int64, cleared bool, err error)
+}
+
 // ChallengeStore manages single-use PoW challenge records (ISP).
 type ChallengeStore interface {
 	// SaveChallenge stores record under challengeID. When ttlSeconds <= 0, the existing TTL is preserved.

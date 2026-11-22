@@ -186,3 +186,85 @@ func TestRedisStoreAndFallback(t *testing.T) {
 		t.Fatalf("fallback Increment = %d, %v", c, err)
 	}
 }
+
+func TestGateStoreMemoryAndRedis(t *testing.T) {
+	now := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	ms := NewMemoryStoreWithClock(func() time.Time { return now })
+	ctx := context.Background()
+
+	ticket := GateTicket{
+		Service:    "minecraft",
+		ClientIP:   "203.0.113.10",
+		Username:   "Steve",
+		Difficulty: 4,
+		ClearTTL:   3600,
+	}
+	if err := ms.SaveGateTicket(ctx, "tok-1", ticket, 300); err != nil {
+		t.Fatal(err)
+	}
+	gotTicket, err := ms.GetGateTicket(ctx, "tok-1")
+	if err != nil || gotTicket == nil || gotTicket.Username != "Steve" || gotTicket.Service != "minecraft" {
+		t.Fatalf("GetGateTicket = %+v, err = %v", gotTicket, err)
+	}
+
+	now = now.Add(301 * time.Second)
+	if expired, err := ms.GetGateTicket(ctx, "tok-1"); err != nil || expired != nil {
+		t.Fatalf("expected expired ticket to be nil, got %+v, err=%v", expired, err)
+	}
+
+	if err := ms.SaveGateTicket(ctx, "tok-2", ticket, 300); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.DeleteGateTicket(ctx, "tok-2"); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, _ := ms.GetGateTicket(ctx, "tok-2"); deleted != nil {
+		t.Fatalf("expected deleted ticket, got %+v", deleted)
+	}
+
+	if err := ms.SaveClearance(ctx, "ssh", "203.0.113.10", 60); err != nil {
+		t.Fatal(err)
+	}
+	exp, ok, err := ms.IsCleared(ctx, "ssh", "203.0.113.10")
+	if err != nil || !ok || exp <= now.Unix() {
+		t.Fatalf("IsCleared = (%d, %v, %v), want cleared", exp, ok, err)
+	}
+	if _, mcOK, _ := ms.IsCleared(ctx, "minecraft", "203.0.113.10"); mcOK {
+		t.Fatal("clearance must be scoped per service")
+	}
+
+	now = now.Add(60 * time.Second)
+	if _, ok, _ := ms.IsCleared(ctx, "ssh", "203.0.113.10"); ok {
+		t.Fatal("expected clearance to expire")
+	}
+
+	// Redis GateStore test
+	srv := startMiniRedis(t)
+	rs, err := NewRedisStoreWithDialer(ctx, "redis://127.0.0.1:6379/0", srv.dial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+
+	if err := rs.SaveGateTicket(ctx, "rtok", ticket, 120); err != nil {
+		t.Fatal(err)
+	}
+	gotRedisTicket, err := rs.GetGateTicket(ctx, "rtok")
+	if err != nil || gotRedisTicket == nil || gotRedisTicket.ClientIP != "203.0.113.10" {
+		t.Fatalf("Redis GetGateTicket = %+v, err = %v", gotRedisTicket, err)
+	}
+	if err := rs.DeleteGateTicket(ctx, "rtok"); err != nil {
+		t.Fatal(err)
+	}
+	if gotAfter, _ := rs.GetGateTicket(ctx, "rtok"); gotAfter != nil {
+		t.Fatalf("expected deleted Redis ticket, got %+v", gotAfter)
+	}
+
+	if err := rs.SaveClearance(ctx, "minecraft", "203.0.113.10", 300); err != nil {
+		t.Fatal(err)
+	}
+	rExp, rOK, err := rs.IsCleared(ctx, "minecraft", "203.0.113.10")
+	if err != nil || !rOK || rExp <= time.Now().Unix() {
+		t.Fatalf("Redis IsCleared = (%d, %v, %v), want cleared", rExp, rOK, err)
+	}
+}

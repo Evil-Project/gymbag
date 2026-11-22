@@ -149,6 +149,79 @@ func (r *RedisStore) DeleteChallenge(ctx context.Context, challengeID string) er
 	return err
 }
 
+// SaveGateTicket stores a verification ticket under gymbag:ticket:<token> in Redis.
+func (r *RedisStore) SaveGateTicket(ctx context.Context, token string, ticket GateTicket, ttlSeconds int) error {
+	if ttlSeconds <= 0 {
+		ttlSeconds = 300
+	}
+	payload, err := ticket.Marshal()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err = r.doLocked(ctx, "SET", gateTicketKey(token), payload, "EX", strconv.Itoa(ttlSeconds))
+	return err
+}
+
+// GetGateTicket retrieves an active GateTicket from Redis, returning nil if missing.
+func (r *RedisStore) GetGateTicket(ctx context.Context, token string) (*GateTicket, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	val, err := r.doLocked(ctx, "GET", gateTicketKey(token))
+	if err != nil || val == nil {
+		return nil, err
+	}
+	str, ok := val.(string)
+	if !ok {
+		return nil, nil
+	}
+	ticket, err := UnmarshalGateTicket(str)
+	if err != nil {
+		return nil, err
+	}
+	return &ticket, nil
+}
+
+// DeleteGateTicket deletes a verification ticket from Redis.
+func (r *RedisStore) DeleteGateTicket(ctx context.Context, token string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.doLocked(ctx, "DEL", gateTicketKey(token))
+	return err
+}
+
+// SaveClearance persists an IP clearance entry for (service, clientIP) in Redis.
+func (r *RedisStore) SaveClearance(ctx context.Context, service, clientIP string, ttlSeconds int) error {
+	if ttlSeconds <= 0 {
+		ttlSeconds = 86400
+	}
+	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second).Unix()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.doLocked(ctx, "SET", gateClearanceKey(service, clientIP), strconv.FormatInt(expiresAt, 10), "EX", strconv.Itoa(ttlSeconds))
+	return err
+}
+
+// IsCleared reports whether (service, clientIP) currently holds a valid clearance in Redis.
+func (r *RedisStore) IsCleared(ctx context.Context, service, clientIP string) (int64, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	val, err := r.doLocked(ctx, "GET", gateClearanceKey(service, clientIP))
+	if err != nil || val == nil {
+		return 0, false, err
+	}
+	str, ok := val.(string)
+	if !ok {
+		return 0, false, nil
+	}
+	expiresAt, err := strconv.ParseInt(strings.TrimSpace(str), 10, 64)
+	if err != nil || expiresAt <= time.Now().Unix() {
+		return 0, false, nil
+	}
+	return expiresAt, true, nil
+}
+
 func (r *RedisStore) Increment(ctx context.Context, key string, windowSeconds int) (int, error) {
 	namespaced := "gymbag:rate:" + key
 	r.mu.Lock()
@@ -177,6 +250,14 @@ func (r *RedisStore) Close() error {
 
 func challengeKey(id string) string {
 	return "gymbag:challenge:" + id
+}
+
+func gateTicketKey(token string) string {
+	return "gymbag:ticket:" + token
+}
+
+func gateClearanceKey(service, clientIP string) string {
+	return "gymbag:clearance:" + service + ":" + clientIP
 }
 
 func (r *RedisStore) doLocked(ctx context.Context, args ...string) (any, error) {
