@@ -399,3 +399,59 @@ func TestMinecraftProtectionFlowPingLoginAndVerifyLevels(t *testing.T) {
 		t.Fatalf("expected custom verify URL with default 8443 port, got disc=%v json=%s", disc, chatJSON)
 	}
 }
+
+func TestBuildVerifyDisconnectJSONClickEventFormats(t *testing.T) {
+	url := "https://203.0.113.10:8443/v/testtoken"
+
+	legacyRaw := BuildVerifyDisconnectJSONForProtocol(url, "Steve", 769)
+	if !strings.Contains(legacyRaw, `"clickEvent":{"action":"copy_to_clipboard","value":"`+url+`"}`) {
+		t.Fatalf("expected legacy clickEvent copy_to_clipboard for proto 769 (<=1.21.4), got:\n%s", legacyRaw)
+	}
+	if strings.Contains(legacyRaw, `"click_event"`) {
+		t.Fatalf("did not expect 1.21.5+ click_event in legacy payload:\n%s", legacyRaw)
+	}
+
+	modernRaw := BuildVerifyDisconnectJSONForProtocol(url, "Steve", 770)
+	if !strings.Contains(modernRaw, `"click_event":{"action":"copy_to_clipboard","value":"`+url+`"}`) {
+		t.Fatalf("expected modern click_event copy_to_clipboard for proto 770 (1.21.5+), got:\n%s", modernRaw)
+	}
+	if strings.Contains(modernRaw, `"clickEvent"`) {
+		t.Fatalf("did not expect legacy clickEvent in 1.21.5+ payload:\n%s", modernRaw)
+	}
+}
+
+func TestShortVerifyTokenFormatAndCaseInsensitiveLookup(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	challenges := waf.NewChallengeService(st, 1, 300)
+	portal := NewVerifyPortal(st, challenges, nil, nil)
+
+	tok, err := generateShortVerifyToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tok) != shortTokenLength {
+		t.Fatalf("expected %d-char token, got %q (len=%d)", shortTokenLength, tok, len(tok))
+	}
+	for _, ch := range tok {
+		if !strings.ContainsRune(shortTokenAlphabet, ch) {
+			t.Fatalf("unexpected character %q in short token %q", ch, tok)
+		}
+	}
+
+	if err := st.SaveGateTicket(ctx, tok, store.GateTicket{
+		Service:    "minecraft",
+		ClientIP:   "203.0.113.10",
+		Difficulty: 1,
+		ClearTTL:   3600,
+	}, 300); err != nil {
+		t.Fatal(err)
+	}
+
+	// Typing the short code in uppercase in a browser still works cleanly
+	solvePortalVerifyLink(t, portal, "https://verify.test/v/"+strings.ToUpper(tok), "203.0.113.10")
+	_, cleared, err := st.IsCleared(ctx, "minecraft", "203.0.113.10")
+	if err != nil || !cleared {
+		t.Fatalf("expected IP cleared via uppercase short verify URL, cleared=%v err=%v", cleared, err)
+	}
+}

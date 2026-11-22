@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -117,11 +115,42 @@ func BuildMCLoginDisconnectPacket(chatJSON string) []byte {
 	return frame
 }
 
-// BuildVerifyDisconnectJSON renders a clickable/readable Minecraft Chat Component JSON with the verification link.
+// BuildVerifyDisconnectJSON renders a clickable/readable Minecraft Chat Component JSON with the verification link
+// using legacy 1.21.4-compatible clickEvent/hoverEvent formatting.
 func BuildVerifyDisconnectJSON(verifyURL, username string) string {
+	return BuildVerifyDisconnectJSONForProtocol(verifyURL, username, 0)
+}
+
+// BuildVerifyDisconnectJSONForProtocol renders a clickable Minecraft Chat Component JSON with the verification link,
+// emitting 1.21.5+ (protocol >= 770) snake_case click_event/hover_event or legacy <= 1.21.4 clickEvent/hoverEvent.
+func BuildVerifyDisconnectJSONForProtocol(verifyURL, username string, protoVer int32) string {
 	greeting := "Verification required before joining.\n"
 	if strings.TrimSpace(username) != "" {
 		greeting = "Verification required for " + username + " before joining.\n"
+	}
+	linkComp := map[string]any{
+		"text":       verifyURL,
+		"color":      "aqua",
+		"underlined": true,
+	}
+	if protoVer >= 770 {
+		linkComp["click_event"] = map[string]any{
+			"action": "copy_to_clipboard",
+			"value":  verifyURL,
+		}
+		linkComp["hover_event"] = map[string]any{
+			"action": "show_text",
+			"value":  map[string]any{"text": "Click to copy verification link"},
+		}
+	} else {
+		linkComp["clickEvent"] = map[string]any{
+			"action": "copy_to_clipboard",
+			"value":  verifyURL,
+		}
+		linkComp["hoverEvent"] = map[string]any{
+			"action":   "show_text",
+			"contents": map[string]any{"text": "Click to copy verification link"},
+		}
 	}
 	comp := map[string]any{
 		"text": "",
@@ -129,7 +158,7 @@ func BuildVerifyDisconnectJSON(verifyURL, username string) string {
 			{"text": "Gymbag Protection\n\n", "color": "gold", "bold": true},
 			{"text": greeting, "color": "white"},
 			{"text": "Open this link in your browser:\n\n", "color": "gray"},
-			{"text": verifyURL, "color": "aqua", "underlined": true},
+			linkComp,
 			{"text": "\n\nThen click Reconnect / Join Server.", "color": "gray"},
 		},
 	}
@@ -376,7 +405,7 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 			p.sendDisconnect(conn, BuildBlockDisconnectJSON("error"))
 			return
 		}
-		p.sendDisconnect(conn, BuildVerifyDisconnectJSON(verifyURL, username))
+		p.sendDisconnect(conn, BuildVerifyDisconnectJSONForProtocol(verifyURL, username, protoVer))
 	}
 }
 
@@ -390,11 +419,10 @@ func (p *MinecraftProxy) issueVerifyURL(
 	if p.gateStore == nil {
 		return "", errors.New("gate store unavailable")
 	}
-	buf := make([]byte, 24)
-	if _, err := rand.Read(buf); err != nil {
+	token, err := generateShortVerifyToken()
+	if err != nil {
 		return "", err
 	}
-	token := base64.RawURLEncoding.EncodeToString(buf)
 	diff := cfg.Difficulty
 	if diff <= 0 {
 		diff = 4

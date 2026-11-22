@@ -3,7 +3,6 @@ package tcpguard
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -239,11 +238,10 @@ func (p *SSHProxy) issueVerifyURL(
 	if p.gateStore == nil {
 		return "", errors.New("gate store unavailable")
 	}
-	buf := make([]byte, 24)
-	if _, err := rand.Read(buf); err != nil {
+	token, err := generateShortVerifyToken()
+	if err != nil {
 		return "", err
 	}
-	token := base64.RawURLEncoding.EncodeToString(buf)
 	diff := cfg.Difficulty
 	if diff <= 0 {
 		diff = 4

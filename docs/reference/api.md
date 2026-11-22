@@ -18,7 +18,7 @@ Served on `verify_port` (default `8443`), or on `https_port` (`443`) when `verif
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/v/{token}` | Serves the browser PoW page for an SSH or Minecraft gate ticket (`/verify/{token}` alias supported) |
+| `GET` | `/v/{token}` | Serves the browser PoW page for an SSH or Minecraft gate ticket (8-char tokens matched case-insensitively; `/verify/{token}` alias supported) |
 | `POST` | `/.waf/gate/verify` | Verifies `{token, challenge_id, nonce, verified}` and stores an IP clearance (`{"ok": true, "service": ..., "client_ip": ..., "expires_in": <ttl>}`) |
 | `GET` | `/.waf/assets/{name}` | Embedded mascot PNGs (`/.waf/v1/assets/{name}` alias supported) |
 | `GET` | `/.well-known/acme-challenge/{token}` | ACME HTTP-01 challenge response for portal domain or RFC 8738 IP certs |
@@ -33,7 +33,7 @@ The Admin API takes no authentication token and mutates live routing and firewal
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | Status, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, and loaded `remote_rules` count |
+| `GET` | `/api/v1/health` | Status, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, `remote_rules` count, and `minecraft_server` status (`running`, `pid`, `java_major`, `required_java`, `mc_version`, `restarts`, `eula_blocked`, `last_error`) when `server_jar` is configured |
 | `GET` | `/api/v1/tls` | Active TLS source, cert path, SSL provider, HSTS state, and supported CA catalog |
 | `POST` | `/api/v1/tls/renew` | Force immediate certificate renewal and atomic reload |
 | `GET` | `/api/v1/intel` | Threat, AI crawler, and VPN/Tor feed counts (`vpn_detection_enabled`, `vpn_entries`, `vpn_cache_size`, `reputation_cache_size`), refresh timestamps, and per-feed status (`threat`, `ai`, `vpn`) |

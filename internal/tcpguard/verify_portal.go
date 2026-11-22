@@ -135,6 +135,15 @@ func (p *VerifyPortal) handleVerifyPage(w http.ResponseWriter, r *http.Request, 
 	}
 
 	ticket, err := p.gateStore.GetGateTicket(r.Context(), token)
+	if (err != nil || ticket == nil) && len(token) <= 16 {
+		if lower := strings.ToLower(token); lower != token {
+			if t2, err2 := p.gateStore.GetGateTicket(r.Context(), lower); err2 == nil && t2 != nil {
+				ticket = t2
+				err = nil
+				token = lower
+			}
+		}
+	}
 	if err != nil || ticket == nil {
 		writePortalStatusHTML(w, http.StatusGone, "Link expired or invalid", "This verification link has expired or was already used. Reconnect to obtain a new verification link.", waf.RejectAsset)
 		return

@@ -2,6 +2,7 @@ package tcpguard
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -240,4 +241,22 @@ func extractRemoteIP(addr net.Addr) string {
 		return strings.Trim(h, "[]")
 	}
 	return strings.Trim(raw, "[]")
+}
+
+const (
+	shortTokenAlphabet = "23456789abcdefghijkmnpqrstuvwxyz" // 32 unambiguous lowercase chars (omits 0, 1, l, o)
+	shortTokenLength   = 8                                  // 40 bits of entropy
+)
+
+// generateShortVerifyToken generates an 8-character, human-typable verification token with zero modulo bias.
+func generateShortVerifyToken() (string, error) {
+	var buf [shortTokenLength]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	var out [shortTokenLength]byte
+	for i, b := range buf {
+		out[i] = shortTokenAlphabet[b&31]
+	}
+	return string(out[:]), nil
 }
