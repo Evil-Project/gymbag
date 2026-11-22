@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -12,9 +13,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -33,6 +36,7 @@ import (
 	"gymbag/internal/config"
 	"gymbag/internal/intel"
 	"gymbag/internal/localpki"
+	"gymbag/internal/tcpguard"
 	"gymbag/internal/tlsmanager"
 	"gymbag/internal/waf"
 )
@@ -1256,5 +1260,544 @@ func TestSSLProviderSwitchingAutoRenewalAndAdminTLSAPI(t *testing.T) {
 	encMat, err := encRT.CertManager.Obtain(ctx)
 	if err != nil || encMat.Source != "file" {
 		t.Fatalf("Obtain with encrypted private key failed: %+v, %v", encMat, err)
+	}
+}
+
+func reserveFreePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserveFreePort: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
+func waitForTCPReady(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("listener %s did not become ready in time", addr)
+}
+
+func solveVerifyURLOverTLS(t *testing.T, client *http.Client, verifyURL string, expectIP string) {
+	t.Helper()
+	resp, err := client.Get(verifyURL)
+	if err != nil {
+		t.Fatalf("GET %s: %v", verifyURL, err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d: %s", verifyURL, resp.StatusCode, string(body))
+	}
+	if expectIP != "" && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		leaf := resp.TLS.PeerCertificates[0]
+		foundIP := false
+		for _, ip := range leaf.IPAddresses {
+			if ip.String() == expectIP {
+				foundIP = true
+				break
+			}
+		}
+		if !foundIP {
+			t.Fatalf("expected IP SAN %s in verify cert, got IPs=%v DNS=%v", expectIP, leaf.IPAddresses, leaf.DNSNames)
+		}
+	}
+
+	m := regexp.MustCompile(`<script type="application/json" id="gymbag-gate-challenge">(.*?)</script>`).FindSubmatch(body)
+	if len(m) != 2 {
+		t.Fatalf("missing gate challenge JSON in %s", string(body))
+	}
+	var spec struct {
+		Token       string `json:"token"`
+		ChallengeID string `json:"challenge_id"`
+		Difficulty  int    `json:"difficulty"`
+	}
+	if err := json.Unmarshal(m[1], &spec); err != nil {
+		t.Fatal(err)
+	}
+	var nonce int64
+	for !waf.Accepts(spec.ChallengeID, nonce, spec.Difficulty) {
+		nonce++
+	}
+	u, err := url.Parse(verifyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postURL := fmt.Sprintf("https://%s/.waf/gate/verify", u.Host)
+	payload, _ := json.Marshal(map[string]any{
+		"token":        spec.Token,
+		"challenge_id": spec.ChallengeID,
+		"nonce":        nonce,
+		"verified":     true,
+	})
+	postResp, err := client.Post(postURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST %s: %v", postURL, err)
+	}
+	postBody, _ := io.ReadAll(postResp.Body)
+	_ = postResp.Body.Close()
+	if postResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s = %d: %s", postURL, postResp.StatusCode, string(postBody))
+	}
+}
+
+func makeMCHandshake(proto int32, host string, port uint16, nextState int32) []byte {
+	var p []byte
+	p = tcpguard.AppendVarInt(p, 0x00)
+	p = tcpguard.AppendVarInt(p, proto)
+	p = tcpguard.AppendVarInt(p, int32(len(host)))
+	p = append(p, host...)
+	var pb [2]byte
+	binary.BigEndian.PutUint16(pb[:], port)
+	p = append(p, pb[:]...)
+	p = tcpguard.AppendVarInt(p, nextState)
+	var out []byte
+	out = tcpguard.AppendVarInt(out, int32(len(p)))
+	return append(out, p...)
+}
+
+func makeMCLoginStart(username string) []byte {
+	var p []byte
+	p = tcpguard.AppendVarInt(p, 0x00)
+	p = tcpguard.AppendVarInt(p, int32(len(username)))
+	p = append(p, username...)
+	var out []byte
+	out = tcpguard.AppendVarInt(out, int32(len(p)))
+	return append(out, p...)
+}
+
+func readSSHDisconnectDescription(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+	var hdr [5]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		t.Fatalf("read SSH packet header: %v", err)
+	}
+	pktLen := binary.BigEndian.Uint32(hdr[0:4])
+	padLen := int(hdr[4])
+	rest := make([]byte, pktLen-1)
+	if _, err := io.ReadFull(r, rest); err != nil {
+		t.Fatalf("read SSH packet body: %v", err)
+	}
+	payload := rest[:len(rest)-padLen]
+	if len(payload) < 9 || payload[0] != 1 {
+		t.Fatalf("expected SSH_MSG_DISCONNECT (1), got %v", payload)
+	}
+	dlen := binary.BigEndian.Uint32(payload[5:9])
+	return string(payload[9 : 9+int(dlen)])
+}
+
+func TestRuntimeAllInOneHTTPSSHAndMinecraft(t *testing.T) {
+	// Mock SSH upstream
+	sshUpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sshUpLn.Close()
+	go func() {
+		for {
+			c, err := sshUpLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_, _ = conn.Write([]byte("SSH-2.0-MockSSHD\r\nOK"))
+			}(c)
+		}
+	}()
+
+	// Mock Minecraft upstream
+	mcUpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mcUpLn.Close()
+	go func() {
+		for {
+			c, err := mcUpLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_, _, _, _ = tcpguard.ReadMCPacket(conn, 1024)
+				_, _ = conn.Write([]byte("MC_UPSTREAM_OK"))
+			}(c)
+		}
+	}()
+
+	httpPort := reserveFreePort(t)
+	httpsPort := reserveFreePort(t)
+	verifyPort := reserveFreePort(t)
+	sshPort := reserveFreePort(t)
+	mcPort := reserveFreePort(t)
+
+	cfg := config.Config{
+		BindHost:  "127.0.0.1",
+		HTTPPort:  httpPort,
+		HTTPSPort: httpsPort,
+		Secret:    "allinone-secret-123",
+		Defaults:  config.DefaultSiteWAFConfig(),
+		TLS: config.TLSConfig{
+			Mode:    "selfsigned",
+			CertDir: t.TempDir(),
+		},
+		Intel: config.IntelConfig{
+			IPSecurity:       false,
+			LiveReputation:   false,
+			AIIPList:         false,
+			VPNDetection:     false,
+			IPSecurityAction: "verify",
+		},
+		Sites: []config.SiteConfig{
+			{
+				Domain:    "app.example.com",
+				Upstreams: []string{"http://upstream.example"},
+				Protect:   true,
+				WAF: config.SiteWAFConfig{
+					VerifyLevel:  config.VerifyLevelAlways,
+					Difficulty:   1,
+					ChallengeTTL: 300,
+					ClearanceTTL: 3600,
+				},
+			},
+		},
+		Verify: config.VerifyServerConfig{Port: verifyPort},
+		SSH: &config.SSHConfig{
+			Enabled:      true,
+			Port:         sshPort,
+			Upstream:     sshUpLn.Addr().String(),
+			Protect:      true,
+			VerifyLevel:  config.VerifyLevelAlways,
+			Difficulty:   1,
+			ChallengeTTL: 300,
+			ClearanceTTL: 3600,
+		},
+		Minecraft: &config.MinecraftConfig{
+			Enabled:      true,
+			Port:         mcPort,
+			Upstream:     mcUpLn.Addr().String(),
+			Protect:      true,
+			VerifyLevel:  config.VerifyLevelAlways,
+			Difficulty:   1,
+			ChallengeTTL: 300,
+			ClearanceTTL: 3600,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt, err := BuildRuntime(ctx, cfg, RuntimeOptions{
+		DisablePublicIPProbe: true,
+		ServerIPs:            []string{"127.0.0.1"},
+		HTTPTransport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("http-upstream-ok")),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- rt.Serve(ctx) }()
+
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", httpsPort))
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", verifyPort))
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", sshPort))
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", mcPort))
+
+	tlsClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	// 1. HTTP site serves PoW verification challenge on HTTPSPort
+	httpReq, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("https://127.0.0.1:%d/", httpsPort), nil)
+	httpReq.Host = "app.example.com"
+	httpResp, err := tlsClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("HTTPS site request: %v", err)
+	}
+	httpBody, _ := io.ReadAll(httpResp.Body)
+	_ = httpResp.Body.Close()
+	if !strings.Contains(string(httpBody), "/.waf/verify") || !strings.Contains(string(httpBody), "solveGymbag") {
+		t.Fatalf("expected HTTP challenge page, got status=%d body=%q", httpResp.StatusCode, string(httpBody))
+	}
+
+	// 2. SSH receives verify link in console -> solve PoW on :verifyPort -> passes through to mock sshd
+	sshConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sshPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial SSH proxy: %v", err)
+	}
+	_, _ = sshConn.Write([]byte("SSH-2.0-OpenSSH_9.9\r\n"))
+	sr := bufio.NewReader(sshConn)
+	banner, err := sr.ReadString('\n')
+	if err != nil || !strings.HasPrefix(banner, "SSH-2.0-Gymbag_Verify") {
+		_ = sshConn.Close()
+		t.Fatalf("unexpected SSH banner %q: %v", banner, err)
+	}
+	desc := readSSHDisconnectDescription(t, sr)
+	_ = sshConn.Close()
+
+	urlRe := regexp.MustCompile(fmt.Sprintf(`https://127\.0\.0\.1:%d/v/[A-Za-z0-9_-]+`, verifyPort))
+	sshVerifyURL := urlRe.FindString(desc)
+	if sshVerifyURL == "" {
+		t.Fatalf("expected verify URL on port %d in SSH disconnect:\n%s", verifyPort, desc)
+	}
+	solveVerifyURLOverTLS(t, tlsClient, sshVerifyURL, "127.0.0.1")
+
+	sshConn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sshPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("redial SSH proxy: %v", err)
+	}
+	defer sshConn2.Close()
+	_, _ = sshConn2.Write([]byte("SSH-2.0-OpenSSH_9.9\r\n"))
+	buf := make([]byte, 64)
+	n, err := sshConn2.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), "SSH-2.0-MockSSHD") {
+		t.Fatalf("expected upstream SSH banner after clearance, got %q err=%v", string(buf[:n]), err)
+	}
+
+	// 3. Minecraft receives verify link in Connection Lost disconnect -> solve PoW on :verifyPort -> passes through
+	mcConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", mcPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial MC proxy: %v", err)
+	}
+	_, _ = mcConn.Write(makeMCHandshake(765, "mc.example.com", uint16(mcPort), 2))
+	_, _ = mcConn.Write(makeMCLoginStart("Steve"))
+	pid, payload, _, err := tcpguard.ReadMCPacket(mcConn, 8192)
+	_ = mcConn.Close()
+	if err != nil || pid != 0x00 {
+		t.Fatalf("expected MC Login Disconnect (0x00), got pid=%d err=%v", pid, err)
+	}
+	chatJSON, _, err := tcpguard.ReadMCString(payload)
+	if err != nil {
+		t.Fatalf("ReadMCString: %v", err)
+	}
+	mcVerifyURL := urlRe.FindString(chatJSON)
+	if mcVerifyURL == "" {
+		t.Fatalf("expected verify URL in MC Connection Lost JSON:\n%s", chatJSON)
+	}
+	solveVerifyURLOverTLS(t, tlsClient, mcVerifyURL, "127.0.0.1")
+
+	mcConn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", mcPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("redial MC proxy: %v", err)
+	}
+	defer mcConn2.Close()
+	_, _ = mcConn2.Write(makeMCHandshake(765, "mc.example.com", uint16(mcPort), 2))
+	_, _ = mcConn2.Write(makeMCLoginStart("Steve"))
+	mcOut := make([]byte, 32)
+	mn, err := mcConn2.Read(mcOut)
+	if err != nil || string(mcOut[:mn]) != "MC_UPSTREAM_OK" {
+		t.Fatalf("expected MC_UPSTREAM_OK after clearance, got %q err=%v", string(mcOut[:mn]), err)
+	}
+
+	cancel()
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Runtime.Serve returned error on shutdown: %v", err)
+	}
+}
+
+func TestRuntimeSSHOnlyAndAdminHealth(t *testing.T) {
+	sshPort := reserveFreePort(t)
+	verifyPort := reserveFreePort(t)
+	adminPort := reserveFreePort(t)
+	adminAddr := fmt.Sprintf("127.0.0.1:%d", adminPort)
+
+	cfg := config.Config{
+		BindHost:  "127.0.0.1",
+		HTTPPort:  reserveFreePort(t),
+		HTTPSPort: reserveFreePort(t),
+		AdminAddr: adminAddr,
+		Secret:    "sshonly-secret",
+		Defaults:  config.DefaultSiteWAFConfig(),
+		TLS: config.TLSConfig{
+			Mode:    "local",
+			CertDir: t.TempDir(),
+		},
+		Intel: config.IntelConfig{
+			IPSecurity:       false,
+			LiveReputation:   false,
+			AIIPList:         false,
+			VPNDetection:     false,
+			IPSecurityAction: "verify",
+		},
+		Verify: config.VerifyServerConfig{Port: verifyPort},
+		SSH: &config.SSHConfig{
+			Enabled:     true,
+			Port:        sshPort,
+			Upstream:    "127.0.0.1:22",
+			Protect:     true,
+			VerifyLevel: config.VerifyLevelSuspiciousAndAI,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt, err := BuildRuntime(ctx, cfg, RuntimeOptions{
+		DisablePublicIPProbe: true,
+		ServerIPs:            []string{"127.0.0.1"},
+	})
+	if err != nil {
+		t.Fatalf("BuildRuntime (SSH-only): %v", err)
+	}
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- rt.Serve(ctx) }()
+
+	waitForTCPReady(t, adminAddr)
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", verifyPort))
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", sshPort))
+
+	resp, err := http.Get("http://" + adminAddr + "/api/v1/health")
+	if err != nil {
+		t.Fatalf("GET health: %v", err)
+	}
+	defer resp.Body.Close()
+	var health map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if health["ssh_enabled"] != true || health["minecraft_enabled"] != false {
+		t.Fatalf("unexpected health response: %+v", health)
+	}
+	if _, ok := health["vpn_entries"]; !ok {
+		t.Fatalf("expected vpn_entries in health response: %+v", health)
+	}
+
+	cancel()
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Serve error: %v", err)
+	}
+}
+
+func TestRuntimeSharedHTTPSAndVerifyPort(t *testing.T) {
+	sharedPort := reserveFreePort(t)
+	sshPort := reserveFreePort(t)
+	httpPort := reserveFreePort(t)
+
+	cfg := config.Config{
+		BindHost:  "127.0.0.1",
+		HTTPPort:  httpPort,
+		HTTPSPort: sharedPort,
+		Secret:    "shared-port-secret",
+		Defaults:  config.DefaultSiteWAFConfig(),
+		TLS: config.TLSConfig{
+			Mode:    "selfsigned",
+			CertDir: t.TempDir(),
+		},
+		Intel: config.IntelConfig{
+			IPSecurity:       false,
+			LiveReputation:   false,
+			AIIPList:         false,
+			VPNDetection:     false,
+			IPSecurityAction: "verify",
+		},
+		Sites: []config.SiteConfig{
+			{
+				Domain:    "app.internal",
+				Upstreams: []string{"http://127.0.0.1:9999"},
+				Protect:   true,
+				WAF:       config.DefaultSiteWAFConfig(),
+			},
+		},
+		Verify: config.VerifyServerConfig{Port: sharedPort},
+		SSH: &config.SSHConfig{
+			Enabled:     true,
+			Port:        sshPort,
+			Upstream:    "127.0.0.1:22",
+			Protect:     true,
+			VerifyLevel: config.VerifyLevelAlways,
+			Difficulty:  1,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt, err := BuildRuntime(ctx, cfg, RuntimeOptions{
+		DisablePublicIPProbe: true,
+		ServerIPs:            []string{"127.0.0.1"},
+	})
+	if err != nil {
+		t.Fatalf("BuildRuntime (shared port): %v", err)
+	}
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- rt.Serve(ctx) }()
+
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", sharedPort))
+	waitForTCPReady(t, fmt.Sprintf("127.0.0.1:%d", sshPort))
+
+	// Get SSH verify link targeting the shared port
+	sshConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sshPort), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = sshConn.Write([]byte("SSH-2.0-OpenSSH_9.9\r\n"))
+	sr := bufio.NewReader(sshConn)
+	_, _ = sr.ReadString('\n')
+	desc := readSSHDisconnectDescription(t, sr)
+	_ = sshConn.Close()
+
+	urlRe := regexp.MustCompile(fmt.Sprintf(`https://127\.0\.0\.1:%d/v/[A-Za-z0-9_-]+`, sharedPort))
+	verifyURL := urlRe.FindString(desc)
+	if verifyURL == "" {
+		t.Fatalf("expected verify link on shared port %d:\n%s", sharedPort, desc)
+	}
+
+	tlsClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 5 * time.Second,
+	}
+	siteReq, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("https://127.0.0.1:%d/", sharedPort), nil)
+	siteReq.Host = "app.internal"
+	siteResp, err := tlsClient.Do(siteReq)
+	if err != nil {
+		t.Fatalf("HTTPS site request on shared port: %v", err)
+	}
+	siteBody, _ := io.ReadAll(siteResp.Body)
+	_ = siteResp.Body.Close()
+	if !strings.Contains(string(siteBody), "solveGymbag") {
+		t.Fatalf("expected HTTP site challenge on shared port, got status=%d body=%q", siteResp.StatusCode, string(siteBody))
+	}
+
+	solveVerifyURLOverTLS(t, tlsClient, verifyURL, "127.0.0.1")
+
+	// Also verify deleting the last HTTP site is allowed while SSH protection is active
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/app.internal", nil)
+	delRec := httptest.NewRecorder()
+	rt.AdminHandler.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusNoContent && delRec.Code != http.StatusOK {
+		t.Fatalf("expected DELETE last site to succeed while SSH enabled, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+
+	cancel()
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Serve error: %v", err)
 	}
 }

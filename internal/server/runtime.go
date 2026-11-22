@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -10,18 +11,22 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"gymbag/internal/config"
+	"gymbag/internal/host"
 	"gymbag/internal/intel"
 	"gymbag/internal/localpki"
 	"gymbag/internal/proxy"
 	"gymbag/internal/store"
+	"gymbag/internal/tcpguard"
 	"gymbag/internal/tlsmanager"
 	"gymbag/internal/waf"
 )
@@ -29,42 +34,53 @@ import (
 // RuntimeOptions allows dependency injection of custom transports, stores, intelligence managers,
 // remote rules managers, ACME clients, hosts file paths, and loggers.
 type RuntimeOptions struct {
-	Store              store.Store
-	Intel              *intel.Manager
-	IntelHTTP          *http.Client
-	RemoteRules        *waf.RemoteRuleManager
-	RemoteRulesHTTP    *http.Client
-	LocalWatchInterval time.Duration
-	HTTPTransport      http.RoundTripper
-	WSDialer           proxy.DialContextFunc
-	ACMEHTTP           *http.Client
-	HostsFilePath      string
-	Logger             *slog.Logger
+	Store                store.Store
+	Intel                *intel.Manager
+	IntelHTTP            *http.Client
+	RemoteRules          *waf.RemoteRuleManager
+	RemoteRulesHTTP      *http.Client
+	LocalWatchInterval   time.Duration
+	HTTPTransport        http.RoundTripper
+	WSDialer             proxy.DialContextFunc
+	ACMEHTTP             *http.Client
+	HostsFilePath        string
+	DisablePublicIPProbe bool
+	ServerIPs            []string
+	Logger               *slog.Logger
 }
 
 // Runtime is the composition root wiring configuration, WAF, IP intelligence, remote rules,
-// reverse proxy, TLS, local PKI hosts management, and HTTP handlers.
+// reverse proxy, SSH/Minecraft protection proxies, verify portal, TLS, local PKI hosts management,
+// and HTTP handlers.
 type Runtime struct {
-	mu            sync.RWMutex
-	cfg           config.Config
-	acmeHTTP      *http.Client
-	providerChain *dynamicProviderChain
+	mu                  sync.RWMutex
+	cfg                 config.Config
+	acmeHTTP            *http.Client
+	providerChain       *dynamicProviderChain
+	verifyProviderChain *dynamicProviderChain
+	detectedPublicIP    string
+	localIPs            []string
+	fallbackGateStore   store.Store
 
-	Logger      *slog.Logger
-	Store       store.Store
-	Intel       *intel.Manager
-	RemoteRules *waf.RemoteRuleManager
-	Clearance   *waf.ClearanceTokens
-	Challenges  *waf.ChallengeService
-	Pages       *waf.Renderer
-	Router      *proxy.SiteRouter
-	HTTPProxy   *proxy.HTTPProxy
-	WSProxy     *proxy.WebSocketProxy
-	ACMEBoard   *tlsmanager.HTTP01Board
-	ACMEClient  *tlsmanager.ACMEClient
-	CertManager *tlsmanager.Manager
-	Hosts       *localpki.HostsManager
-	HSTS        atomic.Bool
+	Logger            *slog.Logger
+	Store             store.Store
+	Intel             *intel.Manager
+	RemoteRules       *waf.RemoteRuleManager
+	Clearance         *waf.ClearanceTokens
+	Challenges        *waf.ChallengeService
+	Pages             *waf.Renderer
+	Router            *proxy.SiteRouter
+	HTTPProxy         *proxy.HTTPProxy
+	WSProxy           *proxy.WebSocketProxy
+	ACMEBoard         *tlsmanager.HTTP01Board
+	ACMEClient        *tlsmanager.ACMEClient
+	CertManager       *tlsmanager.Manager
+	VerifyCertManager *tlsmanager.Manager
+	VerifyPortal      *tcpguard.VerifyPortal
+	SSHProxy          *tcpguard.SSHProxy
+	MinecraftProxy    *tcpguard.MinecraftProxy
+	Hosts             *localpki.HostsManager
+	HSTS              atomic.Bool
 
 	HTTPSHandler    http.Handler
 	RedirectHandler http.Handler
@@ -212,9 +228,11 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 			IPSecurityEnabled:     cfg.Intel.IPSecurity,
 			LiveReputationEnabled: cfg.Intel.LiveReputation,
 			AIIPListEnabled:       cfg.Intel.AIIPList,
+			VPNDetectionEnabled:   cfg.Intel.VPNDetection,
 			RefreshInterval:       time.Duration(cfg.Intel.RefreshInterval) * time.Second,
 			ExtraThreatFeeds:      cfg.Intel.ThreatFeeds,
 			ExtraAIFeeds:          cfg.Intel.AIIPFeeds,
+			ExtraVPNFeeds:         cfg.Intel.VPNFeeds,
 			HTTPClient:            opts.IntelHTTP,
 			Logger:                logger,
 		})
@@ -257,34 +275,109 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		_ = st.Close()
 		return nil, err
 	}
-	providerChain := newDynamicProviderChain(tlsmanager.BuildProviders(cfg, board, acmeClient))
+	var initSiteProviders []tlsmanager.Provider
+	if cfg.HTTPEnabled() {
+		initSiteProviders = tlsmanager.BuildProviders(cfg, board, acmeClient)
+	}
+	providerChain := newDynamicProviderChain(initSiteProviders)
 	certMgr := tlsmanager.NewManager([]tlsmanager.Provider{providerChain})
-	if err := certMgr.RegisterSiteCertificatesWithPassword(cfg.Sites, effectiveKeyPassword(cfg)); err != nil {
-		_ = st.Close()
-		return nil, err
+	if cfg.HTTPEnabled() {
+		if err := certMgr.RegisterSiteCertificatesWithPassword(cfg.Sites, effectiveKeyPassword(cfg)); err != nil {
+			_ = st.Close()
+			return nil, err
+		}
 	}
 
 	hostsMgr := localpki.NewHostsManager(opts.HostsFilePath, "", logger)
 	trustedNets := ParseTrustedProxies(cfg.TrustedProxies)
 
+	var (
+		detectedPublicIP    string
+		localIPs            []string
+		fallbackGateStore   store.Store
+		verifyProviderChain *dynamicProviderChain
+		verifyCertMgr       *tlsmanager.Manager
+		verifyPortal        *tcpguard.VerifyPortal
+		sshProxy            *tcpguard.SSHProxy
+		mcProxy             *tcpguard.MinecraftProxy
+	)
+	if cfg.NeedsVerifyServer() {
+		gateStore, ok := st.(store.GateStore)
+		if !ok {
+			memFallback := store.NewMemoryStore()
+			gateStore = memFallback
+			fallbackGateStore = memFallback
+		}
+		if len(opts.ServerIPs) > 0 {
+			for _, candidate := range opts.ServerIPs {
+				trimmed := strings.TrimSpace(candidate)
+				if trimmed == "" {
+					continue
+				}
+				localIPs = append(localIPs, trimmed)
+				if detectedPublicIP == "" {
+					if addr, pErr := netip.ParseAddr(trimmed); pErr == nil {
+						addr = addr.Unmap()
+						if !addr.IsLoopback() && !addr.IsPrivate() && !addr.IsLinkLocalUnicast() && !addr.IsUnspecified() {
+							detectedPublicIP = addr.String()
+						}
+					}
+				}
+			}
+			if detectedPublicIP == "" && len(localIPs) > 0 {
+				detectedPublicIP = localIPs[0]
+			}
+		} else {
+			var probeClient *http.Client
+			if !opts.DisablePublicIPProbe {
+				if opts.ACMEHTTP != nil {
+					probeClient = opts.ACMEHTTP
+				} else {
+					probeClient = &http.Client{Timeout: 2 * time.Second}
+				}
+			}
+			detectedPublicIP, localIPs = tcpguard.DetectServerIPs(ctx, probeClient)
+		}
+
+		verifyTargets := tcpguard.VerifyCertTargets(cfg.Verify, detectedPublicIP, localIPs)
+		verifyProviderChain = newDynamicProviderChain(tlsmanager.BuildVerifyProviders(cfg, verifyTargets, board, acmeClient))
+		verifyCertMgr = tlsmanager.NewManager([]tlsmanager.Provider{verifyProviderChain})
+		verifyPortal = tcpguard.NewVerifyPortal(gateStore, challenges, board, trustedNets)
+
+		if cfg.SSHEnabled() {
+			sshProxy = tcpguard.NewSSHProxy(*cfg.SSH, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
+		}
+		if cfg.MinecraftEnabled() {
+			mcProxy = tcpguard.NewMinecraftProxy(*cfg.Minecraft, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
+		}
+	}
+
 	rt := &Runtime{
-		cfg:           cfg,
-		acmeHTTP:      opts.ACMEHTTP,
-		providerChain: providerChain,
-		Logger:        logger,
-		Store:         st,
-		Intel:         intelMgr,
-		RemoteRules:   remoteMgr,
-		Clearance:     clearance,
-		Challenges:    challenges,
-		Pages:         pages,
-		Router:        router,
-		HTTPProxy:     httpProxy,
-		WSProxy:       wsProxy,
-		ACMEBoard:     board,
-		ACMEClient:    acmeClient,
-		CertManager:   certMgr,
-		Hosts:         hostsMgr,
+		cfg:                 cfg,
+		acmeHTTP:            opts.ACMEHTTP,
+		providerChain:       providerChain,
+		verifyProviderChain: verifyProviderChain,
+		detectedPublicIP:    detectedPublicIP,
+		localIPs:            localIPs,
+		fallbackGateStore:   fallbackGateStore,
+		Logger:              logger,
+		Store:               st,
+		Intel:               intelMgr,
+		RemoteRules:         remoteMgr,
+		Clearance:           clearance,
+		Challenges:          challenges,
+		Pages:               pages,
+		Router:              router,
+		HTTPProxy:           httpProxy,
+		WSProxy:             wsProxy,
+		ACMEBoard:           board,
+		ACMEClient:          acmeClient,
+		CertManager:         certMgr,
+		VerifyCertManager:   verifyCertMgr,
+		VerifyPortal:        verifyPortal,
+		SSHProxy:            sshProxy,
+		MinecraftProxy:      mcProxy,
+		Hosts:               hostsMgr,
 	}
 	if cfg.TLS.HSTS != nil {
 		rt.HSTS.Store(*cfg.TLS.HSTS)
@@ -295,6 +388,11 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 	// Fused high-throughput HTTPS handler: avoids per-request context cloning, duplicate IP resolution,
 	// and duplicate WebSocket upgrade checks while preserving identical security semantics.
 	rt.HTTPSHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tcpguard.IsGatePath(r.URL.Path) && rt.VerifyPortal != nil && rt.verifySharesHTTPS() {
+			rt.VerifyPortal.ServeHTTP(w, r)
+			return
+		}
+
 		hdr := w.Header()
 		hdr["Server"] = serverHeaderValue
 
@@ -395,8 +493,40 @@ func (rt *Runtime) Snapshot() config.Config {
 	return snap
 }
 
+func (rt *Runtime) verifySharesHTTPS() bool {
+	rt.mu.RLock()
+	cfg := rt.cfg
+	rt.mu.RUnlock()
+	return cfg.HTTPEnabled() && cfg.NeedsVerifyServer() && cfg.Verify.EffectivePort() == cfg.HTTPSPort
+}
+
+func (rt *Runtime) httpsTLSConfig() *tls.Config {
+	if !rt.verifySharesHTTPS() || rt.VerifyCertManager == nil {
+		return rt.CertManager.TLSConfig()
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if hello == nil || hello.ServerName == "" {
+				if cert, err := rt.VerifyCertManager.GetCertificate(hello); err == nil {
+					return cert, nil
+				}
+				return rt.CertManager.GetCertificate(hello)
+			}
+			if _, isSite := rt.Router.Resolve(host.Normalize(hello.ServerName)); isSite {
+				return rt.CertManager.GetCertificate(hello)
+			}
+			if cert, err := rt.VerifyCertManager.GetCertificate(hello); err == nil {
+				return cert, nil
+			}
+			return rt.CertManager.GetCertificate(hello)
+		},
+	}
+}
+
 // ReplaceConfig validates next and atomically reloads site routing, custom rules, TLS providers,
-// and per-site SNI certificates.
+// per-site SNI certificates, and SSH/Minecraft protection policies.
 func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	if err := next.Validate(); err != nil {
 		return err
@@ -405,11 +535,24 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := rt.CertManager.RegisterSiteCertificatesWithPassword(next.Sites, effectiveKeyPassword(next)); err != nil {
-		return err
+	if next.HTTPEnabled() {
+		if err := rt.CertManager.RegisterSiteCertificatesWithPassword(next.Sites, effectiveKeyPassword(next)); err != nil {
+			return err
+		}
+		if rt.providerChain != nil {
+			rt.providerChain.setProviders(tlsmanager.BuildProviders(next, rt.ACMEBoard, acmeClient))
+		}
+	} else {
+		if err := rt.CertManager.RegisterSiteCertificatesWithPassword(nil, ""); err != nil {
+			return err
+		}
+		if rt.providerChain != nil {
+			rt.providerChain.setProviders(nil)
+		}
 	}
-	if rt.providerChain != nil {
-		rt.providerChain.setProviders(tlsmanager.BuildProviders(next, rt.ACMEBoard, acmeClient))
+	if rt.verifyProviderChain != nil && next.NeedsVerifyServer() {
+		targets := tcpguard.VerifyCertTargets(next.Verify, rt.detectedPublicIP, rt.localIPs)
+		rt.verifyProviderChain.setProviders(tlsmanager.BuildVerifyProviders(next, targets, rt.ACMEBoard, acmeClient))
 	}
 	var addedURLs []string
 	if rt.RemoteRules != nil {
@@ -430,6 +573,12 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	rt.mu.Unlock()
 
 	rt.Router.ReloadWithProviders(next.Sites, rt.Store, rt.Clearance, rt.Intel, next.Intel.IPSecurityAction, rt.RemoteRules)
+	if rt.SSHProxy != nil && next.SSHEnabled() {
+		rt.SSHProxy.UpdateConfig(*next.SSH, next.Verify, next.Defaults.Rules, next.Intel.IPSecurityAction)
+	}
+	if rt.MinecraftProxy != nil && next.MinecraftEnabled() {
+		rt.MinecraftProxy.UpdateConfig(*next.Minecraft, next.Verify, next.Defaults.Rules, next.Intel.IPSecurityAction)
+	}
 	if next.TLS.HSTS != nil {
 		rt.HSTS.Store(*next.TLS.HSTS)
 	} else {
@@ -445,9 +594,19 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	return nil
 }
 
+func (rt *Runtime) activeTLSMaterial() *tlsmanager.Material {
+	if cur := rt.CertManager.Current(); cur != nil {
+		return cur
+	}
+	if rt.VerifyCertManager != nil {
+		return rt.VerifyCertManager.Current()
+	}
+	return nil
+}
+
 // TLSSource returns the active certificate provider source name ("file", "acme", "local", "selfsigned", or "none").
 func (rt *Runtime) TLSSource() string {
-	if cur := rt.CertManager.Current(); cur != nil {
+	if cur := rt.activeTLSMaterial(); cur != nil {
 		return cur.Source
 	}
 	return "none"
@@ -457,7 +616,7 @@ func (rt *Runtime) TLSSource() string {
 // and the full catalog of supported ACME SSL providers.
 func (rt *Runtime) TLSStatus() TLSStatus {
 	snap := rt.Snapshot()
-	cur := rt.CertManager.Current()
+	cur := rt.activeTLSMaterial()
 
 	source := "none"
 	provider := strings.TrimSpace(snap.TLS.Provider)
@@ -538,11 +697,24 @@ func (rt *Runtime) TLSStatus() TLSStatus {
 
 // RenewTLS triggers an immediate forced certificate issuance/renewal and refreshes HSTS state.
 func (rt *Runtime) RenewTLS(ctx context.Context) (TLSStatus, error) {
-	mat, err := rt.CertManager.ForceRenew(ctx)
-	if err != nil {
-		return TLSStatus{}, err
-	}
 	snap := rt.Snapshot()
+	var mat *tlsmanager.Material
+	var err error
+	if snap.HTTPEnabled() {
+		mat, err = rt.CertManager.ForceRenew(ctx)
+		if err != nil {
+			return TLSStatus{}, err
+		}
+	}
+	if snap.NeedsVerifyServer() && rt.VerifyCertManager != nil {
+		vMat, vErr := rt.VerifyCertManager.ForceRenew(ctx)
+		if vErr != nil {
+			return TLSStatus{}, vErr
+		}
+		if mat == nil {
+			mat = vMat
+		}
+	}
 	if mat != nil {
 		rt.HSTS.Store(tlsmanager.HSTSEnabled(snap.TLS.HSTS, mat.Source))
 	}
@@ -556,7 +728,7 @@ func (rt *Runtime) SetupHosts() ([]string, error) {
 		return nil, nil
 	}
 	snap := rt.Snapshot()
-	if !snap.TLS.AutoHostsEnabled() {
+	if !snap.HTTPEnabled() || !snap.TLS.AutoHostsEnabled() {
 		return nil, nil
 	}
 	return rt.Hosts.Setup(snap.Domains())
@@ -597,17 +769,25 @@ func (rt *Runtime) Close() error {
 		hostsErr = nil
 	}
 	storeErr := rt.Store.Close()
-	return errors.Join(hostsErr, storeErr)
+	var fallbackErr error
+	if rt.fallbackGateStore != nil {
+		fallbackErr = rt.fallbackGateStore.Close()
+	}
+	return errors.Join(hostsErr, storeErr, fallbackErr)
 }
 
-// Serve starts automatic /etc/hosts setup (when enabled), background IP/AI feed auto-updates,
-// the HTTP (:80) redirect/ACME server, obtains TLS certificates, starts the HTTPS (:443) gateway
-// server (plus optional Admin REST server), and blocks until ctx is cancelled or a server fails.
+// Serve starts automatic /etc/hosts setup (when enabled), background IP/AI/VPN feed auto-updates,
+// the HTTP (:80) redirect/ACME server, obtains TLS certificates, starts the HTTPS (:443) gateway,
+// standalone Verify portal HTTPS (:8443), SSH protection proxy (:22), Minecraft protection proxy (:25565),
+// and optional Admin REST server, blocking until ctx is cancelled or a fatal server error occurs.
 func (rt *Runtime) Serve(ctx context.Context) error {
 	defer rt.Close()
+	serveCtx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+
 	cfg := rt.Snapshot()
 
-	if cfg.TLS.AutoHostsEnabled() {
+	if cfg.HTTPEnabled() && cfg.TLS.AutoHostsEnabled() {
 		if added, err := rt.SetupHosts(); err != nil {
 			if errors.Is(err, localpki.ErrPermissionDenied) {
 				rt.Logger.Warn(
@@ -634,18 +814,23 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 		}()
 	}
 
-	// Start automatic background updates for IP security feeds, AI robot IP lists, and remote firewall rules.
-	rt.Intel.Start(ctx)
+	// Start automatic background updates for IP security feeds, VPN/proxy lists, AI robot IPs, and remote firewall rules.
+	rt.Intel.Start(serveCtx)
 	if rt.RemoteRules != nil {
-		rt.RemoteRules.Start(ctx)
+		rt.RemoteRules.Start(serveCtx)
 	}
 
 	rt.Logger.Info(
 		"starting Gymbag gateway",
+		"http_enabled", cfg.HTTPEnabled(),
 		"http_port", cfg.HTTPPort,
 		"https_port", cfg.HTTPSPort,
 		"domains", strings.Join(cfg.Domains(), ", "),
+		"ssh_enabled", cfg.SSHEnabled(),
+		"minecraft_enabled", cfg.MinecraftEnabled(),
+		"verify_port", cfg.Verify.EffectivePort(),
 		"ip_security", cfg.Intel.IPSecurity,
+		"vpn_detection", cfg.Intel.VPNDetection,
 		"ai_ip_list", cfg.Intel.AIIPList,
 	)
 	for _, site := range cfg.Sites {
@@ -659,50 +844,131 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 			"custom_rules", len(site.WAF.Rules),
 		)
 	}
-
-	if (cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024) && os.Geteuid() != 0 {
-		rt.Logger.Warn(
-			"ports below 1024 usually need administrator rights; set GYMBAG_HTTP_PORT and GYMBAG_HTTPS_PORT for local use",
+	if cfg.SSHEnabled() {
+		rt.Logger.Info(
+			"configured SSH protection",
+			"port", cfg.SSH.Port,
+			"upstream", cfg.SSH.Upstream,
+			"protected", cfg.SSH.Protect,
+			"verify_level", int(cfg.SSH.VerifyLevel),
+		)
+	}
+	if cfg.MinecraftEnabled() {
+		rt.Logger.Info(
+			"configured Minecraft protection",
+			"port", cfg.Minecraft.Port,
+			"upstream", cfg.Minecraft.Upstream,
+			"protected", cfg.Minecraft.Protect,
+			"verify_level", int(cfg.Minecraft.VerifyLevel),
+		)
+	}
+	if cfg.NeedsVerifyServer() {
+		rt.Logger.Info(
+			"configured verification portal",
+			"verify_url", cfg.Verify.URL,
+			"verify_port", cfg.Verify.EffectivePort(),
+			"shares_https_port", rt.verifySharesHTTPS(),
 		)
 	}
 
-	httpAddr := net.JoinHostPort(cfg.BindHost, fmt.Sprintf("%d", cfg.HTTPPort))
-	httpLn, err := net.Listen("tcp", httpAddr)
-	if err != nil {
-		return fmt.Errorf("failed to bind HTTP listener on %s: %w", httpAddr, err)
-	}
-	httpSrv := &http.Server{
-		Handler:           rt.RedirectHandler,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+	needsPriv := (cfg.HTTPEnabled() && (cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024)) ||
+		(cfg.SSHEnabled() && cfg.SSH.Port < 1024) ||
+		(cfg.MinecraftEnabled() && cfg.Minecraft.Port < 1024) ||
+		(cfg.NeedsVerifyServer() && cfg.Verify.EffectivePort() < 1024)
+	if needsPriv && os.Geteuid() != 0 {
+		rt.Logger.Warn(
+			"ports below 1024 usually need administrator rights",
+		)
 	}
 
-	errCh := make(chan error, 3)
-	go func() {
-		if serveErr := httpSrv.Serve(httpLn); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("HTTP server failed: %w", serveErr)
+	var (
+		httpSrv   *http.Server
+		httpsSrv  *http.Server
+		verifySrv *http.Server
+		adminSrv  *http.Server
+		sshLn     net.Listener
+		mcLn      net.Listener
+	)
+	shutdownAll := func(timeout time.Duration) {
+		cancelServe()
+		if sshLn != nil {
+			_ = sshLn.Close()
 		}
-	}()
-
-	shutdownHTTP := func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if mcLn != nil {
+			_ = mcLn.Close()
+		}
+		shutCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutCtx)
+		if httpsSrv != nil {
+			_ = httpsSrv.Shutdown(shutCtx)
+		}
+		if verifySrv != nil {
+			_ = verifySrv.Shutdown(shutCtx)
+		}
+		if adminSrv != nil {
+			_ = adminSrv.Shutdown(shutCtx)
+		}
+		if httpSrv != nil {
+			_ = httpSrv.Shutdown(shutCtx)
+		}
 	}
 
-	material, err := rt.CertManager.Obtain(ctx)
-	if err != nil {
-		shutdownHTTP()
-		return err
-	}
-	rt.HSTS.Store(tlsmanager.HSTSEnabled(cfg.TLS.HSTS, material.Source))
-	rt.Logger.Info("TLS certificate ready", "source", material.Source, "file", material.CertPath)
+	errCh := make(chan error, 8)
 
-	var adminSrv *http.Server
+	needHTTPListener := cfg.HTTPEnabled() ||
+		(cfg.NeedsVerifyServer() && cfg.TLS.Mode != "local" && cfg.TLS.Mode != "selfsigned" && cfg.TLS.Mode != "file")
+	if needHTTPListener && cfg.HTTPPort > 0 {
+		httpAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.HTTPPort))
+		httpLn, lErr := net.Listen("tcp", httpAddr)
+		if lErr != nil {
+			if cfg.HTTPEnabled() || cfg.TLS.Mode == "acme" {
+				return fmt.Errorf("failed to bind HTTP listener on %s: %w", httpAddr, lErr)
+			}
+			rt.Logger.Warn(
+				"skipping HTTP ACME challenge listener; falling back to local/self-signed IP certificate for verify portal",
+				"addr", httpAddr,
+				"error", lErr,
+			)
+		} else {
+			httpSrv = &http.Server{
+				Handler:           rt.RedirectHandler,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       120 * time.Second,
+			}
+			go func() {
+				if serveErr := httpSrv.Serve(httpLn); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+					errCh <- fmt.Errorf("HTTP server failed: %w", serveErr)
+				}
+			}()
+		}
+	}
+
+	if cfg.HTTPEnabled() {
+		material, err := rt.CertManager.Obtain(serveCtx)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return err
+		}
+		rt.HSTS.Store(tlsmanager.HSTSEnabled(cfg.TLS.HSTS, material.Source))
+		rt.Logger.Info("TLS certificate ready", "source", material.Source, "file", material.CertPath)
+	}
+
+	if cfg.NeedsVerifyServer() && rt.VerifyCertManager != nil {
+		verifyMat, err := rt.VerifyCertManager.Obtain(serveCtx)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return err
+		}
+		if !cfg.HTTPEnabled() {
+			rt.HSTS.Store(tlsmanager.HSTSEnabled(cfg.TLS.HSTS, verifyMat.Source))
+		}
+		rt.Logger.Info("verify portal TLS certificate ready", "source", verifyMat.Source, "file", verifyMat.CertPath)
+	}
+
 	if cfg.AdminAddr != "" {
 		adminLn, adminErr := net.Listen("tcp", cfg.AdminAddr)
 		if adminErr != nil {
-			shutdownHTTP()
+			shutdownAll(5 * time.Second)
 			return fmt.Errorf("failed to bind Admin REST API on %s: %w", cfg.AdminAddr, adminErr)
 		}
 		adminSrv = &http.Server{
@@ -717,50 +983,87 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 		}()
 	}
 
-	httpsAddr := net.JoinHostPort(cfg.BindHost, fmt.Sprintf("%d", cfg.HTTPSPort))
-	rawHTTPSLn, err := net.Listen("tcp", httpsAddr)
-	if err != nil {
-		if adminSrv != nil {
-			_ = adminSrv.Close()
+	if cfg.HTTPEnabled() {
+		httpsAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.HTTPSPort))
+		rawHTTPSLn, err := net.Listen("tcp", httpsAddr)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return fmt.Errorf("failed to bind HTTPS listener on %s: %w", httpsAddr, err)
 		}
-		shutdownHTTP()
-		return fmt.Errorf("failed to bind HTTPS listener on %s: %w", httpsAddr, err)
-	}
-	httpsSrv := &http.Server{
-		Handler:           rt.HTTPSHandler,
-		TLSConfig:         rt.CertManager.TLSConfig(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		httpsSrv = &http.Server{
+			Handler:           rt.HTTPSHandler,
+			TLSConfig:         rt.httpsTLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() {
+			if serveErr := httpsSrv.ServeTLS(rawHTTPSLn, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("HTTPS server failed: %w", serveErr)
+			}
+		}()
 	}
 
-	renewCtx, stopRenew := context.WithCancel(ctx)
-	defer stopRenew()
-	go rt.renewalLoop(renewCtx, cfg.TLS.RenewInterval, cfg.TLS.RenewWithinDays)
-
-	go func() {
-		if serveErr := httpsSrv.ServeTLS(rawHTTPSLn, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("HTTPS server failed: %w", serveErr)
+	if cfg.NeedsVerifyServer() && rt.VerifyPortal != nil && rt.VerifyCertManager != nil && !rt.verifySharesHTTPS() {
+		verifyAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.Verify.EffectivePort()))
+		rawVerifyLn, err := net.Listen("tcp", verifyAddr)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return fmt.Errorf("failed to bind Verify HTTPS listener on %s: %w", verifyAddr, err)
 		}
-	}()
+		verifySrv = &http.Server{
+			Handler:           rt.VerifyPortal,
+			TLSConfig:         rt.VerifyCertManager.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		rt.Logger.Info("verify portal HTTPS listening", "addr", verifyAddr)
+		go func() {
+			if serveErr := verifySrv.ServeTLS(rawVerifyLn, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("Verify HTTPS server failed: %w", serveErr)
+			}
+		}()
+	}
+
+	if cfg.SSHEnabled() && rt.SSHProxy != nil {
+		sshAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.SSH.Port))
+		ln, err := net.Listen("tcp", sshAddr)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return fmt.Errorf("failed to bind SSH listener on %s: %w", sshAddr, err)
+		}
+		sshLn = ln
+		rt.Logger.Info("SSH protection proxy listening", "addr", sshAddr, "upstream", cfg.SSH.Upstream)
+		go func() {
+			if serveErr := rt.SSHProxy.Serve(serveCtx, ln); serveErr != nil && serveCtx.Err() == nil && !errors.Is(serveErr, net.ErrClosed) {
+				errCh <- fmt.Errorf("SSH proxy failed: %w", serveErr)
+			}
+		}()
+	}
+
+	if cfg.MinecraftEnabled() && rt.MinecraftProxy != nil {
+		mcAddr := net.JoinHostPort(cfg.BindHost, strconv.Itoa(cfg.Minecraft.Port))
+		ln, err := net.Listen("tcp", mcAddr)
+		if err != nil {
+			shutdownAll(5 * time.Second)
+			return fmt.Errorf("failed to bind Minecraft listener on %s: %w", mcAddr, err)
+		}
+		mcLn = ln
+		rt.Logger.Info("Minecraft protection proxy listening", "addr", mcAddr, "upstream", cfg.Minecraft.Upstream)
+		go func() {
+			if serveErr := rt.MinecraftProxy.Serve(serveCtx, ln); serveErr != nil && serveCtx.Err() == nil && !errors.Is(serveErr, net.ErrClosed) {
+				errCh <- fmt.Errorf("Minecraft proxy failed: %w", serveErr)
+			}
+		}()
+	}
+
+	go rt.renewalLoop(serveCtx, cfg.TLS.RenewInterval, cfg.TLS.RenewWithinDays)
 
 	select {
 	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = httpsSrv.Shutdown(shutCtx)
-		if adminSrv != nil {
-			_ = adminSrv.Shutdown(shutCtx)
-		}
-		_ = httpSrv.Shutdown(shutCtx)
+		shutdownAll(10 * time.Second)
 		return nil
 	case fatalErr := <-errCh:
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpsSrv.Shutdown(shutCtx)
-		if adminSrv != nil {
-			_ = adminSrv.Shutdown(shutCtx)
-		}
-		_ = httpSrv.Shutdown(shutCtx)
+		shutdownAll(5 * time.Second)
 		return fatalErr
 	}
 }
@@ -776,13 +1079,21 @@ func (rt *Runtime) renewalLoop(ctx context.Context, intervalSeconds, withinDays 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updated, err := rt.CertManager.RenewIfNeeded(ctx, withinDays)
-			if err != nil {
-				rt.Logger.Error("certificate renewal failed", "error", err)
-				continue
+			if rt.CertManager != nil && rt.CertManager.Current() != nil {
+				updated, err := rt.CertManager.RenewIfNeeded(ctx, withinDays)
+				if err != nil {
+					rt.Logger.Error("certificate renewal failed", "error", err)
+				} else if updated != nil {
+					rt.Logger.Info("reloaded TLS certificate", "source", updated.Source, "file", updated.CertPath)
+				}
 			}
-			if updated != nil {
-				rt.Logger.Info("reloaded TLS certificate", "source", updated.Source, "file", updated.CertPath)
+			if rt.VerifyCertManager != nil && rt.VerifyCertManager.Current() != nil {
+				updated, err := rt.VerifyCertManager.RenewIfNeeded(ctx, withinDays)
+				if err != nil {
+					rt.Logger.Error("verify portal certificate renewal failed", "error", err)
+				} else if updated != nil {
+					rt.Logger.Info("reloaded verify portal TLS certificate", "source", updated.Source, "file", updated.CertPath)
+				}
 			}
 		}
 	}

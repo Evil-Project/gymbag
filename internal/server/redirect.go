@@ -20,22 +20,13 @@ var redirectAllowedMethods = map[string]struct{}{
 }
 
 // NewRedirectHandler builds the HTTP (:80) handler that serves ACME HTTP-01 challenges
-// and 308-redirects all other traffic to HTTPS.
+// and 308-redirects all other traffic to HTTPS (or returns 404 when no HTTP sites are configured).
 func NewRedirectHandler(router *proxy.SiteRouter, httpsPort int, board ACMEChallengeLookup) http.Handler {
-	core := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	redirectCore := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "" {
 			path = "/"
 		}
-		if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
-			if token == "" || strings.Contains(token, "/") {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			WriteACMEChallenge(w, r, board, token)
-			return
-		}
-
 		if _, ok := redirectAllowedMethods[strings.ToUpper(r.Method)]; !ok {
 			w.Header().Set("Allow", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -66,5 +57,27 @@ func NewRedirectHandler(router *proxy.SiteRouter, httpsPort int, board ACMEChall
 		}
 	})
 
-	return ServerHeaderMiddleware("gymbag", AllowedHostMiddleware(router, core))
+	siteHandler := AllowedHostMiddleware(router, redirectCore)
+
+	core := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "" {
+			path = "/"
+		}
+		if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
+			if token == "" || strings.Contains(token, "/") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			WriteACMEChallenge(w, r, board, token)
+			return
+		}
+		if router == nil || len(router.Sites()) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		siteHandler.ServeHTTP(w, r)
+	})
+
+	return ServerHeaderMiddleware("gymbag", core)
 }

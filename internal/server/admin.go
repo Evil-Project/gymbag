@@ -137,12 +137,15 @@ func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigContro
 	intelSt := ctrl.IntelStatus()
 	remoteSt := ctrl.RemoteRulesStatus()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "ok",
-		"sites_count":    len(snap.Sites),
-		"tls_source":     ctrl.TLSSource(),
-		"threat_entries": intelSt.ThreatEntries,
-		"ai_entries":     intelSt.AIEntries,
-		"remote_rules":   remoteSt.TotalRules,
+		"status":            "ok",
+		"sites_count":       len(snap.Sites),
+		"ssh_enabled":       snap.SSHEnabled(),
+		"minecraft_enabled": snap.MinecraftEnabled(),
+		"tls_source":        ctrl.TLSSource(),
+		"threat_entries":    intelSt.ThreatEntries,
+		"ai_entries":        intelSt.AIEntries,
+		"vpn_entries":       intelSt.VPNEntries,
+		"remote_rules":      remoteSt.TotalRules,
 	})
 }
 
@@ -423,7 +426,7 @@ func handleAdminSiteItem(w http.ResponseWriter, r *http.Request, ctrl ConfigCont
 		writeJSON(w, http.StatusOK, target)
 
 	case http.MethodDelete:
-		if len(snap.Sites) <= 1 {
+		if len(snap.Sites) <= 1 && !snap.SSHEnabled() && !snap.MinecraftEnabled() {
 			writeAdminError(w, http.StatusConflict, "last_site", "cannot delete the last configured site")
 			return
 		}
