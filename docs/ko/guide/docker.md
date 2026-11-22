@@ -1,20 +1,18 @@
 # Docker & Docker Compose
 
-Gymbag은 모든 릴리스 및 `main` 브랜치 푸시마다 GitHub Container Registry(`GHCR`)에 Alpine 기반 멀티 아키텍처(`linux/amd64`, `linux/arm64`) 공식 이미지를 게시합니다:
+릴리스 태그와 `main` 브랜치 푸시마다 GitHub Container Registry(`GHCR`)에 멀티 아키텍처(`linux/amd64`, `linux/arm64`) Alpine 이미지가 게시됩니다.
 
 - **이미지**: `ghcr.io/evil-project/gymbag`
 - **태그**: `latest`, `<semver>` (예: `0.1.0`), `<major>.<minor>`, `<major>`, `main`, 커밋 SHA
-- **실행 사용자**: 비루트 사용자 `gymbag` (UID `10001`, `cap_net_bind_service=+ep` 부여)
-- **노출 포트**: `80` (HTTP 리디렉션 + ACME HTTP-01) 및 `443` (HTTPS 게이트웨이)
-- **헬스체크**: 30초마다 `127.0.0.1:80` TCP 상태 점검
+- **실행 사용자**: `cap_net_bind_service=+ep`가 적용된 비루트 `gymbag` (UID `10001`)
+- **포트**: 기본 노출 포트는 `80` (HTTP 리다이렉트 + ACME HTTP-01) 및 `443` (HTTPS 게이트웨이)
+- **헬스체크**: 30초마다 `127.0.0.1:80` TCP 프로브
 
----
+## `docker run`으로 빠른 시작
 
-## `docker run` 빠른 시작
+### 옵션 A: `Gymbagfile` 또는 `gymbag.json` 마운트
 
-### 옵션 A: `Gymbagfile` 마운트 (권장)
-
-현재 디렉터리에 `Gymbagfile`을 생성합니다:
+현재 디렉터리에 `Gymbagfile`을 작성합니다.
 
 ```caddyfile
 {
@@ -31,7 +29,7 @@ app.example.com {
 }
 ```
 
-인증서, 로컬 CA 키, 서명 비밀 키, 위협 인텔 캐시, 원격 규칙 캐시용 영구 볼륨과 함께 실행합니다:
+ACME 인증서, 시크릿, 위협 인텔 캐시, 원격 규칙 캐시가 컨테이너 재빌드 후에도 남도록 `/app/certs` 영구 볼륨을 붙여 실행합니다.
 
 ```bash
 docker run -d \
@@ -46,9 +44,9 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### 옵션 B: 설정 파일 없이 환경 변수만 사용
+### 옵션 B: 환경 변수만 사용
 
-설정 파일을 마운트하지 않고 `GYMBAG_*` 환경 변수만으로 구성할 수 있습니다:
+설정 파일을 마운트하지 않으려면 `GYMBAG_*` 환경 변수를 직접 전달합니다.
 
 ```bash
 docker run -d \
@@ -68,30 +66,52 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-### 옵션 C: 핫 리로드 활성화 (`--watch`)
+### 옵션 C: SSH, Minecraft 및 인증 포털 노출
 
-컨테이너 `CMD`에 `--watch`를 전달하면 컨테이너 재시작 없이 변경된 `Gymbagfile`을 자동 반영합니다:
+Docker에서 SSH 서버나 Minecraft 서버를 보호하려면 해당 서비스 포트(`22` 또는 `25565`)와 함께 인증 포털 포트(`8443`)를 열고, 연결 해제 배너에 컨테이너 IP 대신 사용자 지정 도메인을 띄우려면 `GYMBAG_VERIFY_URL`을 지정하세요.
+
+```bash
+docker run -d \
+  --name gymbag \
+  --restart unless-stopped \
+  -p 80:80 -p 443:443 \
+  -p 25565:25565 -p 8443:8443 \
+  --cap-add NET_BIND_SERVICE \
+  --add-host=host.docker.internal:host-gateway \
+  -e GYMBAG_MC_ENABLED=true \
+  -e GYMBAG_MC_UPSTREAM=host.docker.internal:25566 \
+  -e GYMBAG_MC_VERIFY_LEVEL=3 \
+  -e GYMBAG_VERIFY_URL=https://verify.example.com:8443 \
+  -e GYMBAG_VERIFY_PORT=8443 \
+  -e GYMBAG_VPN_DETECTION=on \
+  -v gymbag-certs:/app/certs \
+  ghcr.io/evil-project/gymbag:latest
+```
+
+SSH에도 동일한 형태의 변수(`GYMBAG_SSH_ENABLED`, `GYMBAG_SSH_PORT`, `GYMBAG_SSH_UPSTREAM`, `GYMBAG_SSH_VERIFY_LEVEL`, `GYMBAG_SSH_PROTECT`)를 그대로 씁니다.
+
+### 옵션 D: 핫 리로드 (`--watch`)
+
+`CMD`를 덮어써서 `--watch`를 전달하면 설정 파일 편집 시 컨테이너 재시작 없이 라우트, 방화벽 규칙, SNI 인증서를 다시 불러옵니다.
 
 ```bash
 docker run -d \
   --name gymbag \
   -p 80:80 -p 443:443 \
   --cap-add NET_BIND_SERVICE \
-  -v "$(pwd)/Gymbagfile:/app/Gymbagfile:ro" \
+  -v "$(pwd)/config:/app/config:ro" \
   -v gymbag-certs:/app/certs \
   ghcr.io/evil-project/gymbag:latest \
-  run --config /app/Gymbagfile --watch
+  run --config /app/config/Gymbagfile --watch
 ```
 
-::: tip 단일 파일 바인드 마운트 시 inode 교체 주의
-단일 파일만 마운트(`./Gymbagfile:/app/Gymbagfile:ro`)한 경우, 일부 에디터가 원자적 이름 바꾸기로 저장하면 호스트 inode가 바뀌어 컨테이너가 변경을 감지하지 못할 수 있습니다. Docker에서 `--watch`를 사용할 때는 디렉터리 단위로 마운트(`-v "$(pwd)/config:/app/config:ro"`)하고 `--config /app/config/Gymbagfile --watch`를 사용하세요.
+::: tip `--watch` 사용 시 상위 디렉터리를 마운트하세요
+원자적 rename으로 파일을 저장하는 에디터는 호스트 inode를 새로 만듭니다. 단일 파일만 바인드 마운트(`./Gymbagfile:/app/Gymbagfile:ro`)하면 컨테이너가 예전 inode를 계속 읽으므로 `--watch`가 수정 사항을 못 봅니다. 대신 상위 디렉터리(`./config:/app/config:ro`)를 마운트하세요.
 :::
 
----
+## Redis와 함께 사용하는 Docker Compose
 
-## Docker Compose + Redis (프로덕션 멀티 컨테이너)
-
-저장소에 포함된 `compose.yaml`은 `redis:8-alpine`과 함께 Gymbag을 실행합니다. `GYMBAG_REDIS_URL`이 설정되면 내장 순수 Go RESP2 Redis 클라이언트가 재시작 및 다중 레플리카 간 일회용 PoW 챌린지와 속도 제한 상태를 공유합니다:
+저장소의 `compose.yaml`은 Gymbag 옆에 `redis:8-alpine`을 띄웁니다. `GYMBAG_REDIS_URL`을 설정하면 순수 Go RESP2 클라이언트를 통해 PoW 챌린지 논스, 고정 윈도우 속도 제한, SSH/Minecraft 인증 티켓과 IP 인증 기록을 재시작 및 여러 컨테이너 간에 유지·공유합니다.
 
 ```yaml
 services:
@@ -145,7 +165,7 @@ volumes:
   gymbag-redis:
 ```
 
-`Gymbagfile` 내부에서는 Compose 서비스 이름(`http://app:3000`) 또는 호스트 주소(`http://host.docker.internal:3000`)로 연결합니다:
+`Gymbagfile`에서는 Compose 서비스(`http://app:3000`)나 호스트에 바인딩된 앱(`http://host.docker.internal:3000`)으로 `reverse_proxy`를 지정합니다.
 
 ```caddyfile
 app.example.com {
@@ -155,17 +175,15 @@ app.example.com {
 }
 ```
 
-실행 명령:
+스택을 시작하거나 로컬 체크아웃에서 직접 빌드해 띄웁니다.
 
 ```bash
-# GHCR 사전 빌드 이미지 사용
 docker compose up -d
-
-# 로컬 소스에서 빌드 후 실행
+# 또는 로컬 빌드:
 docker compose up -d --build
 ```
 
-같은 디렉터리의 `.env` 파일에 정의된 `GYMBAG_*` 변수도 자동으로 적용됩니다:
+`compose.yaml` 옆에 `.env` 파일을 두면 `Gymbagfile` 값을 덮어씁니다.
 
 ```dotenv
 GYMBAG_ACME_EMAIL=ops@example.com
@@ -175,11 +193,7 @@ GYMBAG_CLEARANCE_TTL=12h
 GYMBAG_REMOTE_RULES=https://rules.example.com/waf.rules
 ```
 
----
-
-## `Gymbagfile` 없이 여러 컨테이너 프록시
-
-`GYMBAG_UPSTREAMS`로 여러 도메인을 서로 다른 컨테이너에 매핑할 수 있습니다:
+## 설정 파일 없이 여러 컨테이너 프록시하기
 
 ```yaml
 environment:
@@ -189,23 +203,19 @@ environment:
   GYMBAG_VERIFY_LEVEL: "3"
 ```
 
----
-
 ## 볼륨, 권한 및 보안 참고사항
 
-- **영구 `/app/certs` 볼륨**: ACME 계정 키, 발급된 인증서, 로컬 PKI CA, 자동 생성 HMAC 시크릿(`/app/certs/secret`), 위협 인텔 캐시(`/app/certs/intel-cache`), 원격 규칙 캐시(`/app/certs/rules-cache`)가 저장됩니다. 컨테이너 재생성 시 중복 인증서 발급이나 기존 세션 무효화를 막기 위해 반드시 영구 볼륨을 마운트하세요.
-- **호스트 디렉터리 마운트 권한**: 컨테이너는 UID/GID `10001`로 실행됩니다. `./certs:/app/certs`처럼 호스트 디렉터리를 마운트할 경우 UID `10001`에 쓰기 권한을 부여하세요:
+- **영구 `/app/certs` 볼륨**: ACME 계정 키, 발급된 인증서, 로컬 CA 파일, HMAC 클리어런스 시크릿(`/app/certs/secret`), 위협/VPN/AI 인텔 캐시(`/app/certs/intel-cache`), 원격 규칙 캐시(`/app/certs/rules-cache`)를 저장합니다. 항상 명명된 볼륨이나 호스트 디렉터리로 유지하세요.
+- **호스트 바인드 마운트 권한**: Gymbag은 컨테이너 내부에서 UID/GID `10001`로 실행됩니다. 명명된 볼륨 대신 `./certs:/app/certs`를 바인드 마운트하려면 `10001`이 쓸 수 있도록 권한을 맞춰 주세요.
   ```bash
   mkdir -p ./certs
   sudo chown -R 10001:10001 ./certs
   ```
-- **ACME HTTP-01을 위한 `80`/`443` 포트**: 공인 ACME CA 검증(`/.well-known/acme-challenge/*`)을 위해 호스트 `80:80`과 `443:443`을 매핑해야 합니다.
-- **Docker에서 `*.internal` 로컬 개발**: 컨테이너는 호스트 `/etc/hosts`를 수정할 수 없으므로 `GYMBAG_AUTO_HOSTS=off`를 설정하고 필요시 비특권 포트(`-p 8080:80 -p 8443:443`)를 사용하며 `/app/certs/ca/neuro-sama-root-ca.pem`을 꺼내 호스트 OS에 한 번 신뢰 등록하세요.
-- **Admin REST API**: 컨테이너에서 `GYMBAG_ADMIN=0.0.0.0:2019`를 활성화한 경우 반드시 호스트 루프백에만 바인딩(`-p 127.0.0.1:2019:2019`)하세요.
+- **ACME HTTP-01을 위해 `80` 포트 필요**: 공인 CA는 `80` 포트의 `/.well-known/acme-challenge/*`로 소유권을 검증하므로 `80:80`과 `443:443`을 매핑해야 합니다.
+- **Docker 내부 로컬 `*.internal`**: 컨테이너는 호스트 `/etc/hosts`를 수정할 수 없으므로 `GYMBAG_AUTO_HOSTS=off`를 설정하고, 필요하면 비권한 포트(`-p 8080:80 -p 8443:443`)를 매핑한 뒤 볼륨에서 `/app/certs/ca/neuro-sama-root-ca.pem`을 꺼내 호스트에서 신뢰 등록하세요.
+- **Admin REST API**: 컨테이너에서 `GYMBAG_ADMIN=0.0.0.0:2019`를 연 경우 호스트 포트는 반드시 루프백(`-p 127.0.0.1:2019:2019`)으로 묶어 인증 없는 상태 변경이 인터넷에 노출되지 않도록 하세요.
 
----
-
-## 로컬 이미지 빌드
+## 로컬에서 이미지 빌드하기
 
 ```bash
 docker build \
@@ -213,4 +223,4 @@ docker build \
   -t gymbag:local .
 ```
 
-멀티 스테이지 `Dockerfile`은 `golang:1.27-alpine`에서 정적 `CGO_ENABLED=0` 바이너리를 컴파일하고 `ca-certificates`와 `libcap`만 포함된 경량 `alpine:3.21` 런타임 이미지를 생성합니다.
+`Dockerfile`은 `golang:1.27-alpine`에서 정적 `CGO_ENABLED=0` 바이너리를 빌드한 뒤 `ca-certificates`와 `libcap`이 포함된 `alpine:3.21` 이미지로 복사합니다.
