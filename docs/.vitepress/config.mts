@@ -10,6 +10,7 @@ const base = normalizeBase(process.env.VITEPRESS_BASE)
 const enTheme: DefaultTheme.Config = {
   nav: [
     { text: 'Quick Start', link: '/guide/getting-started' },
+    { text: 'SSH & Minecraft', link: '/guide/ssh-minecraft' },
     { text: 'Docker', link: '/guide/docker' },
     { text: 'Protection', link: '/guide/verify-levels' },
     { text: 'TLS & Local PKI', link: '/guide/ssl-acme' },
@@ -40,6 +41,7 @@ const enTheme: DefaultTheme.Config = {
       collapsed: false,
       items: [
         { text: 'Verify Levels & Timeouts', link: '/guide/verify-levels' },
+        { text: 'SSH & Minecraft Protection', link: '/guide/ssh-minecraft' },
         { text: 'Firewall & Remote Rules', link: '/guide/firewall-rules' }
       ]
     },
@@ -69,13 +71,14 @@ const enTheme: DefaultTheme.Config = {
   },
   footer: {
     message: 'Pure Go stdlib · Zero external Go dependencies',
-    copyright: 'Gymbag — HTTPS Reverse Proxy & Proof-of-Work WAF'
+    copyright: 'Gymbag — HTTP/HTTPS, SSH & Minecraft PoW Protection Gateway'
   }
 }
 
 const zhTheme: DefaultTheme.Config = {
   nav: [
     { text: '快速开始', link: '/zh/guide/getting-started' },
+    { text: 'SSH 与 Minecraft', link: '/zh/guide/ssh-minecraft' },
     { text: 'Docker', link: '/zh/guide/docker' },
     { text: '防护策略', link: '/zh/guide/verify-levels' },
     { text: 'TLS 与本地 PKI', link: '/zh/guide/ssl-acme' },
@@ -105,7 +108,8 @@ const zhTheme: DefaultTheme.Config = {
       text: 'WAF 与流量防御',
       collapsed: false,
       items: [
-        { text: '验证级别与自定义超时', link: '/zh/guide/verify-levels' },
+        { text: '验证级别与超时配置', link: '/zh/guide/verify-levels' },
+        { text: 'SSH 与 Minecraft 防护', link: '/zh/guide/ssh-minecraft' },
         { text: '防火墙、远程规则与威胁情报', link: '/zh/guide/firewall-rules' }
       ]
     },
@@ -144,13 +148,14 @@ const zhTheme: DefaultTheme.Config = {
   },
   footer: {
     message: '纯 Go 标准库实现 · 零外部 Go 依赖',
-    copyright: 'Gymbag — HTTPS 反向代理与工作量证明 WAF'
+    copyright: 'Gymbag — HTTP/HTTPS、SSH 与 Minecraft 工作量证明防护网关'
   }
 }
 
 const jaTheme: DefaultTheme.Config = {
   nav: [
     { text: 'クイックスタート', link: '/ja/guide/getting-started' },
+    { text: 'SSH & Minecraft', link: '/ja/guide/ssh-minecraft' },
     { text: 'Docker', link: '/ja/guide/docker' },
     { text: 'WAF 保護', link: '/ja/guide/verify-levels' },
     { text: 'TLS & ローカル PKI', link: '/ja/guide/ssl-acme' },
@@ -181,6 +186,7 @@ const jaTheme: DefaultTheme.Config = {
       collapsed: false,
       items: [
         { text: '検証レベルとタイムアウト', link: '/ja/guide/verify-levels' },
+        { text: 'SSH & Minecraft 保護', link: '/ja/guide/ssh-minecraft' },
         { text: 'ファイアウォール & リモートルール', link: '/ja/guide/firewall-rules' }
       ]
     },
@@ -219,13 +225,14 @@ const jaTheme: DefaultTheme.Config = {
   },
   footer: {
     message: '純粋な Go 標準ライブラリ · 外部 Go 依存ゼロ',
-    copyright: 'Gymbag — HTTPS リバースプロキシ & PoW WAF'
+    copyright: 'Gymbag — HTTP/HTTPS・SSH・Minecraft 対応 PoW 防御ゲートウェイ'
   }
 }
 
 const koTheme: DefaultTheme.Config = {
   nav: [
     { text: '빠른 시작', link: '/ko/guide/getting-started' },
+    { text: 'SSH & Minecraft', link: '/ko/guide/ssh-minecraft' },
     { text: 'Docker', link: '/ko/guide/docker' },
     { text: 'WAF 보호', link: '/ko/guide/verify-levels' },
     { text: 'TLS & 로컬 PKI', link: '/ko/guide/ssl-acme' },
@@ -256,6 +263,7 @@ const koTheme: DefaultTheme.Config = {
       collapsed: false,
       items: [
         { text: '검증 레벨 & 사용자 지정 타임아웃', link: '/ko/guide/verify-levels' },
+        { text: 'SSH & Minecraft 보호', link: '/ko/guide/ssh-minecraft' },
         { text: '방화벽 & 원격 규칙', link: '/ko/guide/firewall-rules' }
       ]
     },
@@ -294,13 +302,14 @@ const koTheme: DefaultTheme.Config = {
   },
   footer: {
     message: '순수 Go 표준 라이브러리 · 외부 Go 의존성 제로',
-    copyright: 'Gymbag — HTTPS 리버스 프록시 & PoW WAF'
+    copyright: 'Gymbag — HTTP/HTTPS, SSH & Minecraft PoW 보호 게이트웨이'
   }
 }
 
 const esTheme: DefaultTheme.Config = {
   nav: [
     { text: 'Inicio Rápido', link: '/es/guide/getting-started' },
+    { text: 'SSH y Minecraft', link: '/es/guide/ssh-minecraft' },
     { text: 'Docker', link: '/es/guide/docker' },
     { text: 'Protección', link: '/es/guide/verify-levels' },
     { text: 'TLS y PKI Local', link: '/es/guide/ssl-acme' },
@@ -331,6 +340,7 @@ const esTheme: DefaultTheme.Config = {
       collapsed: false,
       items: [
         { text: 'Niveles de Verificación y Timeouts', link: '/es/guide/verify-levels' },
+        { text: 'Protección SSH y Minecraft', link: '/es/guide/ssh-minecraft' },
         { text: 'Firewall y Reglas Remotas', link: '/es/guide/firewall-rules' }
       ]
     },
@@ -369,13 +379,13 @@ const esTheme: DefaultTheme.Config = {
   },
   footer: {
     message: 'Biblioteca estándar de Go puro · Cero dependencias externas',
-    copyright: 'Gymbag — Proxy Inverso HTTPS y WAF Proof-of-Work'
+    copyright: 'Gymbag — Proxy Inverso HTTPS, SSH y Minecraft con WAF Proof-of-Work'
   }
 }
 
 export default defineConfig({
   title: 'Gymbag',
-  description: 'Single-binary HTTPS Reverse Proxy & Proof-of-Work WAF in pure Go',
+  description: 'Single-binary HTTP/HTTPS, SSH & Minecraft PoW Protection Gateway in pure Go',
   base,
   cleanUrls: true,
   lastUpdated: true,
@@ -390,13 +400,13 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/png', href: `${base}mascot-happy.png` }],
     ['meta', { name: 'theme-color', content: '#b81d33' }],
-    ['meta', { property: 'og:title', content: 'Gymbag — HTTPS Reverse Proxy & Proof-of-Work WAF' }],
+    ['meta', { property: 'og:title', content: 'Gymbag — HTTP/HTTPS, SSH & Minecraft PoW Gateway' }],
     [
       'meta',
       {
         property: 'og:description',
         content:
-          'Single-binary pure-Go HTTPS reverse proxy with multi-CA ACME, local PKI, auto-updating threat intelligence, and Anubis-style SHA-256 Proof-of-Work verification.'
+          'Single-binary pure-Go HTTPS reverse proxy and SSH/Minecraft TCP guard with multi-CA ACME, local PKI, threat/VPN/AI IP intel, and SHA-256 Proof-of-Work verification.'
       }
     ]
   ],
@@ -412,7 +422,7 @@ export default defineConfig({
       lang: 'zh-CN',
       link: '/zh/',
       title: 'Gymbag',
-      description: '纯 Go 单二进制 HTTPS 反向代理与工作量证明 WAF',
+      description: '纯 Go 单二进制 HTTP/HTTPS、SSH 与 Minecraft 工作量证明防护网关',
       themeConfig: zhTheme
     },
     ja: {
@@ -420,7 +430,7 @@ export default defineConfig({
       lang: 'ja-JP',
       link: '/ja/',
       title: 'Gymbag',
-      description: '純粋な Go 単一バイナリの HTTPS リバースプロキシ & Proof-of-Work WAF',
+      description: '純粋な Go 単一バイナリの HTTP/HTTPS・SSH・Minecraft 対応 PoW 防御ゲートウェイ',
       themeConfig: jaTheme
     },
     ko: {
@@ -428,7 +438,7 @@ export default defineConfig({
       lang: 'ko-KR',
       link: '/ko/',
       title: 'Gymbag',
-      description: '순수 Go 단일 바이너리 HTTPS 리버스 프록시 및 Proof-of-Work WAF',
+      description: '순수 Go 단일 바이너리 HTTP/HTTPS, SSH 및 Minecraft PoW 보호 게이트웨이',
       themeConfig: koTheme
     },
     es: {
@@ -436,7 +446,7 @@ export default defineConfig({
       lang: 'es-ES',
       link: '/es/',
       title: 'Gymbag',
-      description: 'Proxy inverso HTTPS y WAF Proof-of-Work en un único binario Go puro',
+      description: 'Gateway único en Go puro con PoW para HTTP/HTTPS, SSH y Minecraft',
       themeConfig: esTheme
     }
   },
