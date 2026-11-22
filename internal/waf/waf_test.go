@@ -254,10 +254,12 @@ process.stdout.write(sha256("Gymbag:42"));
 type stubIntel struct {
 	threatIPs map[string]bool
 	aiIPs     map[string]bool
+	vpnIPs    map[string]bool
 }
 
-func (s *stubIntel) IsThreatIP(_ context.Context, ip string) bool { return s.threatIPs[ip] }
-func (s *stubIntel) IsAIIP(ip string) bool                        { return s.aiIPs[ip] }
+func (s *stubIntel) IsThreatIP(_ context.Context, ip string) bool     { return s.threatIPs[ip] }
+func (s *stubIntel) IsAIIP(ip string) bool                            { return s.aiIPs[ip] }
+func (s *stubIntel) IsVPNOrProxyIP(_ context.Context, ip string) bool { return s.vpnIPs[ip] }
 
 func TestCustomUserRulesAndIntelIntegration(t *testing.T) {
 	ctx := context.Background()
@@ -528,5 +530,49 @@ func TestOpenBoxDefaultSecurityRulesAndOverride(t *testing.T) {
 		Headers: map[string]string{"user-agent": "sqlmap/1.8"},
 	}); dec.Action != ActionAllow {
 		t.Fatalf("default_rules off: sqlmap/SQLi got %s, want allow on verify 2", dec.Action)
+	}
+}
+
+func TestVPNProxyIPSuspicionClassification(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	tokens := NewClearanceTokens([]byte("secret"), 60)
+	intelStub := &stubIntel{
+		vpnIPs: map[string]bool{"198.51.100.77": true},
+	}
+	normalReq := IncomingRequest{
+		Method:   "GET",
+		Host:     "app.example.com",
+		Path:     "/",
+		ClientIP: "198.51.100.77",
+		Headers: map[string]string{
+			"user-agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+			"accept":          "text/html,*/*",
+			"accept-language": "en-US,en;q=0.9",
+			"sec-fetch-mode":  "navigate",
+		},
+	}
+
+	makeEng := func(lvl config.VerifyLevel) *Engine {
+		w := config.DefaultSiteWAFConfig()
+		w.VerifyLevel = lvl
+		site := config.SiteConfig{
+			Domain:    "app.example.com",
+			Upstreams: []string{"http://localhost:3000"},
+			Protect:   true,
+			WAF:       w,
+		}
+		return BuildSiteEngineWithIntel(site, st, tokens, intelStub, "block")
+	}
+
+	// Verify 1 (only suspicious) & 3 (suspicious & ai) challenge VPN/proxy IP (never hard-block even with ip_security_action=block)
+	for _, lvl := range []config.VerifyLevel{config.VerifyLevelOnlySuspicious, config.VerifyLevelSuspiciousAndAI} {
+		if dec := makeEng(lvl).Decide(ctx, normalReq); dec.Action != ActionChallenge {
+			t.Fatalf("verify %d with VPN IP got %s, want challenge", lvl, dec.Action)
+		}
+	}
+	// Verify 2 (only ai) allows normal browser on VPN/proxy IP
+	if dec := makeEng(config.VerifyLevelOnlyAI).Decide(ctx, normalReq); dec.Action != ActionAllow {
+		t.Fatalf("verify 2 with VPN IP got %s, want allow", dec.Action)
 	}
 }
