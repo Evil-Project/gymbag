@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,12 @@ import (
 	"gymbag/internal/config"
 	"gymbag/internal/localpki"
 	"gymbag/internal/service"
+	"gymbag/internal/setup"
+)
+
+var (
+	sshSetupRunner = setup.SetupSSHProtection
+	mcSetupRunner  = setup.SetupMinecraftProtection
 )
 
 type multiStringFlag []string
@@ -36,9 +43,22 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		outputPath         string
 		format             string
 		preset             string
+		templateFlags      multiStringFlag
 		domain             string
 		upstream           string
 		siteFlags          multiStringFlag
+		enableSSH          bool
+		sshPort            int
+		sshUpstream        string
+		sshdConfigPath     string
+		enableMC           bool
+		mcPort             int
+		mcUpstream         string
+		mcPropertiesPath   string
+		verifyURL          string
+		verifyPort         int
+		noAutoSetup        bool
+		noFirewall         bool
 		verifyLevel        string
 		difficulty         int
 		verifyTimeout      string
@@ -79,12 +99,30 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&outputPath, "c", "", "Alias for --output")
 	fs.StringVar(&outputPath, "config", "", "Alias for --output")
 	fs.StringVar(&format, "format", "", "Config format: json (default) or gymbagfile")
-	fs.StringVar(&preset, "preset", "", "Preset template: standard, local, public, strict, ai-only, suspicious, or proxy-only")
+	fs.StringVar(&preset, "preset", "", "Preset template: standard, local, public, strict, ai-only, suspicious, proxy-only, http, ssh, minecraft, or all")
+	fs.Var(&templateFlags, "t", "Service template(s): http, ssh, minecraft, or all (comma-separated or repeatable)")
+	fs.Var(&templateFlags, "template", "Service template(s): http, ssh, minecraft, or all (comma-separated or repeatable)")
 	fs.StringVar(&domain, "d", "", "Downstream domain(s), comma-separated")
 	fs.StringVar(&domain, "domain", "", "Downstream domain(s), comma-separated")
 	fs.StringVar(&upstream, "u", "", "Upstream URL (e.g. http://localhost:3000 or :3000)")
 	fs.StringVar(&upstream, "upstream", "", "Upstream URL (e.g. http://localhost:3000 or :3000)")
 	fs.Var(&siteFlags, "site", "Add a site as domain=upstream (repeatable)")
+	fs.BoolVar(&enableSSH, "ssh", false, "Enable SSH protection proxy (default port 22)")
+	fs.IntVar(&sshPort, "ssh-port", 0, "SSH listen port (default 22)")
+	fs.StringVar(&sshUpstream, "ssh-upstream", "", "Existing sshd upstream (skips automatic sshd_config modification)")
+	fs.StringVar(&sshdConfigPath, "sshd-config", "", "Path to sshd_config for automatic random-port setup (default /etc/ssh/sshd_config)")
+	fs.BoolVar(&enableMC, "minecraft", false, "Enable Minecraft server protection proxy (default port 25565)")
+	fs.BoolVar(&enableMC, "mc", false, "Alias for --minecraft")
+	fs.IntVar(&mcPort, "mc-port", 0, "Minecraft listen port (default 25565)")
+	fs.IntVar(&mcPort, "minecraft-port", 0, "Alias for --mc-port")
+	fs.StringVar(&mcUpstream, "mc-upstream", "", "Existing Minecraft server upstream (skips automatic server.properties modification)")
+	fs.StringVar(&mcUpstream, "minecraft-upstream", "", "Alias for --mc-upstream")
+	fs.StringVar(&mcPropertiesPath, "mc-properties", "", "Path to server.properties for automatic random-port setup (default server.properties)")
+	fs.StringVar(&mcPropertiesPath, "server-properties", "", "Alias for --mc-properties")
+	fs.StringVar(&verifyURL, "verify-url", "", "Public HTTPS verification portal URL for SSH/Minecraft (defaults to server IP)")
+	fs.IntVar(&verifyPort, "verify-port", 0, "Shared HTTPS verification portal port (default 8443)")
+	fs.BoolVar(&noAutoSetup, "no-auto-setup", false, "Skip automatic sshd_config/firewall and server.properties modifications")
+	fs.BoolVar(&noFirewall, "no-firewall", false, "Skip automatic firewall rules when configuring SSH protection")
 	fs.StringVar(&verifyLevel, "l", "", "Verify level: 0 (always), 1 (only suspicious), 2 (only ai), 3 (suspicious & ai), or off")
 	fs.StringVar(&verifyLevel, "verify", "", "Verify level: 0..3 or off")
 	fs.StringVar(&verifyLevel, "verify-level", "", "Alias for --verify")
@@ -193,6 +231,33 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		parsedSites = append(parsedSites, specs...)
 	}
 
+	useHTTP, useSSH, useMC, tErr := config.ResolveTemplateSelection(templateFlags)
+	if tErr != nil {
+		_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: %v\n", tErr)
+		return 2
+	}
+	if enableSSH || sshPort != 0 || sshUpstream != "" || sshdConfigPath != "" {
+		useSSH = true
+	}
+	if enableMC || mcPort != 0 || mcUpstream != "" || mcPropertiesPath != "" {
+		useMC = true
+	}
+	if domain != "" || upstream != "" || len(parsedSites) > 0 {
+		useHTTP = true
+	}
+	if preset != "" {
+		switch strings.ToLower(strings.TrimSpace(preset)) {
+		case "ssh":
+			useSSH = true
+		case "minecraft", "mc":
+			useMC = true
+		case "all":
+			useHTTP, useSSH, useMC = true, true, true
+		default:
+			useHTTP = true
+		}
+	}
+
 	var protectOpt *bool
 	if noProtect {
 		f := false
@@ -214,6 +279,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Domain:             domain,
 		Upstream:           upstream,
 		Sites:              parsedSites,
+		Verify:             config.VerifyServerConfig{URL: verifyURL, Port: verifyPort},
 		VerifyLevel:        verifyLevel,
 		Protect:            protectOpt,
 		Difficulty:         difficulty,
@@ -238,8 +304,15 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Format:             normFmt,
 		IncludeComments:    true,
 	}
+	if useSSH {
+		opts.SSH = &config.TCPSpec{Port: sshPort, Upstream: sshUpstream}
+	}
+	if useMC {
+		opts.Minecraft = &config.TCPSpec{Port: mcPort, Upstream: mcUpstream}
+	}
 
-	hasConfigFlags := preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
+	hasConfigFlags := len(templateFlags) > 0 || preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
+		useSSH || useMC || verifyURL != "" || verifyPort != 0 ||
 		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || len(initRuleSources) > 0 ||
 		rulesWatchInterval != "" || noProtect || sslProvider != "" || email != "" ||
 		httpPort != 0 || httpsPort != 0 || adminAddr != ""
@@ -269,7 +342,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 
-		wizardSvc, wErr := runInitWizard(stdin, promptOut, &opts)
+		wizardSvc, wErr := runInitWizard(stdin, promptOut, &opts, &useHTTP, &useSSH, &useMC, &sshdConfigPath, &mcPropertiesPath, dryRun || noAutoSetup)
 		if wErr != nil {
 			_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: %v\n", wErr)
 			return 1
@@ -281,6 +354,78 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if _, statErr := os.Stat(outputPath); statErr == nil {
 			_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: %s already exists (use --force to overwrite or --output to specify another path)\n", outputPath)
 			return 1
+		}
+	}
+
+	if !useHTTP && !useSSH && !useMC {
+		useHTTP = true
+	}
+	opts.Templates = nil
+	if useHTTP {
+		opts.Templates = append(opts.Templates, "http")
+	}
+	if useSSH {
+		opts.Templates = append(opts.Templates, "ssh")
+		if opts.SSH == nil {
+			opts.SSH = &config.TCPSpec{}
+		}
+	} else {
+		opts.SSH = nil
+	}
+	if useMC {
+		opts.Templates = append(opts.Templates, "minecraft")
+		if opts.Minecraft == nil {
+			opts.Minecraft = &config.TCPSpec{}
+		}
+	} else {
+		opts.Minecraft = nil
+	}
+
+	if !dryRun && !noAutoSetup {
+		effectiveVerifyPort := opts.Verify.EffectivePort()
+		if useSSH && opts.SSH != nil && strings.TrimSpace(opts.SSH.Upstream) == "" {
+			listenPort := opts.SSH.Port
+			if listenPort <= 0 {
+				listenPort = config.DefaultSSHPort
+			}
+			res, sErr := sshSetupRunner(context.Background(), setup.SSHSetupOptions{
+				ConfigPath:    sshdConfigPath,
+				SSHListenPort: listenPort,
+				VerifyPort:    effectiveVerifyPort,
+				SkipFirewall:  noFirewall,
+			})
+			if sErr != nil {
+				_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: automatic SSH host setup failed: %v\nHint: run with sudo, specify --sshd-config <path>, pass --ssh-upstream 127.0.0.1:<port>, or use --no-auto-setup\n", sErr)
+				return 1
+			}
+			opts.SSH.Upstream = res.Upstream
+			_, _ = fmt.Fprintf(stdout, "Configured SSH backend: %s -> %s (backup: %s)\n", res.ConfigPath, res.Upstream, res.BackupPath)
+			if res.FirewallBackend != "" && res.FirewallBackend != "none" {
+				_, _ = fmt.Fprintf(stdout, "Configured firewall (%s): blocked external access to port %d; allowed %d and %d\n",
+					res.FirewallBackend, res.BackendPort, listenPort, effectiveVerifyPort)
+			}
+			for _, w := range res.Warnings {
+				_, _ = fmt.Fprintf(stderr, "WARN gymbag init: %s\n", w)
+			}
+		}
+		if useMC && opts.Minecraft != nil && strings.TrimSpace(opts.Minecraft.Upstream) == "" {
+			listenPort := opts.Minecraft.Port
+			if listenPort <= 0 {
+				listenPort = config.DefaultMinecraftPort
+			}
+			res, mErr := mcSetupRunner(setup.MinecraftSetupOptions{
+				PropertiesPath:      mcPropertiesPath,
+				MinecraftListenPort: listenPort,
+				VerifyPort:          effectiveVerifyPort,
+				BindLoopbackIfEmpty: true,
+			})
+			if mErr != nil {
+				_, _ = fmt.Fprintf(stderr, "ERROR gymbag init: automatic Minecraft setup failed: %v\nHint: pass --server-properties <path/to/server.properties>, pass --mc-upstream 127.0.0.1:<port>, or use --no-auto-setup\n", mErr)
+				return 1
+			}
+			opts.Minecraft.Upstream = res.Upstream
+			_, _ = fmt.Fprintf(stdout, "Configured Minecraft backend: %s server-port=%d -> %s (backup: %s)\n",
+				res.PropertiesPath, res.BackendPort, res.Upstream, res.BackupPath)
 		}
 	}
 
@@ -307,15 +452,36 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	// Print concise summary & 2-command next steps
-	siteSummaries := make([]string, 0, len(cfg.Sites))
+	var summaries []string
 	for _, s := range cfg.Sites {
 		mode := fmt.Sprintf("verify: %d [%s]", int(s.WAF.VerifyLevel), s.WAF.VerifyLevel.Label())
 		if !s.Protect {
 			mode = "protect off"
 		}
-		siteSummaries = append(siteSummaries, fmt.Sprintf("%s -> %s (%s)", s.Domain, strings.Join(s.Upstreams, ", "), mode))
+		summaries = append(summaries, fmt.Sprintf("%s -> %s (%s)", s.Domain, strings.Join(s.Upstreams, ", "), mode))
 	}
-	_, _ = fmt.Fprintf(stdout, "Generated %s (%d site(s): %s)\n", outputPath, len(cfg.Sites), strings.Join(siteSummaries, "; "))
+	if cfg.SSHEnabled() {
+		mode := fmt.Sprintf("verify: %d [%s]", int(cfg.SSH.VerifyLevel), cfg.SSH.VerifyLevel.Label())
+		if !cfg.SSH.Protect {
+			mode = "protect off"
+		}
+		summaries = append(summaries, fmt.Sprintf("ssh :%d -> %s (%s)", cfg.SSH.Port, cfg.SSH.Upstream, mode))
+	}
+	if cfg.MinecraftEnabled() {
+		mode := fmt.Sprintf("verify: %d [%s]", int(cfg.Minecraft.VerifyLevel), cfg.Minecraft.VerifyLevel.Label())
+		if !cfg.Minecraft.Protect {
+			mode = "protect off"
+		}
+		summaries = append(summaries, fmt.Sprintf("minecraft :%d -> %s (%s)", cfg.Minecraft.Port, cfg.Minecraft.Upstream, mode))
+	}
+	_, _ = fmt.Fprintf(stdout, "Generated %s (%s)\n", outputPath, strings.Join(summaries, "; "))
+	if cfg.NeedsVerifyServer() {
+		vURL := cfg.Verify.URL
+		if vURL == "" {
+			vURL = fmt.Sprintf("https://<server-ip>:%d (auto IP SSL cert)", cfg.Verify.EffectivePort())
+		}
+		_, _ = fmt.Fprintf(stdout, "Verify portal: %s\n", vURL)
+	}
 
 	if strings.TrimSpace(serviceType) != "" {
 		mgr, mErr := service.ParseManagerType(serviceType)
@@ -324,6 +490,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		userScope := resolveUserScope(mgr, serviceUserScope, serviceSysScope)
+		portsPriv := (cfg.HTTPEnabled() && (cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024)) ||
+			(cfg.SSHEnabled() && cfg.SSH.Port < 1024) ||
+			(cfg.MinecraftEnabled() && cfg.Minecraft.Port < 1024) ||
+			(cfg.NeedsVerifyServer() && cfg.Verify.EffectivePort() < 1024)
 		svcOpts := service.Options{
 			Manager:   mgr,
 			Overwrite: force,
@@ -336,7 +506,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				User:            serviceUser,
 				UserScope:       userScope,
 				Watch:           true,
-				PortsPrivileged: cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024,
+				PortsPrivileged: portsPriv,
 			},
 		}
 		res, sErr := service.Install(context.Background(), svcOpts)
@@ -372,29 +542,119 @@ func looksLikeGymbagfilePath(p string) bool {
 		strings.HasSuffix(base, ".caddyfile")
 }
 
-func runInitWizard(stdin io.Reader, out io.Writer, opts *config.GenerateOptions) (string, error) {
+func runInitWizard(
+	stdin io.Reader,
+	out io.Writer,
+	opts *config.GenerateOptions,
+	useHTTP, useSSH, useMC *bool,
+	sshdConfigPath, mcPropertiesPath *string,
+	skipAutoSetup bool,
+) (string, error) {
 	r := bufio.NewReader(stdin)
 
 	_, _ = fmt.Fprintln(out, "Gymbag config generator — press Enter to accept [default].")
 
-	if opts.Domain == "" && len(opts.Sites) == 0 {
-		ans, err := promptLine(r, out, "Downstream domain(s) (e.g. app.example.com, app.internal)", "localhost")
+	if !*useHTTP && !*useSSH && !*useMC {
+		ans, err := promptLine(r, out, "Services to protect (http, ssh, minecraft, or comma-separated like http,ssh,minecraft)", "http")
 		if err != nil {
 			return "", err
 		}
-		opts.Domain = ans
+		h, s, m, tErr := config.ResolveTemplateSelection([]string{ans})
+		if tErr != nil {
+			return "", tErr
+		}
+		if !h && !s && !m {
+			h = true
+		}
+		*useHTTP, *useSSH, *useMC = h, s, m
 	}
 
-	if opts.Upstream == "" && len(opts.Sites) == 0 {
-		defUp := "http://localhost:5173"
-		if opts.Domain != "" && opts.Domain != "localhost" {
-			defUp = "http://localhost:3000"
+	if *useHTTP {
+		if opts.Domain == "" && len(opts.Sites) == 0 {
+			ans, err := promptLine(r, out, "Downstream domain(s) (e.g. app.example.com, app.internal)", "localhost")
+			if err != nil {
+				return "", err
+			}
+			opts.Domain = ans
 		}
-		ans, err := promptLine(r, out, "Upstream URL (e.g. http://localhost:3000 or :3000)", defUp)
-		if err != nil {
-			return "", err
+
+		if opts.Upstream == "" && len(opts.Sites) == 0 {
+			defUp := "http://localhost:5173"
+			if opts.Domain != "" && opts.Domain != "localhost" {
+				defUp = "http://localhost:3000"
+			}
+			ans, err := promptLine(r, out, "Upstream URL (e.g. http://localhost:3000 or :3000)", defUp)
+			if err != nil {
+				return "", err
+			}
+			opts.Upstream = ans
 		}
-		opts.Upstream = ans
+	}
+
+	if *useSSH {
+		if opts.SSH == nil {
+			opts.SSH = &config.TCPSpec{}
+		}
+		if opts.SSH.Port == 0 {
+			ans, err := promptLine(r, out, "SSH listen port", "22")
+			if err != nil {
+				return "", err
+			}
+			p, pErr := parseSinglePort(ans, "SSH port")
+			if pErr != nil {
+				return "", pErr
+			}
+			opts.SSH.Port = p
+		}
+		if opts.SSH.Upstream == "" {
+			ans, err := promptLine(r, out, "SSH backend upstream ('auto' to randomize sshd port + set firewall, or host:port)", "auto")
+			if err != nil {
+				return "", err
+			}
+			if !strings.EqualFold(ans, "auto") {
+				opts.SSH.Upstream = ans
+			}
+		}
+		if opts.SSH.Upstream == "" && !skipAutoSetup && *sshdConfigPath == "" {
+			ans, err := promptLine(r, out, "Path to sshd_config", setup.DefaultSSHDConfigPath)
+			if err != nil {
+				return "", err
+			}
+			*sshdConfigPath = ans
+		}
+	}
+
+	if *useMC {
+		if opts.Minecraft == nil {
+			opts.Minecraft = &config.TCPSpec{}
+		}
+		if opts.Minecraft.Port == 0 {
+			ans, err := promptLine(r, out, "Minecraft listen port", "25565")
+			if err != nil {
+				return "", err
+			}
+			p, pErr := parseSinglePort(ans, "Minecraft port")
+			if pErr != nil {
+				return "", pErr
+			}
+			opts.Minecraft.Port = p
+		}
+		if opts.Minecraft.Upstream == "" {
+			ans, err := promptLine(r, out, "Minecraft backend upstream ('auto' to randomize server.properties port, or host:port)", "auto")
+			if err != nil {
+				return "", err
+			}
+			if !strings.EqualFold(ans, "auto") {
+				opts.Minecraft.Upstream = ans
+			}
+		}
+		if opts.Minecraft.Upstream == "" && !skipAutoSetup && *mcPropertiesPath == "" {
+			ans, err := promptLine(r, out, "Path to Minecraft server.properties", "server.properties")
+			if err != nil {
+				return "", err
+			}
+			*mcPropertiesPath = ans
+		}
 	}
 
 	if opts.VerifyLevel == "" && opts.Protect == nil {
@@ -405,15 +665,43 @@ func runInitWizard(stdin io.Reader, out io.Writer, opts *config.GenerateOptions)
 		opts.VerifyLevel = ans
 	}
 
-	// Ask TLS/ACME questions only when at least one domain is public.
-	var candidateDomains []string
-	for _, part := range strings.Split(opts.Domain, ",") {
-		if t := strings.TrimSpace(part); t != "" {
-			candidateDomains = append(candidateDomains, t)
+	if *useSSH || *useMC {
+		if opts.Verify.URL == "" {
+			ans, err := promptLine(r, out, "Verification page URL (optional https://domain; blank defaults to server IP + IP SSL cert)", "")
+			if err != nil {
+				return "", err
+			}
+			opts.Verify.URL = ans
+		}
+		if opts.Verify.Port == 0 {
+			ans, err := promptLine(r, out, "Verification page HTTPS port", "8443")
+			if err != nil {
+				return "", err
+			}
+			p, pErr := parseSinglePort(ans, "Verification HTTPS port")
+			if pErr != nil {
+				return "", pErr
+			}
+			opts.Verify.Port = p
 		}
 	}
-	for _, s := range opts.Sites {
-		candidateDomains = append(candidateDomains, s.Domain)
+
+	// Ask TLS/ACME questions only when at least one public DNS domain is configured.
+	var candidateDomains []string
+	if *useHTTP {
+		for _, part := range strings.Split(opts.Domain, ",") {
+			if t := strings.TrimSpace(part); t != "" {
+				candidateDomains = append(candidateDomains, t)
+			}
+		}
+		for _, s := range opts.Sites {
+			candidateDomains = append(candidateDomains, s.Domain)
+		}
+	}
+	if *useSSH || *useMC {
+		if vHost, _, _, err := opts.Verify.ParsedHost(); err == nil && vHost != "" && net.ParseIP(vHost) == nil {
+			candidateDomains = append(candidateDomains, vHost)
+		}
 	}
 	if len(candidateDomains) > 0 && !localpki.AllLocalDomains(candidateDomains) {
 		if opts.SSLProvider == "" {
@@ -447,7 +735,7 @@ func runInitWizard(stdin io.Reader, out io.Writer, opts *config.GenerateOptions)
 		}
 	}
 
-	if opts.HTTPPort == 0 && opts.HTTPSPort == 0 {
+	if *useHTTP && opts.HTTPPort == 0 && opts.HTTPSPort == 0 {
 		ans, err := promptLine(r, out, "HTTP/HTTPS ports (use 8080/8443 for non-root)", "80/443")
 		if err != nil {
 			return "", err
@@ -479,6 +767,14 @@ func runInitWizard(stdin io.Reader, out io.Writer, opts *config.GenerateOptions)
 		return "", nil
 	}
 	return trimmedSvc, nil
+}
+
+func parseSinglePort(raw, label string) (int, error) {
+	p, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || p < 1 || p > 65535 {
+		return 0, fmt.Errorf("invalid %s %q (expected 1-65535)", label, raw)
+	}
+	return p, nil
 }
 
 func parsePortsPair(raw string) (int, int, error) {
@@ -553,24 +849,49 @@ func printInitUsage(w io.Writer) {
   gymbag init [flags] [output_path]
 
 Two-command quickstart:
-  1. gymbag init -d app.example.com -u :3000
-  2. gymbag
+  HTTP/HTTPS:
+    1. gymbag init -d app.example.com -u :3000
+    2. gymbag
+  SSH protection (moves sshd to random port + configures firewall):
+    1. sudo gymbag init -t ssh
+    2. sudo gymbag
+  Minecraft protection (moves server-port in server.properties to random port):
+    1. gymbag init -t minecraft --server-properties /path/to/server.properties
+    2. gymbag
+  All-in-One (HTTP + SSH + Minecraft in one process):
+    1. gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-properties /path/to/server.properties
+    2. gymbag
 
 Examples:
   gymbag init                                         # Interactive wizard -> ./gymbag.json
   gymbag init --yes                                   # Non-interactive default localhost JSON config
+  gymbag init -t ssh --verify-url https://verify.example.com:8443
+  gymbag init -t minecraft --server-properties ./server.properties --verify-port 8443
+  gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --ssh-upstream 127.0.0.1:2222 --mc-upstream 127.0.0.1:25566
   gymbag init --format gymbagfile                     # Generate Caddyfile-style Gymbagfile instead of JSON
   gymbag init --preset local                          # Local *.internal dev config with local PKI
-  gymbag init -d app.example.com -u :3000 -l 3        # Public site config -> ./gymbag.json
   gymbag init -d app.example.com -u :3000 --service auto  # Generate config + register system service
 
 Flags:
   -o, --output <path>          Output config file path (default gymbag.json, or Gymbagfile for --format gymbagfile)
       --format <fmt>           Config format: json (default) or gymbagfile
-      --preset <name>          Preset: standard, local, public, strict, ai-only, suspicious, proxy-only
+  -t, --template <list>        Service templates: http, ssh, minecraft, or all (comma-separated or repeatable)
+      --preset <name>          Preset: standard, local, public, strict, ai-only, suspicious, proxy-only, http, ssh, minecraft, all
   -d, --domain <domains>       Downstream domain(s), comma-separated
   -u, --upstream <url>         Upstream target URL (e.g. http://localhost:3000 or :3000)
       --site <domain=url>      Add a site entry (repeatable)
+      --ssh                    Enable SSH protection proxy (default port 22)
+      --ssh-port <port>        SSH listen port (default 22)
+      --ssh-upstream <addr>    Explicit sshd upstream (skips automatic sshd_config changes)
+      --sshd-config <path>     Path to sshd_config (default /etc/ssh/sshd_config)
+      --minecraft, --mc        Enable Minecraft protection proxy (default port 25565)
+      --mc-port <port>         Minecraft listen port (default 25565)
+      --mc-upstream <addr>     Explicit Minecraft upstream (skips automatic server.properties changes)
+      --server-properties <p>  Path to Minecraft server.properties (default server.properties)
+      --verify-url <url>       Public HTTPS verify portal URL for SSH/Minecraft (defaults to server IP + IP SSL cert)
+      --verify-port <port>     Shared HTTPS verify portal port for SSH/Minecraft (default 8443)
+      --no-auto-setup          Skip automatic sshd_config/firewall and server.properties modifications
+      --no-firewall            Skip automatic firewall setup when configuring SSH protection
   -l, --verify <0-3|off>       Verify level (0=always, 1=suspicious, 2=ai, 3=suspicious & ai, off=disable)
       --difficulty <1-5>           SHA-256 PoW difficulty (default 4)
       --verify-timeout <duration>  Verified clearance timeout (e.g. 30m, 12h, 7d, or seconds)

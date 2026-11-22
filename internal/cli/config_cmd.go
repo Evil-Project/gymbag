@@ -224,7 +224,7 @@ func runConfigList(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "ERROR gymbag config list: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintf(stdout, "%s (%d site(s)):\n", path, len(cfg.Sites))
+	_, _ = fmt.Fprintf(stdout, "%s (%d site(s), ssh=%t, minecraft=%t):\n", path, len(cfg.Sites), cfg.SSHEnabled(), cfg.MinecraftEnabled())
 	for _, s := range cfg.Sites {
 		target := strings.Join(s.Upstreams, ", ")
 		if target == "" {
@@ -238,6 +238,29 @@ func runConfigList(args []string, stdout, stderr io.Writer) int {
 		}
 		_, _ = fmt.Fprintf(stdout, "  - %s -> %s (%s, rules=%d, rule_sources=%d)\n",
 			s.Domain, target, prot, len(s.WAF.Rules), len(s.WAF.RuleSources)+len(s.WAF.RemoteRules))
+	}
+	if cfg.SSHEnabled() {
+		prot := fmt.Sprintf("verify %d [%s]", int(cfg.SSH.VerifyLevel), cfg.SSH.VerifyLevel.Label())
+		if !cfg.SSH.Protect {
+			prot = "protect off"
+		}
+		_, _ = fmt.Fprintf(stdout, "  - ssh :%d -> %s (%s, rules=%d)\n",
+			cfg.SSH.Port, cfg.SSH.Upstream, prot, len(cfg.SSH.Rules))
+	}
+	if cfg.MinecraftEnabled() {
+		prot := fmt.Sprintf("verify %d [%s]", int(cfg.Minecraft.VerifyLevel), cfg.Minecraft.VerifyLevel.Label())
+		if !cfg.Minecraft.Protect {
+			prot = "protect off"
+		}
+		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s (%s, rules=%d)\n",
+			cfg.Minecraft.Port, cfg.Minecraft.Upstream, prot, len(cfg.Minecraft.Rules))
+	}
+	if cfg.NeedsVerifyServer() {
+		vTarget := cfg.Verify.URL
+		if vTarget == "" {
+			vTarget = fmt.Sprintf("https://<server-ip>:%d", cfg.Verify.EffectivePort())
+		}
+		_, _ = fmt.Fprintf(stdout, "  - verify_portal port=%d url=%s\n", cfg.Verify.EffectivePort(), vTarget)
 	}
 	return 0
 }
