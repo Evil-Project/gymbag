@@ -1,28 +1,26 @@
-# マルチ CA ACME・カスタム証明書・自動更新
+# マルチ CA ACME・IP 証明書・独自証明書
 
-公開ドメインでは、既定の `tls auto` が RFC 8555 ACME HTTP-01 を通じて自動的に TLS 証明書を取得・更新します。
+公開ドメインでは、デフォルトの `tls auto` が RFC 8555 ACME HTTP-01 を使って証明書の取得と更新を自動で行います。
 
 ## 対応する認証局 (CA)
 
-`ssl_provider`（別名：`acme_provider`、`ca`、`cert_issuer`）または `--ssl-provider` で CA を切り替えられます：
+`ssl_provider`（別名: `acme_provider`、`ca`、`cert_issuer`）または `--ssl-provider` で CA を切り替えます。
 
-| プロバイダー名 | 認証局 | EAB 要件 |
+| プロバイダキーワード | 認証局 (CA) | EAB 要件 |
 | :--- | :--- | :--- |
-| `letsencrypt` (`le`) | Let's Encrypt (本番) | 不要 |
-| `letsencrypt_staging` | Let's Encrypt (ステージング) | 不要 |
-| `zerossl` | ZeroSSL | `email` 設定時は**自動取得**、または `eab <kid> <hmac_key>` |
+| `letsencrypt` (`le`) | Let's Encrypt (本番) | なし |
+| `letsencrypt_staging` | Let's Encrypt (ステージング) | なし |
+| `zerossl` | ZeroSSL | `email` 設定時は**自動取得**、または明示的な `eab <kid> <hmac_key>` |
 | `google` (`gts`) | Google Trust Services | `eab <kid> <hmac_key>` が必須 |
 | `ssl.com` (`sslcom`, `ssl.com-rsa`) | SSL.com (ECC または RSA) | `eab <kid> <hmac_key>` が必須 |
-| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 標準 DV は不要 |
-| `buypass` | Buypass Go SSL | 不要 |
-| `local` | ローカル2層 PKI | ローカル CA (`Neuro-sama Headquarters Root CA`) |
+| `litessl` (`trustasia`) | LiteSSL by TrustAsia | 標準 DV では不要 |
+| `buypass` | Buypass Go SSL | なし |
+| `local` | ローカル 2 階層 PKI | ローカル CA (`Neuro-sama Headquarters Root CA`) |
 | `https://...` | 任意の RFC 8555 ACME v2 CA | 任意の `eab <kid> <hmac_key>`（`step-ca`、Pebble 等） |
 
----
+## プロバイダ別設定例
 
-## 設定例
-
-### ZeroSSL（メールによる自動 EAB）
+### ZeroSSL（自動 EAB）
 
 ```caddyfile
 {
@@ -38,7 +36,7 @@ example.com {
 
 ### Google Trust Services / SSL.com（明示的 EAB）
 
-標準 Base64 および URL-safe Base64 の両方に対応しており、Admin API 出力では `eab_hmac_key` が自動的にマスクされます。
+パディング付き Base64 とパディングなし URL-safe Base64 の HMAC キーの両方を受け付けます。`eab_hmac_key` は Admin API の出力でマスクされます。
 
 ```caddyfile
 {
@@ -48,7 +46,7 @@ example.com {
 }
 ```
 
-### カスタム ACME Directory URL
+### カスタム ACME ディレクトリ URL
 
 ```caddyfile
 {
@@ -57,16 +55,31 @@ example.com {
 }
 ```
 
-ACME 証明書はプロバイダー名ごとに `<cert_dir>` 配下に保存されるため（例：`certs/acme-zerossl-fullchain.pem`）、`ssl_provider` を切り替えると即座に新しい CA から証明書を取得します。
+ACME 証明書はプロバイダをキーにして `<cert_dir>` 配下にキャッシュされます（たとえば ZeroSSL は `certs/acme-zerossl-fullchain.pem`、Let's Encrypt は `certs/acme-fullchain.pem`）。そのため `ssl_provider` を切り替えても古い証明書を使い回さず、新しい CA へリクエストを発行します。
 
----
+## RFC 8738 IP 証明書（SSH & Minecraft 検証ポータル）
 
-## 独自鍵・証明書の持ち込み
+`verify_url` を指定せずに SSH または Minecraft の保護を有効にした場合、Gymbag は自動検出したサーバーの IP アドレス上（デフォルトポート `8443`）で HTTPS 検証ポータルを提供します。
 
-- **カスタム ACME アカウント鍵**：`account_key /etc/gymbag/account.pem`（ECDSA P-256/P-384 または RSA）
-- **カスタム CSR 秘密鍵**：`ssl_key /etc/gymbag/domain.key`
-- **カスタム PEM 証明書＆秘密鍵（グローバルまたはサイト別 SNI）**：`tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
-- **パスフレーズ付き秘密鍵**：`key_password super-secret-passphrase`（または `GYMBAG_KEY_PASSWORD`）
+`auto` モード（`tls auto` かつ `local` 以外のプロバイダ）では、パブリックサーバー IP 向けに **RFC 8738 ACME IP HTTP-01 証明書**を要求し（ACME ディレクトリが `shortlived` プロファイルを案内していれば自動選択）、`certs/verify-acme-fullchain.pem`（他 CA では `verify-acme-<provider>-fullchain.pem`）にキャッシュします。ポート `80` に到達できない場合や CA が IP 識別子を発行しない場合は、ローカル CA（`certs/verify-local-fullchain.pem`）または自己署名 IP 証明書（`certs/verify-selfsigned.pem`）へフォールバックします。
+
+検証ポータルに専用の証明書ペアを割り当てることもできます。
+
+```caddyfile
+{
+    verify_url https://verify.example.com:8443
+    verify_server {
+        tls /etc/ssl/verify-fullchain.pem /etc/ssl/verify-privkey.pem
+    }
+}
+```
+
+## 独自鍵と証明書の持ち込み
+
+- **ACME アカウント鍵**: `account_key /etc/gymbag/account.pem`（ECDSA P-256/P-384 または RSA）
+- **CSR 秘密鍵**: `ssl_key /etc/gymbag/domain.key`
+- **PEM 証明書＆秘密鍵（グローバルまたはサイト別 SNI）**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **暗号化秘密鍵のパスフレーズ**: `key_password super-secret-passphrase`（または `GYMBAG_KEY_PASSWORD`）
 
 ```caddyfile
 {
@@ -80,6 +93,6 @@ corp.example.com {
 }
 ```
 
-## 無停止バックグラウンド更新
+## バックグラウンド自動更新
 
-Gymbag は `renew_interval` 秒ごと（既定 `43200` 秒 / `12h`）に証明書を確認し、有効期限まで `renew_within_days` 日以内（既定 `30` 日）になるとバックグラウンドで更新または再読み込みを行い、`tls.Certificate` ポインタをアトミックに差し替えます。進行中の HTTP ストリームや WebSocket 接続は一切切断されません。
+バックグラウンドループが `renew_interval` 秒（デフォルト `43200` = 12 時間）ごとに証明書を確認します。有効期限まで `renew_within_days` 日（デフォルト `30` 日）以内の証明書、またはディスク上で置き換えられた証明書は自動で更新・再読み込みされ、`atomic.Pointer` 経由でアトミックに差し替えられるため、開いている HTTP ストリームや WebSocket 接続が途切れません。

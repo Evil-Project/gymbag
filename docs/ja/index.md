@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Gymbag
-  text: HTTPS リバースプロキシ & Proof-of-Work WAF
-  tagline: HTTPS を終端し、複数の CA で ACME を回し、SHA-256 の proof-of-work でスクレイパーを止める 1 本の Go バイナリ。
+  text: HTTP/HTTPS・SSH・Minecraft 対応 PoW ゲートウェイ
+  tagline: HTTPS を終端し、ブラウザの Proof-of-Work で SSH と Minecraft を守り、スクレイパーや脅威 IP を止める 1 本の Go バイナリ。
   image:
     src: /mascot-happy.png
     alt: Gymbag マスコット
@@ -13,8 +13,8 @@ hero:
       text: 2コマンド クイックスタート
       link: /ja/guide/getting-started
     - theme: alt
-      text: Docker ガイド
-      link: /ja/guide/docker
+      text: SSH & Minecraft ガイド
+      link: /ja/guide/ssh-minecraft
     - theme: alt
       text: Caddy / Nginx とのベンチマーク
       link: /ja/guide/benchmarks
@@ -22,28 +22,28 @@ hero:
 features:
   - icon: ⚡
     title: 速いプロキシ経路
-    details: Aho-Corasick のマッチング、シャード化したレート制限、再利用バッファで WAF を邪魔にしない構成。TLS 経由で約 72.5k RPS、エッジでの探査ブロックは 140k+ RPS。
+    details: "Aho-Corasick ルール照合、シャード化したレート制限、再利用バッファで WAF の負荷を最小限に抑えます。TLS 経由で約 72.5k RPS、エッジでの探査ブロックは 140k+ RPS。"
   - icon: 🛡️
-    title: 最初から WAF が効く
-    details: /.env、/wp-admin、スキャナー、SQLi/XSS 探査のルールを同梱。4 段階の検証レベルで SHA-256 チャレンジを出す相手を決め、許可は 30m・12h・7d から選べます。
+    title: HTTP・SSH・Minecraft を 1 プロセスで
+    details: "Web サイト、WebSocket、OpenSSH、Minecraft Java サーバーをまとめて保護。SSH と Minecraft ではクライアントの切断画面に HTTPS の検証リンクを直接表示します。"
   - icon: 🌐
-    title: リモートルールと脅威フィード
-    details: HTTP 越しにファイアウォールルールを取り込み ETag でキャッシュ。IPsum、Spamhaus DROP、Feodo、公開されている AI クローラーの CIDR をタイマーで更新します。
+    title: 脅威インテル・VPN・AI リスト
+    details: "IPsum、Spamhaus DROP、Feodo、X4BNet VPN/Tor リスト、公式 AI クローラー CIDR を自動更新。Shodan InternetDB、StopForumSpam、ipquery.io、ipapi.is のフェイルオープン照会にも対応。"
   - icon: 🔒
-    title: 証明書の手間を減らす
-    details: Let's Encrypt、ZeroSSL、Google、SSL.com、LiteSSL、Buypass に対する ACME HTTP-01。*.internal なら自前の CA を作り /etc/hosts も書き込みます。
+    title: ACME・IP 証明書・ローカル PKI
+    details: "Let's Encrypt、ZeroSSL、Google、SSL.com、LiteSSL、Buypass への HTTP-01 に加え、検証ポータル用の RFC 8738 ACME IP 証明書に対応。*.internal は自前の CA で署名します。"
   - icon: 🐳
-    title: いつもの方法でデプロイ
-    details: GHCR のマルチアーキテクチャイメージ（amd64・arm64）、共有状態用の Redis 入り compose、Arch 向けパッケージ、systemd・launchd・OpenRC・Supervisor のユニット。
+    title: 配布パッケージとコンテナを用意
+    details: "静的バイナリ、Debian/Ubuntu 用 .deb、Arch 用 .pkg.tar.zst、NixOS flake、マルチアーキテクチャ GHCR イメージ、Redis 連携 Compose、systemd/launchd/OpenRC/Supervisor ユニットを提供。"
   - icon: 🔌
-    title: 動かしたまま設定を変える
-    details: --watch で Gymbagfile を編集するか、Admin API から検証レベル・タイムアウト・ローカルルール・リモート URL を変更。既存の接続は切れません。
+    title: 稼働中のまま設定を変更
+    details: "gymbag.json と Gymbagfile の両方を生成でき、nginx/Apache/Caddyfile v2 もそのまま読込可能。ルールフォルダの監視や Admin REST API でのライブ更新時も接続を切りません。"
 ---
 
 <QuickStartBuilder />
 
 ## インタラクティブ検証レベル
 
-下のボタンを切り替えると、普通のブラウザ、AI クローラー、自動化ツール、脅威 IP、攻撃プローブに対して Gymbag がどう動くか確認できます：
+下のレベルを切り替えて、Gymbag が通常のブラウザ、AI クローラー、VPN/Tor IP、自動化ツール、脅威フィード、攻撃プローブをどう処理するか確認できます。
 
 <VerifyLevelMatrix />

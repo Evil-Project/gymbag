@@ -1,12 +1,12 @@
 # パスルート・静的ファイル・設定インポート
 
-通常の `reverse_proxy` に加え、Gymbag のサイトでは静的ファイル配信、固定レスポンス、HTTP リダイレクト、レスポンスヘッダー変更、パス別のアップストリームを定義できる順序付き**パスルート**を利用できます。また、既存の **nginx**、**Apache**、**Caddyfile v2** 設定をネイティブに読み込み・変換することも可能です。
+Gymbag のサイトでは `reverse_proxy` に並べて、静的ファイル配信、固定レスポンス、HTTP リダイレクト、レスポンスヘッダー編集、パス別アップストリームを行う順序付きの**パスルート**を定義できます。また、既存の **nginx**、**Apache**、**Caddyfile v2** 設定ファイルを直接読み込んで変換することもできます。
 
 ## 順序付きパスルート
 
-サイト内のルートは定義順に評価されます。`path` に一致した**最初の**ルートがリクエストを処理し、どのルートにも一致しないリクエストはサイトの既定 `upstreams` にフォールバックします（既定アップストリームが未設定の場合は `404` を返します）。
+サイト内のルートは上から順に評価され、最初に一致した `path` がリクエストを処理します。どのルートにも一致しなかった場合はサイトのデフォルト `upstreams` へフォールバックします（未設定の場合は `404`）。
 
-WAF ルール、レート制限、脅威インテリジェンス、PoW 検証は、常にルートハンドラーの**前**に実行されます。
+WAF ルール、レート制限、脅威インテル、PoW チャレンジは常にどのルートハンドラよりも**前**に実行されます。
 
 ```caddyfile
 app.example.com {
@@ -32,26 +32,26 @@ app.example.com {
 }
 ```
 
-### サポートされるハンドラー
+### ルートハンドラ
 
-各ルートはちょうど1つのハンドラーを使用します：
+各ルートには次のうち 1 つのハンドラを指定します。
 
-- **リバースプロキシ (`upstreams`)**：一致したリクエスト（および WebSocket アップグレード）をルート固有のアップストリームへ転送します。必要に応じてプレフィックスを削除できます（`handle_path` / `strip_prefix`）。
-- **静的ファイルサーバー (`root` / `file_server`)**：`root` からファイルを配信します。`index` ファイル（既定 `["index.html"]`）、ディレクトリ一覧（`browse`）、SPA 用 `fallback`（例：`try_files {path} /index.html`）を設定できます。
-- **静的レスポンス (`respond`)**：アップストリームへ転送せず、Gymbag から直接ステータスコードとボディを返します。
-- **リダイレクト (`redir`)**：HTTP リダイレクト（`301`、`302`、`307`、`308`）を返します。プレースホルダー `{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}` を利用できます。
-- **レスポンスヘッダー (`headers` / `header`)**：ヘッダーを設定（`Header-Name value`）するか、先頭に `-` を付けて削除（`-Server`）します。
+- **リバースプロキシ (`upstreams`)**: 一致した HTTP リクエストと WebSocket アップグレードをルート固有のアップストリームへ転送します。必要に応じてプレフィックス除去（`handle_path` / `strip_prefix`）も行えます。
+- **静的ファイルサーバー (`root` / `file_server`)**: `root` からファイルを配信します。`index` ファイル（デフォルト `["index.html"]`）、ディレクトリ一覧（`browse`）、SPA 用 `fallback`（`try_files {path} /index.html`）に対応しています。
+- **固定レスポンス (`respond`)**: アップストリームに接続せず、指定したステータスコードとボディを即座に返します。
+- **リダイレクト (`redir`)**: 3xx リダイレクト（`301`、`302`、`307`、`308`）を返します。`{scheme}`、`{host}`、`{uri}`、`{path}`、`{query}` の展開に対応しています。
+- **レスポンスヘッダー (`headers` / `header`)**: ヘッダーを設定（`Header-Name value`）するか、先頭に `-` を付けて削除（`-Server`）します。
 
 ### パスマッチャー
 
-- `""`、`*`、`/*`：すべてのリクエストパスに一致。
-- `/exact`：完全一致。
-- `/api/*`、`*.php`：グロブワイルドカード（`*` は `/` を含む任意の文字列に一致）。
-- `~^/v[0-9]+/`：先頭の `~` 以降を Go RE2 正規表現として評価。
+- `""`、`*`、`/*`: すべてのパスに一致。
+- `/exact`: 完全一致。
+- `/api/*`、`*.php`: グロブワイルドカード（`*` は `/` を含む任意の文字列に一致）。
+- `~^/v[0-9]+/`: `~` に続けて Go RE2 正規表現を指定。
 
 ### `gymbag.json` と CLI でのルート管理
 
-`gymbag.json` では、各サイトの `routes` 配列にルートを定義します：
+`gymbag.json` ではサイトの `routes` 配列に記述します。
 
 ```json
 {
@@ -64,7 +64,7 @@ app.example.com {
 }
 ```
 
-CLI または `PATCH /api/v1/sites/{domain}` でルートを管理できます：
+ルートの編集は CLI または `PATCH /api/v1/sites/{domain}` で行えます。
 
 ```bash
 ./gymbag config route list -d app.example.com
@@ -75,17 +75,14 @@ CLI または `PATCH /api/v1/sites/{domain}` でルートを管理できます�
 
 ## nginx・Apache・Caddyfile v2 のインポート
 
-Gymbag は以下をネイティブにパースします：
-- **Caddyfile v2**：スニペット `(name) { ... }`、`import`（ファイルグロブおよび `{args[n]}` 対応）、名前付き `@matchers`（`path`、`path_regexp`、`method`）、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir`、`header`。
-- **nginx (`nginx.conf`)**：`http` / `server` / `location` ブロック、`upstream` プール、`proxy_pass`、`root` / `alias` / `index` / `autoindex` / `try_files`、`return`、`rewrite ... permanent|redirect`、`add_header`、`ssl_certificate` / `ssl_certificate_key`、`include`。
-- **Apache (`httpd.conf` / `apache2.conf`)**：`<VirtualHost>`、`ServerName` / `ServerAlias`、`ProxyPass` / `<Proxy balancer://...>`、`DocumentRoot` / `DirectoryIndex`、`Redirect` / `RedirectMatch`、`Header set|unset`、`SSLCertificateFile` / `SSLCertificateKeyFile`、`Include` / `IncludeOptional`。
+Gymbag は次の形式を直接読み込めます。
+- **Caddyfile v2**: スニペット `(name) { ... }`、`import`（ファイルグロブと `{args[n]}`）、名前付き `@matchers`（`path`、`path_regexp`、`method`）、`handle`、`handle_path`、`route`、`root`、`file_server`、`try_files`、`respond`、`redir`、`header`。
+- **nginx (`nginx.conf`)**: `http` / `server` / `location` ブロック、`upstream` プール、`proxy_pass`、`root` / `alias` / `index` / `autoindex` / `try_files`、`return`、`rewrite ... permanent|redirect`、`add_header`、`ssl_certificate` / `ssl_certificate_key`、`include`。
+- **Apache (`httpd.conf` / `apache2.conf`)**: `<VirtualHost>`、`ServerName` / `ServerAlias`、`ProxyPass` / `<Proxy balancer://...>`、`DocumentRoot` / `DirectoryIndex`、`Redirect` / `RedirectMatch`、`Header set|unset`、`SSLCertificateFile` / `SSLCertificateKeyFile`、`Include` / `IncludeOptional`。
 
-インポートした設定をそのまま起動するか、`gymbag.json` / `Gymbagfile` へ変換できます：
+読み込んだ設定でそのまま起動することも、`gymbag.json` / `Gymbagfile` へ変換することもできます。
 
 ```bash
-# nginx.conf や httpd.conf から直接起動
 ./gymbag run -c /etc/nginx/nginx.conf
-
-# Gymbag ネイティブの gymbag.json 形式へ変換
 ./gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 ```
