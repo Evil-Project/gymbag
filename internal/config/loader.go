@@ -55,6 +55,7 @@ func ParseConfigBytes(raw []byte, path, baseDir string) (Config, error) {
 	case strings.HasSuffix(strings.ToLower(path), ".json") || (strings.HasPrefix(trimmed, "{") && json.Valid(raw)):
 		cfg = Default()
 		cfg.Sites = nil
+		cfg.BindHost = ""
 		dec := json.NewDecoder(strings.NewReader(trimmed))
 		dec.DisallowUnknownFields()
 		if err = dec.Decode(&cfg); err != nil {
@@ -121,7 +122,10 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 				return Config{}, err
 			}
 		}
-		upstream := cfg.Sites[0].PrimaryUpstream()
+		var upstream string
+		if len(cfg.Sites) > 0 {
+			upstream = cfg.Sites[0].PrimaryUpstream()
+		}
 		if strings.TrimSpace(opts.Upstream) != "" {
 			upstream, err = NormalizeUpstream(opts.Upstream, "upstream")
 			if err != nil {
@@ -156,7 +160,7 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 		}
 		cfg.Sites = sites
 		if strings.TrimSpace(getenv("GYMBAG_BIND")) == "" {
-			cfg.BindHost = DefaultBindHost(domains)
+			cfg.BindHost = DefaultBindHostForConfig(cfg)
 		}
 	}
 
@@ -172,11 +176,29 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 				cfg.Sites[i].Protect = false
 			}
 		}
+		if cfg.SSH != nil {
+			cfg.SSH.VerifyLevel = lvl
+			if !protect {
+				cfg.SSH.Protect = false
+			}
+		}
+		if cfg.Minecraft != nil {
+			cfg.Minecraft.VerifyLevel = lvl
+			if !protect {
+				cfg.Minecraft.Protect = false
+			}
+		}
 	}
 
 	if opts.Protect != nil {
 		for i := range cfg.Sites {
 			cfg.Sites[i].Protect = *opts.Protect
+		}
+		if cfg.SSH != nil {
+			cfg.SSH.Protect = *opts.Protect
+		}
+		if cfg.Minecraft != nil {
+			cfg.Minecraft.Protect = *opts.Protect
 		}
 	}
 
@@ -188,6 +210,12 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 		cfg.Defaults.ClearanceTTL = ttl
 		for i := range cfg.Sites {
 			cfg.Sites[i].WAF.ClearanceTTL = ttl
+		}
+		if cfg.SSH != nil {
+			cfg.SSH.ClearanceTTL = ttl
+		}
+		if cfg.Minecraft != nil {
+			cfg.Minecraft.ClearanceTTL = ttl
 		}
 	}
 
@@ -260,6 +288,12 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 	if base != nil {
 		cfg = *base
 		cfg.Sites = slices.Clone(base.Sites)
+		if base.SSH != nil {
+			cfg.SSH = base.SSH.Clone()
+		}
+		if base.Minecraft != nil {
+			cfg.Minecraft = base.Minecraft.Clone()
+		}
 	} else {
 		cfg = Default()
 	}
@@ -280,7 +314,10 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		domains = parsed
 	}
 
-	defaultUpstream := cfg.Sites[0].PrimaryUpstream()
+	var defaultUpstream string
+	if len(cfg.Sites) > 0 {
+		defaultUpstream = cfg.Sites[0].PrimaryUpstream()
+	}
 	if rawUp := strings.TrimSpace(getenv("GYMBAG_UPSTREAM")); rawUp != "" {
 		norm, err := NormalizeUpstream(rawUp, "GYMBAG_UPSTREAM")
 		if err != nil {
@@ -645,18 +682,160 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 	} else if ok {
 		cfg.Intel.RefreshInterval = v
 	}
+	if rawVPN := strings.TrimSpace(getenv("GYMBAG_VPN_DETECTION")); rawVPN != "" {
+		b, err := parseBool(rawVPN, "GYMBAG_VPN_DETECTION")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Intel.VPNDetection = b
+	}
+
+	if rawVURL := strings.TrimSpace(getenv("GYMBAG_VERIFY_URL")); rawVURL != "" {
+		cfg.Verify.URL = rawVURL
+	}
+	if v, ok, err := envPort(getenv, "GYMBAG_VERIFY_PORT"); err != nil {
+		return Config{}, err
+	} else if ok {
+		cfg.Verify.Port = v
+	}
+
+	sshEnvSet, err := applySSHEnv(&cfg, getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	mcEnvSet, err := applyMinecraftEnv(&cfg, getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	httpEnvSet := strings.TrimSpace(getenv("GYMBAG_DOMAIN")) != "" ||
+		strings.TrimSpace(getenv("GYMBAG_DOMAINS")) != "" ||
+		strings.TrimSpace(getenv("GYMBAG_UPSTREAM")) != "" ||
+		strings.TrimSpace(getenv("GYMBAG_UPSTREAMS")) != ""
+	if !hasBase && !httpEnvSet && (sshEnvSet || mcEnvSet) {
+		cfg.Sites = nil
+	}
 
 	rawBind := strings.TrimSpace(getenv("GYMBAG_BIND"))
 	if rawBind != "" {
 		cfg.BindHost = rawBind
 	} else if !hasBase || !slices.Equal(cfg.Domains(), baseDomains) {
-		cfg.BindHost = DefaultBindHost(cfg.Domains())
+		cfg.BindHost = DefaultBindHostForConfig(cfg)
 	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func applySSHEnv(cfg *Config, getenv func(string) string) (bool, error) {
+	rawEnabled := strings.TrimSpace(getenv("GYMBAG_SSH_ENABLED"))
+	rawPort := strings.TrimSpace(getenv("GYMBAG_SSH_PORT"))
+	rawUp := strings.TrimSpace(getenv("GYMBAG_SSH_UPSTREAM"))
+	rawVerify := strings.TrimSpace(getenv("GYMBAG_SSH_VERIFY_LEVEL"))
+	rawProtect := strings.TrimSpace(getenv("GYMBAG_SSH_PROTECT"))
+	if rawEnabled == "" && rawPort == "" && rawUp == "" && rawVerify == "" && rawProtect == "" {
+		return false, nil
+	}
+	if cfg.SSH == nil {
+		def := DefaultSSHConfig()
+		cfg.SSH = &def
+	}
+	if rawEnabled != "" {
+		b, err := parseBool(rawEnabled, "GYMBAG_SSH_ENABLED")
+		if err != nil {
+			return false, err
+		}
+		cfg.SSH.Enabled = b
+	} else if rawUp != "" || rawPort != "" {
+		cfg.SSH.Enabled = true
+	}
+	if v, ok, err := envPort(getenv, "GYMBAG_SSH_PORT"); err != nil {
+		return false, err
+	} else if ok {
+		cfg.SSH.Port = v
+	}
+	if rawUp != "" {
+		norm, err := NormalizeTCPUpstream(rawUp, "GYMBAG_SSH_UPSTREAM")
+		if err != nil {
+			return false, err
+		}
+		cfg.SSH.Upstream = norm
+	}
+	if rawVerify != "" {
+		lvl, prot, err := ParseVerifyLevel(rawVerify)
+		if err != nil {
+			return false, err
+		}
+		cfg.SSH.VerifyLevel = lvl
+		if !prot {
+			cfg.SSH.Protect = false
+		}
+	}
+	if rawProtect != "" {
+		b, err := parseBool(rawProtect, "GYMBAG_SSH_PROTECT")
+		if err != nil {
+			return false, err
+		}
+		cfg.SSH.Protect = b
+	}
+	return cfg.SSH.Enabled, nil
+}
+
+func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
+	rawEnabled := firstNonEmpty(getenv("GYMBAG_MC_ENABLED"), getenv("GYMBAG_MINECRAFT_ENABLED"))
+	rawPort := firstNonEmpty(getenv("GYMBAG_MC_PORT"), getenv("GYMBAG_MINECRAFT_PORT"))
+	rawUp := firstNonEmpty(getenv("GYMBAG_MC_UPSTREAM"), getenv("GYMBAG_MINECRAFT_UPSTREAM"))
+	rawVerify := firstNonEmpty(getenv("GYMBAG_MC_VERIFY_LEVEL"), getenv("GYMBAG_MINECRAFT_VERIFY_LEVEL"))
+	rawProtect := firstNonEmpty(getenv("GYMBAG_MC_PROTECT"), getenv("GYMBAG_MINECRAFT_PROTECT"))
+	if rawEnabled == "" && rawPort == "" && rawUp == "" && rawVerify == "" && rawProtect == "" {
+		return false, nil
+	}
+	if cfg.Minecraft == nil {
+		def := DefaultMinecraftConfig()
+		cfg.Minecraft = &def
+	}
+	if rawEnabled != "" {
+		b, err := parseBool(rawEnabled, "GYMBAG_MC_ENABLED")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.Enabled = b
+	} else if rawUp != "" || rawPort != "" {
+		cfg.Minecraft.Enabled = true
+	}
+	if rawPort != "" {
+		p, err := host.ParsePort(rawPort, "GYMBAG_MC_PORT")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.Port = p
+	}
+	if rawUp != "" {
+		norm, err := NormalizeTCPUpstream(rawUp, "GYMBAG_MC_UPSTREAM")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.Upstream = norm
+	}
+	if rawVerify != "" {
+		lvl, prot, err := ParseVerifyLevel(rawVerify)
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.VerifyLevel = lvl
+		if !prot {
+			cfg.Minecraft.Protect = false
+		}
+	}
+	if rawProtect != "" {
+		b, err := parseBool(rawProtect, "GYMBAG_MC_PROTECT")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.Protect = b
+	}
+	return cfg.Minecraft.Enabled, nil
 }
 
 func envPositiveInt(getenv func(string) string, name string) (int, bool, error) {

@@ -351,6 +351,18 @@ var knownDirectiveNames = map[string]struct{}{
 	"ai_bots":              {},
 	"suspicious_uas":       {},
 	"suspicious_paths":     {},
+	"vpn_detection":        {},
+	"vpn_detect":           {},
+	"vpn_feed":             {},
+	"vpn_feeds":            {},
+	"verify_url":           {},
+	"verify_port":          {},
+	"verify_server":        {},
+	"ssh":                  {},
+	"minecraft":            {},
+	"mc":                   {},
+	"port":                 {},
+	"server_properties":    {},
 }
 
 var ruleFieldKeywords = map[string]struct{}{
@@ -374,6 +386,9 @@ var ruleFieldKeywords = map[string]struct{}{
 type parseState struct {
 	tls                TLSConfig
 	intel              IntelConfig
+	verify             VerifyServerConfig
+	ssh                *SSHConfig
+	minecraft          *MinecraftConfig
 	remoteRulesRefresh int
 	rulesWatchInterval int
 	bindHost           string
@@ -616,6 +631,29 @@ func applyIntelDirective(name string, args []string, ic *IntelConfig) (bool, err
 				return true, err
 			}
 			ic.AIIPFeeds = append(ic.AIIPFeeds, strings.TrimSpace(u))
+		}
+		return true, nil
+
+	case "vpn_detection", "vpn_detect":
+		if len(args) != 1 {
+			return true, fmt.Errorf("%s requires on/off or true/false", name)
+		}
+		b, err := parseBool(args[0], name)
+		if err != nil {
+			return true, err
+		}
+		ic.VPNDetection = b
+		return true, nil
+
+	case "vpn_feed", "vpn_feeds":
+		if len(args) == 0 {
+			return true, fmt.Errorf("%s requires at least one feed URL", name)
+		}
+		for _, u := range args {
+			if err := RequireHTTPURL(u, name); err != nil {
+				return true, err
+			}
+			ic.VPNFeeds = append(ic.VPNFeeds, strings.TrimSpace(u))
 		}
 		return true, nil
 	}
@@ -1223,6 +1261,46 @@ func applyGlobalDirective(
 			// Tolerate Caddyfile v2 compression/logging blocks.
 			return nil, nil
 
+		case "verify_server":
+			if !isGlobalScope {
+				return nil, fmt.Errorf("verify_server block is only allowed in global options")
+			}
+			for _, subItem := range item.sub.body {
+				if subItem.sub != nil {
+					return nil, fmt.Errorf("unexpected nested block inside verify_server")
+				}
+				if len(subItem.words) == 0 {
+					continue
+				}
+				k := strings.ToLower(subItem.words[0])
+				vargs := subItem.words[1:]
+				switch k {
+				case "url":
+					if len(vargs) != 1 {
+						return nil, fmt.Errorf("verify_server url requires a value")
+					}
+					st.verify.URL = strings.TrimSpace(vargs[0])
+				case "port":
+					if len(vargs) != 1 {
+						return nil, fmt.Errorf("verify_server port requires a port number")
+					}
+					p, pErr := host.ParsePort(vargs[0], "verify_port")
+					if pErr != nil {
+						return nil, pErr
+					}
+					st.verify.Port = p
+				case "tls":
+					if len(vargs) != 2 {
+						return nil, fmt.Errorf("verify_server tls requires <cert_file> <key_file>")
+					}
+					st.verify.CertFile = vargs[0]
+					st.verify.KeyFile = vargs[1]
+				default:
+					return nil, fmt.Errorf("unknown verify_server directive: %s", subItem.words[0])
+				}
+			}
+			return nil, nil
+
 		default:
 			return nil, fmt.Errorf("unsupported nested block: %s", words[0])
 		}
@@ -1471,6 +1549,24 @@ func applyGlobalDirective(
 		}
 		st.trustedProxies = append(st.trustedProxies, args...)
 		return nil, nil
+
+	case "verify_url":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("verify_url requires a hostname or https:// URL")
+		}
+		st.verify.URL = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "verify_port":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("verify_port requires a port number")
+		}
+		p, err := host.ParsePort(args[0], "verify_port")
+		if err != nil {
+			return nil, err
+		}
+		st.verify.Port = p
+		return nil, nil
 	}
 
 	return nil, fmt.Errorf("unknown directive: %s", words[0])
@@ -1548,6 +1644,24 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 						st.flatUpstreams = upstreams
 					}
 				}
+				continue
+			}
+
+			if strings.EqualFold(block.header[0], "ssh") && len(block.header) <= 2 {
+				sshCfg, sErr := parseSSHBlock(block, st)
+				if sErr != nil {
+					return Config{}, sErr
+				}
+				st.ssh = &sshCfg
+				continue
+			}
+
+			if (strings.EqualFold(block.header[0], "minecraft") || strings.EqualFold(block.header[0], "mc")) && len(block.header) <= 2 {
+				mcCfg, mErr := parseMinecraftBlock(block, st)
+				if mErr != nil {
+					return Config{}, mErr
+				}
+				st.minecraft = &mcCfg
 				continue
 			}
 
@@ -1808,12 +1922,15 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		}
 	}
 
-	if len(sites) == 0 {
-		return Config{}, fmt.Errorf("config file must define at least one site with a domain and upstream URL")
+	if len(sites) == 0 && (st.ssh == nil || !st.ssh.Enabled) && (st.minecraft == nil || !st.minecraft.Enabled) {
+		return Config{}, fmt.Errorf("config file must define at least one site, ssh, or minecraft service")
 	}
 
 	cfg := Config{
 		Sites:              sites,
+		SSH:                st.ssh,
+		Minecraft:          st.minecraft,
+		Verify:             st.verify,
 		BindHost:           st.bindHost,
 		HTTPPort:           st.httpPort,
 		HTTPSPort:          st.httpsPort,
@@ -1829,12 +1946,179 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		BaseDir:            baseDir,
 	}
 	if cfg.BindHost == "" {
-		cfg.BindHost = DefaultBindHost(cfg.Domains())
+		cfg.BindHost = DefaultBindHostForConfig(cfg)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+type tcpBlockFields struct {
+	enabled          bool
+	port             int
+	upstream         string
+	serverProperties string
+	protect          bool
+	waf              SiteWAFConfig
+	verifyURL        string
+	verifyPort       int
+}
+
+func parseTCPServiceBlock(block *parsedBlock, service string, defaultPort int, st *parseState) (tcpBlockFields, error) {
+	out := tcpBlockFields{
+		enabled: true,
+		port:    defaultPort,
+		protect: st.defaultProtect,
+		waf:     cloneSiteWAF(st.defaultWAF),
+	}
+	// Default verify level for TCP services is 3 (suspicious & ai) unless overridden.
+	if out.waf.VerifyLevel == VerifyLevelAlways {
+		out.waf.VerifyLevel = VerifyLevelSuspiciousAndAI
+	}
+	out.waf.RateLimit = 60
+	out.waf.RateWindow = 60
+
+	if len(block.header) == 2 {
+		p, err := host.ParsePort(block.header[1], service+" port")
+		if err != nil {
+			return out, err
+		}
+		out.port = p
+	}
+
+	for _, stmt := range block.body {
+		if stmt.sub != nil {
+			if strings.EqualFold(stmt.words[0], "rule") {
+				rule, err := parseRuleBlock(stmt.sub)
+				if err != nil {
+					return out, err
+				}
+				out.waf.Rules = append(out.waf.Rules, rule)
+				continue
+			}
+			return out, fmt.Errorf("unexpected nested block inside %s: %s", service, stmt.words[0])
+		}
+		if len(stmt.words) == 0 {
+			continue
+		}
+		dname := strings.ToLower(stmt.words[0])
+		args := stmt.words[1:]
+		switch dname {
+		case "enabled":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s enabled requires true or false", service)
+			}
+			b, err := parseBool(args[0], service+" enabled")
+			if err != nil {
+				return out, err
+			}
+			out.enabled = b
+		case "port":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s port requires a port number", service)
+			}
+			p, err := host.ParsePort(args[0], service+" port")
+			if err != nil {
+				return out, err
+			}
+			out.port = p
+		case "upstream", "reverse_proxy", "proxy":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s %s requires a single host:port target", service, dname)
+			}
+			up, err := NormalizeTCPUpstream(args[0], service+" upstream")
+			if err != nil {
+				return out, err
+			}
+			out.upstream = up
+		case "server_properties":
+			if service != "minecraft" {
+				return out, fmt.Errorf("server_properties is only valid inside minecraft block")
+			}
+			if len(args) != 1 {
+				return out, fmt.Errorf("server_properties requires a file path")
+			}
+			out.serverProperties = strings.TrimSpace(args[0])
+		case "verify_url":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s verify_url requires a hostname or https:// URL", service)
+			}
+			out.verifyURL = strings.TrimSpace(args[0])
+		case "verify_port":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s verify_port requires a port number", service)
+			}
+			p, err := host.ParsePort(args[0], service+" verify_port")
+			if err != nil {
+				return out, err
+			}
+			out.verifyPort = p
+		case "protect", "protected":
+			if len(args) != 1 {
+				return out, fmt.Errorf("%s protect requires on/off or true/false", service)
+			}
+			b, err := parseBool(args[0], service+" protect")
+			if err != nil {
+				return out, err
+			}
+			out.protect = b
+		default:
+			handled, err := applyWAFDirective(dname, args, &out.waf, &st.intel, &out.protect, nil)
+			if err != nil {
+				return out, err
+			}
+			if !handled {
+				return out, fmt.Errorf("unknown directive inside %s block: %s", service, stmt.words[0])
+			}
+		}
+	}
+	return out, nil
+}
+
+func parseSSHBlock(block *parsedBlock, st *parseState) (SSHConfig, error) {
+	f, err := parseTCPServiceBlock(block, "ssh", DefaultSSHPort, st)
+	if err != nil {
+		return SSHConfig{}, err
+	}
+	return SSHConfig{
+		Enabled:      f.enabled,
+		Port:         f.port,
+		Upstream:     f.upstream,
+		Protect:      f.protect,
+		VerifyLevel:  f.waf.VerifyLevel,
+		Difficulty:   f.waf.Difficulty,
+		ChallengeTTL: f.waf.ChallengeTTL,
+		ClearanceTTL: f.waf.ClearanceTTL,
+		RateLimit:    f.waf.RateLimit,
+		RateWindow:   f.waf.RateWindow,
+		VerifyURL:    f.verifyURL,
+		VerifyPort:   f.verifyPort,
+		Rules:        f.waf.Rules,
+	}, nil
+}
+
+func parseMinecraftBlock(block *parsedBlock, st *parseState) (MinecraftConfig, error) {
+	f, err := parseTCPServiceBlock(block, "minecraft", DefaultMinecraftPort, st)
+	if err != nil {
+		return MinecraftConfig{}, err
+	}
+	return MinecraftConfig{
+		Enabled:          f.enabled,
+		Port:             f.port,
+		Upstream:         f.upstream,
+		ServerProperties: f.serverProperties,
+		Protect:          f.protect,
+		VerifyLevel:      f.waf.VerifyLevel,
+		Difficulty:       f.waf.Difficulty,
+		ChallengeTTL:     f.waf.ChallengeTTL,
+		ClearanceTTL:     f.waf.ClearanceTTL,
+		RateLimit:        f.waf.RateLimit,
+		RateWindow:       f.waf.RateWindow,
+		VerifyURL:        f.verifyURL,
+		VerifyPort:       f.verifyPort,
+		Rules:            f.waf.Rules,
+	}, nil
 }
 
 func cloneSiteWAF(in SiteWAFConfig) SiteWAFConfig {
@@ -2044,8 +2328,17 @@ func FormatConfig(cfg Config) string {
 	if cfg.HTTPSPort != 443 {
 		globalLines = append(globalLines, fmt.Sprintf("    https_port %d", cfg.HTTPSPort))
 	}
-	if cfg.BindHost != DefaultBindHost(cfg.Domains()) {
+	if cfg.BindHost != DefaultBindHostForConfig(cfg) {
 		globalLines = append(globalLines, fmt.Sprintf("    bind %s", cfg.BindHost))
+	}
+	if cfg.Verify.URL != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    verify_url %s", quoteIfNeeded(cfg.Verify.URL)))
+	}
+	if cfg.Verify.Port != 0 && cfg.Verify.Port != DefaultVerifyPort {
+		globalLines = append(globalLines, fmt.Sprintf("    verify_port %d", cfg.Verify.Port))
+	}
+	if cfg.Verify.CertFile != "" && cfg.Verify.KeyFile != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    verify_server {\n        tls %s %s\n    }", quoteIfNeeded(cfg.Verify.CertFile), quoteIfNeeded(cfg.Verify.KeyFile)))
 	}
 	if cfg.AdminAddr != "" {
 		globalLines = append(globalLines, fmt.Sprintf("    admin %s", cfg.AdminAddr))
@@ -2068,6 +2361,9 @@ func FormatConfig(cfg Config) string {
 	if cfg.Intel.AIIPList != defIntel.AIIPList {
 		globalLines = append(globalLines, fmt.Sprintf("    ai_ip_list %t", cfg.Intel.AIIPList))
 	}
+	if cfg.Intel.VPNDetection != defIntel.VPNDetection {
+		globalLines = append(globalLines, fmt.Sprintf("    vpn_detection %t", cfg.Intel.VPNDetection))
+	}
 	if cfg.Intel.RefreshInterval != defIntel.RefreshInterval {
 		globalLines = append(globalLines, fmt.Sprintf("    intel_refresh %d", cfg.Intel.RefreshInterval))
 	}
@@ -2076,6 +2372,9 @@ func FormatConfig(cfg Config) string {
 	}
 	for _, u := range cfg.Intel.AIIPFeeds {
 		globalLines = append(globalLines, fmt.Sprintf("    ai_ip_feed %s", quoteIfNeeded(u)))
+	}
+	for _, u := range cfg.Intel.VPNFeeds {
+		globalLines = append(globalLines, fmt.Sprintf("    vpn_feed %s", quoteIfNeeded(u)))
 	}
 	if cfg.RemoteRulesRefresh != 0 && cfg.RemoteRulesRefresh != DefaultRemoteRulesRefresh {
 		globalLines = append(globalLines, fmt.Sprintf("    remote_rules_refresh %d", cfg.RemoteRulesRefresh))
@@ -2159,7 +2458,72 @@ func FormatConfig(cfg Config) string {
 		}
 		b.WriteString("}\n")
 	}
+
+	wroteBlock := len(cfg.Sites) > 0
+	if cfg.SSHEnabled() {
+		if wroteBlock {
+			b.WriteByte('\n')
+		}
+		formatTCPServiceBlock(&b, "ssh", DefaultSSHPort, cfg.SSH.Port, cfg.SSH.Upstream, "", cfg.SSH.Protect, cfg.SSH.VerifyLevel, cfg.SSH.Difficulty, cfg.SSH.RateLimit, cfg.SSH.RateWindow, cfg.SSH.ChallengeTTL, cfg.SSH.ClearanceTTL, cfg.SSH.VerifyURL, cfg.SSH.VerifyPort, cfg.SSH.Rules)
+		wroteBlock = true
+	}
+	if cfg.MinecraftEnabled() {
+		if wroteBlock {
+			b.WriteByte('\n')
+		}
+		formatTCPServiceBlock(&b, "minecraft", DefaultMinecraftPort, cfg.Minecraft.Port, cfg.Minecraft.Upstream, cfg.Minecraft.ServerProperties, cfg.Minecraft.Protect, cfg.Minecraft.VerifyLevel, cfg.Minecraft.Difficulty, cfg.Minecraft.RateLimit, cfg.Minecraft.RateWindow, cfg.Minecraft.ChallengeTTL, cfg.Minecraft.ClearanceTTL, cfg.Minecraft.VerifyURL, cfg.Minecraft.VerifyPort, cfg.Minecraft.Rules)
+	}
 	return b.String()
+}
+
+func formatTCPServiceBlock(
+	b *strings.Builder,
+	name string,
+	defaultPort, port int,
+	upstream, serverProps string,
+	protect bool,
+	verifyLevel VerifyLevel,
+	difficulty, rateLimit, rateWindow, challengeTTL, clearanceTTL int,
+	verifyURL string,
+	verifyPort int,
+	rules []CustomRule,
+) {
+	b.WriteString(name)
+	b.WriteString(" {\n")
+	if port != 0 && port != defaultPort {
+		b.WriteString(fmt.Sprintf("    port %d\n", port))
+	}
+	b.WriteString(fmt.Sprintf("    upstream %s\n", upstream))
+	if serverProps != "" {
+		b.WriteString(fmt.Sprintf("    server_properties %s\n", quoteIfNeeded(serverProps)))
+	}
+	if !protect {
+		b.WriteString("    protect off\n")
+	} else {
+		b.WriteString(fmt.Sprintf("    verify %d\n", int(verifyLevel)))
+		if difficulty != 0 && difficulty != 4 {
+			b.WriteString(fmt.Sprintf("    difficulty %d\n", difficulty))
+		}
+		if (rateLimit != 0 && rateLimit != 60) || (rateWindow != 0 && rateWindow != 60) {
+			b.WriteString(fmt.Sprintf("    rate_limit %d %d\n", rateLimit, rateWindow))
+		}
+		if challengeTTL != 0 && challengeTTL != 300 {
+			b.WriteString(fmt.Sprintf("    challenge_ttl %d\n", challengeTTL))
+		}
+		if clearanceTTL != 0 && clearanceTTL != 86400 {
+			b.WriteString(fmt.Sprintf("    clearance_ttl %d\n", clearanceTTL))
+		}
+	}
+	if verifyURL != "" {
+		b.WriteString(fmt.Sprintf("    verify_url %s\n", quoteIfNeeded(verifyURL)))
+	}
+	if verifyPort != 0 {
+		b.WriteString(fmt.Sprintf("    verify_port %d\n", verifyPort))
+	}
+	for _, r := range rules {
+		formatCustomRule(b, r)
+	}
+	b.WriteString("}\n")
 }
 
 func formatRuleSourceLines(indent string, rs RuleSource) []string {

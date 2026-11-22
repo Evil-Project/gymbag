@@ -584,3 +584,102 @@ func TestRuleActionShorthandAliasesLocalBindHostAndCustomProviderReset(t *testin
 			overridden.TLS.Provider, overridden.TLS.ACMEDirectory)
 	}
 }
+
+func TestSSHMinecraftAndVerifyConfigParsingFormattingAndEnv(t *testing.T) {
+	// 1. Combined HTTP + SSH + Minecraft Gymbagfile parsing & formatting roundtrip
+	cfg, err := ParseCaddyfile(`
+		{
+			verify_url https://verify.example.com
+			verify_port 9443
+			vpn_detection off
+		}
+
+		app.example.com {
+			reverse_proxy :3000
+			verify 3
+		}
+
+		ssh {
+			upstream 127.0.0.1:41234
+			verify 1
+			allow ip 10.0.0.0/8
+		}
+
+		minecraft {
+			upstream 127.0.0.1:42556
+			server_properties ./server.properties
+			verify 3
+			difficulty 3
+		}
+	`)
+	if err != nil {
+		t.Fatalf("ParseCaddyfile all-in-one failed: %v", err)
+	}
+	if !cfg.HTTPEnabled() || !cfg.SSHEnabled() || !cfg.MinecraftEnabled() || !cfg.NeedsVerifyServer() {
+		t.Fatalf("expected all 3 services + verify enabled: %+v", cfg)
+	}
+	if cfg.SSH.Port != DefaultSSHPort || cfg.Minecraft.Port != DefaultMinecraftPort {
+		t.Fatalf("expected default ports 22/25565, got ssh=%d mc=%d", cfg.SSH.Port, cfg.Minecraft.Port)
+	}
+	if cfg.Verify.URL != "https://verify.example.com" || cfg.Verify.EffectivePort() != 9443 || cfg.Intel.VPNDetection {
+		t.Fatalf("verify/intel mismatch: verify=%+v intel=%+v", cfg.Verify, cfg.Intel)
+	}
+
+	formatted := FormatConfig(cfg)
+	reparsed, err := ParseCaddyfile(formatted)
+	if err != nil {
+		t.Fatalf("FormatConfig roundtrip failed: %v\n%s", err, formatted)
+	}
+	if !reparsed.SSHEnabled() || !reparsed.MinecraftEnabled() || reparsed.SSH.Upstream != "127.0.0.1:41234" || reparsed.Minecraft.Difficulty != 3 {
+		t.Fatalf("reparsed mismatch: ssh=%+v mc=%+v", reparsed.SSH, reparsed.Minecraft)
+	}
+
+	// 2. Concise JSON roundtrip for SSH-only (zero sites)
+	conciseJSON := []byte(`{
+		"ssh": {
+			"port": 22,
+			"upstream": "127.0.0.1:40022",
+			"verify_level": 3
+		}
+	}`)
+	sshOnly, err := ParseConfigBytes(conciseJSON, "gymbag.json", "")
+	if err != nil {
+		t.Fatalf("ParseConfigBytes concise SSH JSON failed: %v", err)
+	}
+	if sshOnly.HTTPEnabled() || !sshOnly.SSHEnabled() || !sshOnly.SSH.Protect || sshOnly.BindHost != "0.0.0.0" || sshOnly.Verify.EffectivePort() != 8443 {
+		t.Fatalf("concise SSH JSON mismatch: %+v ssh=%+v", sshOnly, sshOnly.SSH)
+	}
+
+	// 3. Env-only Minecraft configuration clears default localhost HTTP site
+	mcEnvCfg, err := LoadWithEnv(LoadOptions{}, func(k string) string {
+		switch k {
+		case "GYMBAG_MC_ENABLED":
+			return "true"
+		case "GYMBAG_MC_UPSTREAM":
+			return ":35565"
+		case "GYMBAG_MC_VERIFY_LEVEL":
+			return "1"
+		case "GYMBAG_VERIFY_PORT":
+			return "8444"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("LoadWithEnv MC-only failed: %v", err)
+	}
+	if mcEnvCfg.HTTPEnabled() || !mcEnvCfg.MinecraftEnabled() || mcEnvCfg.Minecraft.Port != 25565 || mcEnvCfg.Minecraft.Upstream != "127.0.0.1:35565" || mcEnvCfg.Verify.EffectivePort() != 8444 {
+		t.Fatalf("env MC-only mismatch: %+v mc=%+v", mcEnvCfg, mcEnvCfg.Minecraft)
+	}
+
+	// 4. Port conflict detection
+	if _, err := ParseCaddyfile(`
+		{
+			verify_port 25565
+		}
+		minecraft {
+			upstream 127.0.0.1:25566
+		}
+	`); err == nil {
+		t.Fatal("expected error when verify_port conflicts with minecraft.port")
+	}
+}

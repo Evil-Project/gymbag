@@ -263,24 +263,27 @@ func validatePattern(field, p string) error {
 }
 
 // IntelConfig configures automatic IP threat intelligence feeds, live IP reputation lookups,
-// and official AI crawler IP lists.
+// free VPN/proxy/Tor detection, and official AI crawler IP lists.
 type IntelConfig struct {
 	IPSecurity       bool     `json:"ip_security"`
 	IPSecurityAction string   `json:"ip_security_action"` // "verify" or "block"
 	LiveReputation   bool     `json:"live_reputation"`
 	AIIPList         bool     `json:"ai_ip_list"`
+	VPNDetection     bool     `json:"vpn_detection"`
 	RefreshInterval  int      `json:"refresh_interval"`
 	ThreatFeeds      []string `json:"threat_feeds,omitempty"`
 	AIIPFeeds        []string `json:"ai_ip_feeds,omitempty"`
+	VPNFeeds         []string `json:"vpn_feeds,omitempty"`
 }
 
-// DefaultIntelConfig returns default automatic IP security and AI crawler IP feed settings.
+// DefaultIntelConfig returns default automatic IP security, VPN/proxy, and AI crawler IP feed settings.
 func DefaultIntelConfig() IntelConfig {
 	return IntelConfig{
 		IPSecurity:       true,
 		IPSecurityAction: "verify",
 		LiveReputation:   true,
 		AIIPList:         true,
+		VPNDetection:     true,
 		RefreshInterval:  6 * 60 * 60, // 6 hours
 	}
 }
@@ -306,6 +309,11 @@ func (ic *IntelConfig) Validate() error {
 	}
 	for _, u := range ic.AIIPFeeds {
 		if err := RequireHTTPURL(u, "ai_ip_feed"); err != nil {
+			return err
+		}
+	}
+	for _, u := range ic.VPNFeeds {
+		if err := RequireHTTPURL(u, "vpn_feed"); err != nil {
 			return err
 		}
 	}
@@ -532,6 +540,21 @@ type SiteConfig struct {
 	KeyFile   string            `json:"key_file,omitempty"`
 }
 
+// UnmarshalJSON initializes sensible defaults when decoding a new SiteConfig from concise JSON.
+func (s *SiteConfig) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil
+	}
+	if !s.Protect && s.Domain == "" && len(s.Upstreams) == 0 && len(s.Routes) == 0 && s.WAF.Difficulty == 0 && s.WAF.ClearanceTTL == 0 {
+		s.Protect = true
+		s.WAF = DefaultSiteWAFConfig()
+	}
+	type siteAlias SiteConfig
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode((*siteAlias)(s))
+}
+
 // Clone returns a deep copy of the site configuration.
 func (s SiteConfig) Clone() SiteConfig {
 	out := s
@@ -650,20 +673,46 @@ const DefaultRulesWatchInterval = 2
 
 // Config is the root configuration model for Gymbag.
 type Config struct {
-	Sites              []SiteConfig  `json:"sites"`
-	BindHost           string        `json:"bind_host"`
-	HTTPPort           int           `json:"http_port"`
-	HTTPSPort          int           `json:"https_port"`
-	AdminAddr          string        `json:"admin_addr,omitempty"`
-	TLS                TLSConfig     `json:"tls"`
-	Intel              IntelConfig   `json:"intel"`
-	RemoteRulesRefresh int           `json:"remote_rules_refresh,omitempty"`
-	RulesWatchInterval int           `json:"rules_watch_interval,omitempty"`
-	RedisURL           string        `json:"redis_url,omitempty"`
-	Secret             string        `json:"secret,omitempty"`
-	TrustedProxies     []string      `json:"trusted_proxies,omitempty"`
-	Defaults           SiteWAFConfig `json:"defaults"`
-	BaseDir            string        `json:"-"`
+	Sites              []SiteConfig       `json:"sites,omitempty"`
+	SSH                *SSHConfig         `json:"ssh,omitempty"`
+	Minecraft          *MinecraftConfig   `json:"minecraft,omitempty"`
+	Verify             VerifyServerConfig `json:"verify,omitempty"`
+	BindHost           string             `json:"bind_host"`
+	HTTPPort           int                `json:"http_port"`
+	HTTPSPort          int                `json:"https_port"`
+	AdminAddr          string             `json:"admin_addr,omitempty"`
+	TLS                TLSConfig          `json:"tls"`
+	Intel              IntelConfig        `json:"intel"`
+	RemoteRulesRefresh int                `json:"remote_rules_refresh,omitempty"`
+	RulesWatchInterval int                `json:"rules_watch_interval,omitempty"`
+	RedisURL           string             `json:"redis_url,omitempty"`
+	Secret             string             `json:"secret,omitempty"`
+	TrustedProxies     []string           `json:"trusted_proxies,omitempty"`
+	Defaults           SiteWAFConfig      `json:"defaults"`
+	BaseDir            string             `json:"-"`
+}
+
+// HTTPEnabled reports whether at least one HTTP/HTTPS reverse proxy site is configured.
+func (c Config) HTTPEnabled() bool {
+	return len(c.Sites) > 0
+}
+
+// SSHEnabled reports whether SSH protection is enabled.
+func (c Config) SSHEnabled() bool {
+	return c.SSH != nil && c.SSH.Enabled
+}
+
+// MinecraftEnabled reports whether Minecraft Java server protection is enabled.
+func (c Config) MinecraftEnabled() bool {
+	return c.Minecraft != nil && c.Minecraft.Enabled
+}
+
+// NeedsVerifyServer reports whether the shared HTTPS verification portal should be served.
+func (c Config) NeedsVerifyServer() bool {
+	return (c.SSHEnabled() && c.SSH.Protect) ||
+		(c.MinecraftEnabled() && c.Minecraft.Protect) ||
+		strings.TrimSpace(c.Verify.URL) != "" ||
+		c.Verify.Port > 0
 }
 
 // Default returns a baseline Config for localhost -> http://localhost:5173.
@@ -784,8 +833,21 @@ func (c Config) Redacted() Config {
 
 // Validate normalizes and validates the complete Config.
 func (c *Config) Validate() error {
-	if len(c.Sites) == 0 {
-		return fmt.Errorf("at least one site with a domain and upstream URL is required")
+	if err := c.Verify.Validate(); err != nil {
+		return err
+	}
+	if c.SSH != nil {
+		if err := c.SSH.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.Minecraft != nil {
+		if err := c.Minecraft.Validate(); err != nil {
+			return err
+		}
+	}
+	if len(c.Sites) == 0 && !c.SSHEnabled() && !c.MinecraftEnabled() {
+		return fmt.Errorf("at least one service (HTTP site, SSH, or Minecraft) is required")
 	}
 	seen := make(map[string]int, len(c.Sites))
 	deduped := make([]SiteConfig, 0, len(c.Sites))
@@ -814,6 +876,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HTTPSPort < 1 || c.HTTPSPort > 65535 {
 		return fmt.Errorf("https_port must be between 1 and 65535")
+	}
+	if err := checkPortConflict(c); err != nil {
+		return err
 	}
 	if rawProv := strings.TrimSpace(c.TLS.Provider); rawProv != "" {
 		if strings.EqualFold(rawProv, "custom") {
@@ -876,7 +941,7 @@ func (c *Config) Validate() error {
 		c.Defaults = DefaultSiteWAFConfig()
 	}
 	if strings.TrimSpace(c.BindHost) == "" {
-		c.BindHost = DefaultBindHost(c.Domains())
+		c.BindHost = DefaultBindHostForConfig(*c)
 	}
 	return nil
 }

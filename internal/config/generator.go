@@ -22,12 +22,30 @@ type SiteSpec struct {
 	KeyFile      string
 }
 
+// TCPSpec describes an SSH or Minecraft protection service entry for config generation.
+type TCPSpec struct {
+	Port             int
+	Upstream         string
+	ServerProperties string
+	VerifyLevel      string
+	Protect          *bool
+	Difficulty       int
+	ClearanceTTL     string
+	VerifyURL        string
+	VerifyPort       int
+	Rules            []CustomRule
+}
+
 // GenerateOptions controls how GenerateConfig and RenderGeneratedConfig construct a Gymbag config.
 type GenerateOptions struct {
 	Preset             string
+	Templates          []string
 	Domain             string
 	Upstream           string
 	Sites              []SiteSpec
+	SSH                *TCPSpec
+	Minecraft          *TCPSpec
+	Verify             VerifyServerConfig
 	VerifyLevel        string
 	Protect            *bool
 	Difficulty         int
@@ -51,6 +69,31 @@ type GenerateOptions struct {
 	IPSecurityAction   string
 	Format             string // "gymbagfile" (default) or "json"
 	IncludeComments    bool
+}
+
+// ResolveTemplateSelection parses template names (http, ssh, minecraft/mc, all) into service flags.
+func ResolveTemplateSelection(raw []string) (useHTTP, useSSH, useMC bool, err error) {
+	for _, entry := range raw {
+		for _, part := range strings.Split(entry, ",") {
+			t := strings.ToLower(strings.TrimSpace(part))
+			if t == "" {
+				continue
+			}
+			switch t {
+			case "http", "https", "web", "proxy":
+				useHTTP = true
+			case "ssh":
+				useSSH = true
+			case "minecraft", "mc":
+				useMC = true
+			case "all":
+				useHTTP, useSSH, useMC = true, true, true
+			default:
+				return false, false, false, fmt.Errorf("unsupported template %q (expected http, ssh, minecraft, or all)", part)
+			}
+		}
+	}
+	return useHTTP, useSSH, useMC, nil
 }
 
 // ParseSiteSpec parses a "domain=upstream" (or "domain1,domain2=upstream") CLI specification.
@@ -106,17 +149,38 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	defaultProtect := true
 	defaultDifficulty := 4
 
+	useHTTP, useSSH, useMC, err := ResolveTemplateSelection(opts.Templates)
+	if err != nil {
+		return Config{}, err
+	}
+	if opts.SSH != nil {
+		useSSH = true
+	}
+	if opts.Minecraft != nil {
+		useMC = true
+	}
+
 	preset := strings.ToLower(strings.TrimSpace(opts.Preset))
 	switch preset {
 	case "", "default", "standard":
 		// Use standard defaults above.
+	case "http", "web":
+		useHTTP = true
+	case "ssh":
+		useSSH = true
+	case "minecraft", "mc":
+		useMC = true
+	case "all":
+		useHTTP, useSSH, useMC = true, true, true
 	case "local", "dev":
+		useHTTP = true
 		defaultDomain = "app.internal"
 		defaultUpstream = "http://localhost:3000"
 		if strings.TrimSpace(opts.SSLProvider) == "" {
 			opts.SSLProvider = "local"
 		}
 	case "public", "production", "prod":
+		useHTTP = true
 		defaultUpstream = "http://localhost:3000"
 		if strings.TrimSpace(opts.Domain) == "" && len(opts.Sites) == 0 {
 			return Config{}, fmt.Errorf("preset %q requires --domain or --site", opts.Preset)
@@ -130,13 +194,22 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	case "proxy-only", "unprotected", "off":
 		defaultProtect = false
 	default:
-		return Config{}, fmt.Errorf("unsupported preset %q (expected standard, local, public, strict, ai-only, suspicious, or proxy-only)", opts.Preset)
+		return Config{}, fmt.Errorf("unsupported preset %q (expected standard, local, public, strict, ai-only, suspicious, proxy-only, http, ssh, minecraft, or all)", opts.Preset)
 	}
 
-	// Global defaults & overrides
-	cfg.Defaults.VerifyLevel = defaultVerify
-	cfg.Defaults.Difficulty = defaultDifficulty
+	if len(opts.Sites) > 0 || strings.TrimSpace(opts.Domain) != "" || strings.TrimSpace(opts.Upstream) != "" {
+		useHTTP = true
+	}
+	if !useHTTP && !useSSH && !useMC {
+		useHTTP = true
+	}
+
+	// Build shared base WAF template without polluting cfg.Defaults.VerifyLevel when not overridden.
+	baseWAF := DefaultSiteWAFConfig()
+	baseWAF.VerifyLevel = defaultVerify
+	baseWAF.Difficulty = defaultDifficulty
 	if opts.Difficulty != 0 {
+		baseWAF.Difficulty = opts.Difficulty
 		cfg.Defaults.Difficulty = opts.Difficulty
 	}
 	if rawTTL := strings.TrimSpace(opts.ClearanceTTL); rawTTL != "" {
@@ -144,6 +217,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		baseWAF.ClearanceTTL = ttl
 		cfg.Defaults.ClearanceTTL = ttl
 	}
 	if len(opts.RemoteRules) > 0 {
@@ -151,6 +225,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		baseWAF.RemoteRules = urls
 		cfg.Defaults.RemoteRules = urls
 	}
 	if rawRefresh := strings.TrimSpace(opts.RemoteRulesRefresh); rawRefresh != "" {
@@ -165,6 +240,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 			if err := rs.Validate(); err != nil {
 				return Config{}, err
 			}
+			baseWAF.RuleSources = append(baseWAF.RuleSources, rs)
 			cfg.Defaults.RuleSources = append(cfg.Defaults.RuleSources, rs)
 		}
 	}
@@ -177,6 +253,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	}
 	if opts.DefaultRules != nil {
 		b := *opts.DefaultRules
+		baseWAF.DefaultRules = &b
 		cfg.Defaults.DefaultRules = &b
 	}
 
@@ -185,94 +262,199 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		cfg.Defaults.VerifyLevel = lvl
+		baseWAF.VerifyLevel = lvl
 		defaultProtect = prot
 	}
 	if opts.Protect != nil {
 		defaultProtect = *opts.Protect
 	}
 
-	// Build sites
-	specs := append([]SiteSpec(nil), opts.Sites...)
-	if len(specs) == 0 || strings.TrimSpace(opts.Domain) != "" || strings.TrimSpace(opts.Upstream) != "" {
-		rawDomains := strings.TrimSpace(opts.Domain)
-		if rawDomains == "" {
-			rawDomains = defaultDomain
+	// Build HTTP sites only when HTTP template is enabled.
+	if useHTTP {
+		specs := append([]SiteSpec(nil), opts.Sites...)
+		if len(specs) == 0 || strings.TrimSpace(opts.Domain) != "" || strings.TrimSpace(opts.Upstream) != "" {
+			rawDomains := strings.TrimSpace(opts.Domain)
+			if rawDomains == "" {
+				rawDomains = defaultDomain
+			}
+			domains, err := splitDomains(rawDomains)
+			if err != nil {
+				return Config{}, err
+			}
+			rawUpstream := strings.TrimSpace(opts.Upstream)
+			if rawUpstream == "" {
+				rawUpstream = defaultUpstream
+			}
+			upstreams, err := splitAndNormalizeUpstreams(rawUpstream)
+			if err != nil {
+				return Config{}, err
+			}
+			for _, d := range domains {
+				specs = append(specs, SiteSpec{
+					Domain:    d,
+					Upstreams: append([]string(nil), upstreams...),
+				})
+			}
 		}
-		domains, err := splitDomains(rawDomains)
-		if err != nil {
-			return Config{}, err
-		}
-		rawUpstream := strings.TrimSpace(opts.Upstream)
-		if rawUpstream == "" {
-			rawUpstream = defaultUpstream
-		}
-		upstreams, err := splitAndNormalizeUpstreams(rawUpstream)
-		if err != nil {
-			return Config{}, err
-		}
-		for _, d := range domains {
-			specs = append(specs, SiteSpec{
+
+		for _, sp := range specs {
+			d := host.Normalize(sp.Domain)
+			if d == "" {
+				return Config{}, fmt.Errorf("site domain must not be empty")
+			}
+			if len(sp.Upstreams) == 0 {
+				return Config{}, fmt.Errorf("site %s requires at least one upstream URL", d)
+			}
+			wafCfg := cloneSiteWAF(baseWAF)
+			prot := defaultProtect
+			if sp.VerifyLevel != "" {
+				lvl, p, err := ParseVerifyLevel(sp.VerifyLevel)
+				if err != nil {
+					return Config{}, err
+				}
+				wafCfg.VerifyLevel = lvl
+				prot = p
+			}
+			if sp.Protect != nil {
+				prot = *sp.Protect
+			}
+			if sp.Difficulty != 0 {
+				wafCfg.Difficulty = sp.Difficulty
+			}
+			if rawSiteTTL := strings.TrimSpace(sp.ClearanceTTL); rawSiteTTL != "" {
+				ttl, err := ParseDurationSeconds(rawSiteTTL, "verify-timeout")
+				if err != nil {
+					return Config{}, err
+				}
+				wafCfg.ClearanceTTL = ttl
+			}
+			if len(sp.RemoteRules) > 0 {
+				urls, err := splitRemoteRuleURLs(sp.RemoteRules)
+				if err != nil {
+					return Config{}, err
+				}
+				for _, u := range urls {
+					if !stringsContainsSlice(wafCfg.RemoteRules, u) {
+						wafCfg.RemoteRules = append(wafCfg.RemoteRules, u)
+					}
+				}
+			}
+			if len(sp.RuleSources) > 0 {
+				wafCfg.RuleSources = append(wafCfg.RuleSources, sp.RuleSources...)
+			}
+			cfg.Sites = append(cfg.Sites, SiteConfig{
 				Domain:    d,
-				Upstreams: append([]string(nil), upstreams...),
+				Upstreams: append([]string(nil), sp.Upstreams...),
+				Protect:   prot,
+				WAF:       wafCfg,
+				CertFile:  strings.TrimSpace(sp.CertFile),
+				KeyFile:   strings.TrimSpace(sp.KeyFile),
 			})
 		}
 	}
 
-	for _, sp := range specs {
-		d := host.Normalize(sp.Domain)
-		if d == "" {
-			return Config{}, fmt.Errorf("site domain must not be empty")
-		}
-		if len(sp.Upstreams) == 0 {
-			return Config{}, fmt.Errorf("site %s requires at least one upstream URL", d)
-		}
-		wafCfg := cloneSiteWAF(cfg.Defaults)
-		prot := defaultProtect
-		if sp.VerifyLevel != "" {
-			lvl, p, err := ParseVerifyLevel(sp.VerifyLevel)
-			if err != nil {
-				return Config{}, err
+	if useSSH {
+		sshCfg := DefaultSSHConfig()
+		sshCfg.Enabled = true
+		sshCfg.Protect = defaultProtect
+		sshCfg.VerifyLevel = baseWAF.VerifyLevel
+		sshCfg.Difficulty = baseWAF.Difficulty
+		sshCfg.ClearanceTTL = baseWAF.ClearanceTTL
+		if opts.SSH != nil {
+			if opts.SSH.Port != 0 {
+				sshCfg.Port = opts.SSH.Port
 			}
-			wafCfg.VerifyLevel = lvl
-			prot = p
-		}
-		if sp.Protect != nil {
-			prot = *sp.Protect
-		}
-		if sp.Difficulty != 0 {
-			wafCfg.Difficulty = sp.Difficulty
-		}
-		if rawSiteTTL := strings.TrimSpace(sp.ClearanceTTL); rawSiteTTL != "" {
-			ttl, err := ParseDurationSeconds(rawSiteTTL, "verify-timeout")
-			if err != nil {
-				return Config{}, err
+			if opts.SSH.Upstream != "" {
+				sshCfg.Upstream = opts.SSH.Upstream
 			}
-			wafCfg.ClearanceTTL = ttl
-		}
-		if len(sp.RemoteRules) > 0 {
-			urls, err := splitRemoteRuleURLs(sp.RemoteRules)
-			if err != nil {
-				return Config{}, err
-			}
-			for _, u := range urls {
-				if !stringsContainsSlice(wafCfg.RemoteRules, u) {
-					wafCfg.RemoteRules = append(wafCfg.RemoteRules, u)
+			if opts.SSH.VerifyLevel != "" {
+				lvl, p, vErr := ParseVerifyLevel(opts.SSH.VerifyLevel)
+				if vErr != nil {
+					return Config{}, vErr
 				}
+				sshCfg.VerifyLevel = lvl
+				sshCfg.Protect = p
 			}
+			if opts.SSH.Protect != nil {
+				sshCfg.Protect = *opts.SSH.Protect
+			}
+			if opts.SSH.Difficulty != 0 {
+				sshCfg.Difficulty = opts.SSH.Difficulty
+			}
+			if rawTTL := strings.TrimSpace(opts.SSH.ClearanceTTL); rawTTL != "" {
+				ttl, tErr := ParseDurationSeconds(rawTTL, "verify-timeout")
+				if tErr != nil {
+					return Config{}, tErr
+				}
+				sshCfg.ClearanceTTL = ttl
+			}
+			if opts.SSH.VerifyURL != "" {
+				sshCfg.VerifyURL = opts.SSH.VerifyURL
+			}
+			if opts.SSH.VerifyPort != 0 {
+				sshCfg.VerifyPort = opts.SSH.VerifyPort
+			}
+			sshCfg.Rules = append(sshCfg.Rules, opts.SSH.Rules...)
 		}
-		if len(sp.RuleSources) > 0 {
-			wafCfg.RuleSources = append(wafCfg.RuleSources, sp.RuleSources...)
+		if strings.TrimSpace(sshCfg.Upstream) == "" {
+			sshCfg.Upstream = "127.0.0.1:2222"
 		}
-		cfg.Sites = append(cfg.Sites, SiteConfig{
-			Domain:    d,
-			Upstreams: append([]string(nil), sp.Upstreams...),
-			Protect:   prot,
-			WAF:       wafCfg,
-			CertFile:  strings.TrimSpace(sp.CertFile),
-			KeyFile:   strings.TrimSpace(sp.KeyFile),
-		})
+		cfg.SSH = &sshCfg
 	}
+
+	if useMC {
+		mcCfg := DefaultMinecraftConfig()
+		mcCfg.Enabled = true
+		mcCfg.Protect = defaultProtect
+		mcCfg.VerifyLevel = baseWAF.VerifyLevel
+		mcCfg.Difficulty = baseWAF.Difficulty
+		mcCfg.ClearanceTTL = baseWAF.ClearanceTTL
+		if opts.Minecraft != nil {
+			if opts.Minecraft.Port != 0 {
+				mcCfg.Port = opts.Minecraft.Port
+			}
+			if opts.Minecraft.Upstream != "" {
+				mcCfg.Upstream = opts.Minecraft.Upstream
+			}
+			if opts.Minecraft.ServerProperties != "" {
+				mcCfg.ServerProperties = opts.Minecraft.ServerProperties
+			}
+			if opts.Minecraft.VerifyLevel != "" {
+				lvl, p, vErr := ParseVerifyLevel(opts.Minecraft.VerifyLevel)
+				if vErr != nil {
+					return Config{}, vErr
+				}
+				mcCfg.VerifyLevel = lvl
+				mcCfg.Protect = p
+			}
+			if opts.Minecraft.Protect != nil {
+				mcCfg.Protect = *opts.Minecraft.Protect
+			}
+			if opts.Minecraft.Difficulty != 0 {
+				mcCfg.Difficulty = opts.Minecraft.Difficulty
+			}
+			if rawTTL := strings.TrimSpace(opts.Minecraft.ClearanceTTL); rawTTL != "" {
+				ttl, tErr := ParseDurationSeconds(rawTTL, "verify-timeout")
+				if tErr != nil {
+					return Config{}, tErr
+				}
+				mcCfg.ClearanceTTL = ttl
+			}
+			if opts.Minecraft.VerifyURL != "" {
+				mcCfg.VerifyURL = opts.Minecraft.VerifyURL
+			}
+			if opts.Minecraft.VerifyPort != 0 {
+				mcCfg.VerifyPort = opts.Minecraft.VerifyPort
+			}
+			mcCfg.Rules = append(mcCfg.Rules, opts.Minecraft.Rules...)
+		}
+		if strings.TrimSpace(mcCfg.Upstream) == "" {
+			mcCfg.Upstream = "127.0.0.1:25566"
+		}
+		cfg.Minecraft = &mcCfg
+	}
+
+	cfg.Verify = opts.Verify
 
 	// TLS & network settings
 	if strings.TrimSpace(opts.SSLProvider) != "" {
@@ -314,7 +496,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	if bind := strings.TrimSpace(opts.BindHost); bind != "" {
 		cfg.BindHost = bind
 	} else {
-		cfg.BindHost = DefaultBindHost(cfg.Domains())
+		cfg.BindHost = DefaultBindHostForConfig(cfg)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -356,11 +538,15 @@ func RenderGeneratedConfig(opts GenerateOptions) ([]byte, Config, error) {
 	}
 
 	if format == "json" {
-		raw, err := MarshalJSONConfig(cfg)
+		raw, err := MarshalConciseJSONConfig(cfg)
 		if err != nil {
 			return nil, Config{}, err
 		}
-		return append(raw, '\n'), cfg, nil
+		out := append(raw, '\n')
+		if _, err := ParseConfigBytes(out, "gymbag.json", ""); err != nil {
+			return nil, Config{}, fmt.Errorf("internal error: generated concise JSON failed validation: %w", err)
+		}
+		return out, cfg, nil
 	}
 
 	body := FormatConfig(cfg)

@@ -119,3 +119,76 @@ func TestGenerateConfigMultiSiteAndJSON(t *testing.T) {
 		t.Fatalf("JSON roundtrip mismatch: %+v", parsedJSON.Sites)
 	}
 }
+
+func TestGenerateConfigConciseTemplates(t *testing.T) {
+	// 1. Concise HTTP JSON config omits boilerplate defaults
+	httpJSON, _, err := RenderGeneratedConfig(GenerateOptions{
+		Templates: []string{"http"},
+		Format:    "json",
+	})
+	if err != nil {
+		t.Fatalf("RenderGeneratedConfig http json failed: %v", err)
+	}
+	httpStr := string(httpJSON)
+	for _, unwanted := range []string{`"tls"`, `"intel"`, `"defaults"`, `"bind_host"`, `"http_port"`, `"https_port"`, `"challenge_ttl"`} {
+		if strings.Contains(httpStr, unwanted) {
+			t.Fatalf("expected concise HTTP JSON without %s, got:\n%s", unwanted, httpStr)
+		}
+	}
+
+	// 2. SSH-only concise JSON template
+	sshJSON, sshCfg, err := RenderGeneratedConfig(GenerateOptions{
+		Templates: []string{"ssh"},
+		SSH:       &TCPSpec{Upstream: "127.0.0.1:44422"},
+		Format:    "json",
+	})
+	if err != nil {
+		t.Fatalf("RenderGeneratedConfig ssh json failed: %v", err)
+	}
+	if sshCfg.HTTPEnabled() || !sshCfg.SSHEnabled() || sshCfg.SSH.Port != 22 || sshCfg.SSH.Upstream != "127.0.0.1:44422" {
+		t.Fatalf("unexpected SSH template config: %+v", sshCfg)
+	}
+	if strings.Contains(string(sshJSON), `"sites"`) {
+		t.Fatalf("expected no sites in SSH-only JSON:\n%s", string(sshJSON))
+	}
+
+	// 3. Minecraft-only concise JSON template
+	mcJSON, mcCfg, err := RenderGeneratedConfig(GenerateOptions{
+		Templates: []string{"minecraft"},
+		Minecraft: &TCPSpec{Upstream: "127.0.0.1:45565", ServerProperties: "./server.properties"},
+		Format:    "json",
+	})
+	if err != nil {
+		t.Fatalf("RenderGeneratedConfig minecraft json failed: %v", err)
+	}
+	if mcCfg.HTTPEnabled() || !mcCfg.MinecraftEnabled() || mcCfg.Minecraft.Port != 25565 || mcCfg.Minecraft.Upstream != "127.0.0.1:45565" {
+		t.Fatalf("unexpected Minecraft template config: %+v", mcCfg)
+	}
+	if strings.Contains(string(mcJSON), `"sites"`) {
+		t.Fatalf("expected no sites in MC-only JSON:\n%s", string(mcJSON))
+	}
+
+	// 4. Combined HTTP + SSH + Minecraft in one app
+	allRaw, allCfg, err := RenderGeneratedConfig(GenerateOptions{
+		Templates: []string{"http", "ssh", "minecraft"},
+		Domain:    "play.example.com",
+		Upstream:  "http://127.0.0.1:3000",
+		SSH:       &TCPSpec{Upstream: "127.0.0.1:44422"},
+		Minecraft: &TCPSpec{Upstream: "127.0.0.1:45565"},
+		Verify:    VerifyServerConfig{URL: "https://verify.example.com", Port: 8443},
+		Format:    "json",
+	})
+	if err != nil {
+		t.Fatalf("RenderGeneratedConfig all-in-one failed: %v", err)
+	}
+	if !allCfg.HTTPEnabled() || !allCfg.SSHEnabled() || !allCfg.MinecraftEnabled() {
+		t.Fatalf("expected all 3 services enabled: %+v", allCfg)
+	}
+	reparsedAll, err := ParseConfigBytes(allRaw, "gymbag.json", "")
+	if err != nil {
+		t.Fatalf("ParseConfigBytes all-in-one failed: %v\n%s", err, string(allRaw))
+	}
+	if !reparsedAll.SSHEnabled() || !reparsedAll.MinecraftEnabled() || reparsedAll.Verify.URL != "https://verify.example.com" {
+		t.Fatalf("reparsed all-in-one mismatch: %+v", reparsedAll)
+	}
+}
