@@ -629,6 +629,49 @@ func osJavaCandidatePatterns(goos string, getenv func(string) string) []string {
 				filepath.Join(home, ".sdkman/candidates/java/*/bin/java"),
 			)
 		}
+	case "freebsd", "dragonfly":
+		raw = []string{
+			"/usr/local/openjdk*/bin/java",
+			"/usr/local/bootstrap-openjdk*/bin/java",
+			"/usr/local/jdk*/bin/java",
+			"/usr/local/bin/java",
+		}
+		if home != "" {
+			raw = append(raw,
+				filepath.Join(home, ".sdkman/candidates/java/*/bin/java"),
+				filepath.Join(home, ".jdks/*/bin/java"),
+				filepath.Join(home, ".asdf/installs/java/*/bin/java"),
+				filepath.Join(home, ".local/share/mise/installs/java/*/bin/java"),
+			)
+		}
+	case "openbsd":
+		raw = []string{
+			"/usr/local/jdk-*/bin/java",
+			"/usr/local/jre-*/bin/java",
+			"/usr/local/bin/java",
+		}
+		if home != "" {
+			raw = append(raw,
+				filepath.Join(home, ".sdkman/candidates/java/*/bin/java"),
+				filepath.Join(home, ".jdks/*/bin/java"),
+				filepath.Join(home, ".asdf/installs/java/*/bin/java"),
+				filepath.Join(home, ".local/share/mise/installs/java/*/bin/java"),
+			)
+		}
+	case "netbsd":
+		raw = []string{
+			"/usr/pkg/java/openjdk*/bin/java",
+			"/usr/pkg/java/*/bin/java",
+			"/usr/pkg/bin/java",
+		}
+		if home != "" {
+			raw = append(raw,
+				filepath.Join(home, ".sdkman/candidates/java/*/bin/java"),
+				filepath.Join(home, ".jdks/*/bin/java"),
+				filepath.Join(home, ".asdf/installs/java/*/bin/java"),
+				filepath.Join(home, ".local/share/mise/installs/java/*/bin/java"),
+			)
+		}
 	case "windows":
 		for _, pf := range []string{getenv("ProgramFiles"), getenv("ProgramFiles(x86)"), `C:\Program Files`} {
 			pf = strings.TrimSpace(pf)

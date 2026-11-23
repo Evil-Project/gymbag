@@ -67,8 +67,8 @@ func runServiceAction(action string, args []string, stdout, stderr io.Writer) in
 		force        bool
 	)
 
-	fs.StringVar(&mgrType, "t", "auto", "Service manager type: auto, systemd, launchd, openrc, or supervisor")
-	fs.StringVar(&mgrType, "type", "auto", "Service manager type: auto, systemd, launchd, openrc, or supervisor")
+	fs.StringVar(&mgrType, "t", "auto", "Service manager type: auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, or netbsd-rc")
+	fs.StringVar(&mgrType, "type", "auto", "Service manager type: auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, or netbsd-rc")
 	fs.StringVar(&name, "n", "gymbag", "Service name")
 	fs.StringVar(&name, "name", "gymbag", "Service name")
 	fs.StringVar(&label, "label", "", "Launchd service label (default io.gymbag.<name>)")
@@ -77,7 +77,7 @@ func runServiceAction(action string, args []string, stdout, stderr io.Writer) in
 	fs.StringVar(&binPath, "bin", "", "Path to gymbag binary (default current executable)")
 	fs.StringVar(&workdir, "workdir", "", "Working directory for the service (default config file directory)")
 	fs.StringVar(&envFile, "env-file", "", "Optional .env file path")
-	fs.StringVar(&logDir, "log-dir", "", "Log directory for launchd/openrc/supervisor")
+	fs.StringVar(&logDir, "log-dir", "", "Log directory for launchd/openrc/supervisor/bsd")
 	fs.StringVar(&unitPath, "unit-path", "", "Override output path for service unit/plist/script file")
 	fs.StringVar(&unitPath, "o", "", "Alias for --unit-path")
 	fs.StringVar(&unitPath, "output", "", "Alias for --unit-path")
@@ -89,7 +89,7 @@ func runServiceAction(action string, args []string, stdout, stderr io.Writer) in
 	fs.BoolVar(&enable, "enable", true, "Enable service on boot during install")
 	fs.BoolVar(&startNow, "start", false, "Start service immediately after install")
 	fs.BoolVar(&startNow, "now", false, "Alias for --start")
-	fs.BoolVar(&noReload, "no-reload", false, "Write/remove unit file without invoking systemctl/launchctl/rc-update/supervisorctl")
+	fs.BoolVar(&noReload, "no-reload", false, "Write/remove unit file without invoking systemctl/launchctl/rc-update/supervisorctl/service/rcctl")
 	fs.BoolVar(&force, "f", false, "Overwrite existing service file")
 	fs.BoolVar(&force, "force", false, "Overwrite existing service file")
 	fs.BoolVar(&force, "overwrite", false, "Overwrite existing service file")
@@ -153,7 +153,10 @@ func runServiceAction(action string, args []string, stdout, stderr io.Writer) in
 				return 1
 			}
 			spec.ConfigPath = resolvedCfg
-			spec.PortsPrivileged = cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024
+			spec.PortsPrivileged = (cfg.HTTPEnabled() && (cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024)) ||
+				(cfg.SSHEnabled() && cfg.SSH.Port < 1024) ||
+				(cfg.MinecraftEnabled() && cfg.Minecraft.Port < 1024) ||
+				(cfg.NeedsVerifyServer() && cfg.Verify.EffectivePort() < 1024)
 		} else {
 			spec.ConfigPath = "Gymbagfile"
 			spec.PortsPrivileged = true
@@ -260,8 +263,11 @@ func resolveUserScope(mgr service.ManagerType, explicitUser, explicitSystem bool
 	if explicitSystem {
 		return false
 	}
-	// OpenRC has no standard per-user daemon scope.
-	if mgr == service.ManagerOpenRC {
+	// OpenRC and BSD rc.d systems have no standard per-user daemon scope.
+	if mgr == service.ManagerOpenRC ||
+		mgr == service.ManagerFreeBSDRC ||
+		mgr == service.ManagerOpenBSDRC ||
+		mgr == service.ManagerNetBSDRC {
 		return false
 	}
 	if runtime.GOOS == "windows" {
@@ -289,7 +295,7 @@ func printServiceUsage(w io.Writer) {
   gymbag service <command> [flags]
 
 Commands:
-  install     Generate and register a system service (systemd, launchd, openrc, supervisor)
+  install     Generate and register a system service (systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)
   start       Start the registered service
   stop        Stop the registered service
   restart     Restart the registered service
@@ -301,17 +307,17 @@ Examples:
   gymbag service install --config Gymbagfile             # Register user/system service (auto-detected)
   gymbag service start                                   # Start the registered service
   gymbag service install --type systemd --system --start # Install & start system-wide systemd unit
-  gymbag service render --type systemd                   # Preview a systemd unit file on any OS
+  gymbag service render --type freebsd-rc                # Preview a FreeBSD rc.d script on any OS
 
 Flags:
-  -t, --type <mgr>            Service manager: auto, systemd, launchd, openrc, supervisor
+  -t, --type <mgr>            Service manager: auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc
   -n, --name <name>           Service name (default gymbag)
       --label <id>            launchd label (default io.gymbag.<name>)
   -c, --config <path>         Path to Gymbagfile, Caddyfile, or JSON config
       --bin <path>            Path to gymbag binary (default current executable)
       --workdir <dir>         Working directory (default config file directory)
       --env-file <path>       Optional .env file path
-      --log-dir <dir>         Log directory (launchd, openrc, supervisor)
+      --log-dir <dir>         Log directory (launchd, openrc, supervisor, bsd)
   -o, --output <path>         Override target unit/plist/script file path
       --service-user <user>   Run-as user for system-level service
       --service-group <grp>   Run-as group for system-level service

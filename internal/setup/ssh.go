@@ -226,6 +226,15 @@ func SetupSSHProtection(ctx context.Context, opts SSHSetupOptions) (*SSHSetupRes
 	return res, nil
 }
 
+func isBSDOS(goos string) bool {
+	switch goos {
+	case "freebsd", "openbsd", "netbsd", "dragonfly":
+		return true
+	default:
+		return false
+	}
+}
+
 func findSSHDBinary(lookPath LookPathFunc, fallbackPaths bool) string {
 	if p, err := lookPath("sshd"); err == nil && p != "" {
 		return p
@@ -233,7 +242,7 @@ func findSSHDBinary(lookPath LookPathFunc, fallbackPaths bool) string {
 	if !fallbackPaths {
 		return ""
 	}
-	for _, cand := range []string{"/usr/sbin/sshd", "/sbin/sshd"} {
+	for _, cand := range []string{"/usr/sbin/sshd", "/sbin/sshd", "/usr/local/sbin/sshd"} {
 		if _, err := os.Stat(cand); err == nil {
 			return cand
 		}
@@ -242,6 +251,32 @@ func findSSHDBinary(lookPath LookPathFunc, fallbackPaths bool) string {
 }
 
 func reloadSSHD(ctx context.Context, runner CommandRunner, lookPath LookPathFunc, goos string) string {
+	if goos == "openbsd" {
+		if _, err := lookPath("rcctl"); err == nil {
+			if _, rErr := runner(ctx, "rcctl", "reload", "sshd"); rErr == nil {
+				return ""
+			}
+			if _, rErr := runner(ctx, "rcctl", "restart", "sshd"); rErr == nil {
+				return ""
+			}
+		}
+		return "sshd_config updated, but automatic sshd reload failed; reload sshd manually (e.g. doas rcctl reload sshd)"
+	}
+	if isBSDOS(goos) {
+		if _, err := lookPath("service"); err == nil {
+			for _, svc := range []string{"sshd", "openssh"} {
+				if _, rErr := runner(ctx, "service", svc, "reload"); rErr == nil {
+					return ""
+				}
+			}
+		}
+		if _, err := os.Stat("/etc/rc.d/sshd"); err == nil {
+			if _, rErr := runner(ctx, "/etc/rc.d/sshd", "reload"); rErr == nil {
+				return ""
+			}
+		}
+		return "sshd_config updated, but automatic sshd reload failed; reload sshd manually (e.g. sudo service sshd reload)"
+	}
 	if goos != "linux" {
 		return ""
 	}
@@ -285,9 +320,12 @@ func ConfigureSSHFirewall(
 	if goos == "" {
 		goos = runtime.GOOS
 	}
+	if isBSDOS(goos) {
+		return configureBSDSSHFirewall(ctx, backendPort, sshListenPort, verifyPort, runner, lookPath)
+	}
 	if goos != "linux" {
 		return "none", nil, []string{
-			fmt.Sprintf("automatic SSH firewall setup is Linux-only; ensure port %d/tcp is blocked externally on %s", backendPort, goos),
+			fmt.Sprintf("automatic SSH firewall setup is supported on Linux and BSD only; ensure port %d/tcp is blocked externally on %s", backendPort, goos),
 		}, nil
 	}
 
@@ -374,6 +412,96 @@ func ConfigureSSHFirewall(
 
 	return "none", nil, []string{
 		fmt.Sprintf("no active firewall manager detected (ufw, firewalld, nft, iptables); manually block external TCP port %d while keeping %d and %d open", backendPort, sshListenPort, verifyPort),
+	}, nil
+}
+
+func configureBSDSSHFirewall(
+	ctx context.Context,
+	backendPort, sshListenPort, verifyPort int,
+	runner CommandRunner,
+	lookPath LookPathFunc,
+) (backend string, cmds []string, warnings []string, err error) {
+	run := func(name string, args ...string) ([]byte, error) {
+		cmds = append(cmds, name+" "+strings.Join(args, " "))
+		return runner(ctx, name, args...)
+	}
+
+	bPort := strconv.Itoa(backendPort)
+	sPort := strconv.Itoa(sshListenPort)
+	vPort := strconv.Itoa(verifyPort)
+
+	// 1. PF (FreeBSD, OpenBSD, NetBSD, DragonFly)
+	if _, lpErr := lookPath("pfctl"); lpErr == nil {
+		if stOut, stErr := runner(ctx, "pfctl", "-s", "info"); stErr == nil &&
+			strings.Contains(strings.ToLower(string(stOut)), "status: enabled") {
+			rules := strings.Join([]string{
+				fmt.Sprintf("pass in quick on lo0 proto tcp to any port %s", bPort),
+				fmt.Sprintf("block drop in quick proto tcp to any port %s", bPort),
+				fmt.Sprintf("pass in quick proto tcp to any port %s", sPort),
+				fmt.Sprintf("pass in quick proto tcp to any port %s", vPort),
+			}, "\n") + "\n"
+			tmp, tErr := os.CreateTemp("", "gymbag-pf-*")
+			if tErr != nil {
+				return "pf", cmds, nil, fmt.Errorf("failed to create temp pf anchor file: %w", tErr)
+			}
+			tmpPath := tmp.Name()
+			defer func() { _ = os.Remove(tmpPath) }()
+			if _, wErr := tmp.WriteString(rules); wErr != nil {
+				_ = tmp.Close()
+				return "pf", cmds, nil, fmt.Errorf("failed to write temp pf anchor file: %w", wErr)
+			}
+			if cErr := tmp.Close(); cErr != nil {
+				return "pf", cmds, nil, fmt.Errorf("failed to close temp pf anchor file: %w", cErr)
+			}
+			if _, rErr := run("pfctl", "-a", "gymbag_ssh", "-f", tmpPath); rErr != nil {
+				return "pf", cmds, nil, fmt.Errorf("pfctl anchor load failed: %w", rErr)
+			}
+			if pfConf, readErr := os.ReadFile("/etc/pf.conf"); readErr != nil || !strings.Contains(string(pfConf), "gymbag_ssh") {
+				warnings = append(warnings,
+					fmt.Sprintf(`loaded PF anchor "gymbag_ssh"; ensure /etc/pf.conf includes 'anchor "gymbag_ssh"' so backend port %s/tcp stays blocked externally`, bPort),
+				)
+			}
+			return "pf", cmds, warnings, nil
+		}
+	}
+
+	// 2. IPFW (FreeBSD / DragonFly)
+	if _, lpErr := lookPath("ipfw"); lpErr == nil {
+		if _, stErr := runner(ctx, "ipfw", "list"); stErr == nil {
+			_, _ = run("ipfw", "delete", "set", "29")
+			if _, rErr := run("ipfw", "add", "50", "set", "29", "allow", "tcp", "from", "any", "to", "any", "dst-port", bPort, "via", "lo0"); rErr != nil {
+				return "ipfw", cmds, nil, fmt.Errorf("ipfw loopback allow failed: %w", rErr)
+			}
+			if _, rErr := run("ipfw", "add", "51", "set", "29", "deny", "tcp", "from", "any", "to", "me", "dst-port", bPort, "in"); rErr != nil {
+				return "ipfw", cmds, nil, fmt.Errorf("ipfw deny rule failed: %w", rErr)
+			}
+			_, _ = run("ipfw", "add", "52", "set", "29", "allow", "tcp", "from", "any", "to", "me", "dst-port", sPort, "in")
+			_, _ = run("ipfw", "add", "53", "set", "29", "allow", "tcp", "from", "any", "to", "me", "dst-port", vPort, "in")
+			return "ipfw", cmds, nil, nil
+		}
+	}
+
+	// 3. NPF (NetBSD)
+	if _, lpErr := lookPath("npfctl"); lpErr == nil {
+		if stOut, stErr := runner(ctx, "npfctl", "status"); stErr == nil &&
+			strings.Contains(strings.ToLower(string(stOut)), "active") {
+			_, _ = run("npfctl", "rule", "gymbag_ssh", "flush")
+			if _, rErr := run("npfctl", "rule", "gymbag_ssh", "add", "pass", "in", "final", "on", "lo0", "proto", "tcp", "to", "any", "port", bPort); rErr != nil {
+				return "npf", cmds, []string{
+					fmt.Sprintf(`npf is active, but dynamic ruleset "gymbag_ssh" could not be updated (%v); add 'ruleset "gymbag_ssh"' to /etc/npf.conf and block external port %s/tcp`, rErr, bPort),
+				}, nil
+			}
+			if _, rErr := run("npfctl", "rule", "gymbag_ssh", "add", "block", "in", "final", "proto", "tcp", "to", "any", "port", bPort); rErr != nil {
+				return "npf", cmds, []string{
+					fmt.Sprintf(`npf dynamic ruleset "gymbag_ssh" failed to add block rule (%v); block external port %s/tcp manually`, rErr, bPort),
+				}, nil
+			}
+			return "npf", cmds, nil, nil
+		}
+	}
+
+	return "none", nil, []string{
+		fmt.Sprintf("no active BSD firewall manager detected (pf, ipfw, npf); manually block external TCP port %d while keeping %d and %d open", backendPort, sshListenPort, verifyPort),
 	}, nil
 }
 

@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# PROVIDE: gymbag
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+$_rc_subr_loaded . /etc/rc.subr
+
+name="gymbag"
+rcvar="${name}"
+command="/usr/pkg/bin/gymbag"
+pidfile="/var/run/${name}.pid"
+start_cmd="${name}_start"
+
+gymbag_start() {
+    mkdir -p /var/db/gymbag || return 1
+    cd /var/db/gymbag || return 1
+    if [ -f /usr/pkg/etc/gymbag/.env ]; then
+        set -a
+        . /usr/pkg/etc/gymbag/.env
+        set +a
+    fi
+    "${command}" run --config /usr/pkg/etc/gymbag/Gymbagfile --watch >/var/log/gymbag.log 2>/var/log/gymbag.err.log &
+    echo $! > "${pidfile}"
+}
+
+load_rc_config "$name"
+run_rc_command "$1"

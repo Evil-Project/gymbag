@@ -555,7 +555,7 @@ Supported Config Formats:
   - nginx.conf (native nginx 'http'/'server'/'location'/'upstream' blocks)
   - httpd.conf / apache2.conf (native Apache '<VirtualHost>', 'ProxyPass', 'Alias', 'DocumentRoot', 'Redirect', 'Header', 'Include')
 
-System Service (systemd / launchd / openrc / supervisor):
+System Service (systemd / launchd / openrc / supervisor / BSD rc.d):
   1. gymbag service install --config gymbag.json
   2. gymbag service start
 

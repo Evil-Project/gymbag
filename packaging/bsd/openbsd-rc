@@ -1,0 +1,21 @@
+#!/bin/ksh
+
+daemon="/usr/local/bin/gymbag"
+daemon_flags="run --config /etc/gymbag/Gymbagfile --watch"
+
+. /etc/rc.d/rc.subr
+
+rc_bg=YES
+rc_reload=NO
+
+rc_pre() {
+    mkdir -p /var/db/gymbag || return 1
+    cd /var/db/gymbag || return 1
+    if [ -f /etc/gymbag/.env ]; then
+        set -a
+        . /etc/gymbag/.env
+        set +a
+    fi
+}
+
+rc_cmd $1

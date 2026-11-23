@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# PROVIDE: gymbag
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="gymbag"
+rcvar="${name}_enable"
+desc="Gymbag HTTPS Reverse Proxy & Proof-of-Work WAF"
+
+load_rc_config "$name"
+: ${gymbag_enable:="NO"}
+: ${gymbag_config:="/usr/local/etc/gymbag/Gymbagfile"}
+: ${gymbag_dir:="/var/db/gymbag"}
+
+pidfile="/var/run/${name}.pid"
+procname="/usr/local/bin/gymbag"
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -r -f -T ${name} -o /var/log/gymbag.log -- ${procname} run --config ${gymbag_config} --watch"
+start_precmd="${name}_prestart"
+
+gymbag_prestart() {
+    mkdir -p "${gymbag_dir}" || return 1
+    cd "${gymbag_dir}" || return 1
+    if [ -f /usr/local/etc/gymbag/.env ]; then
+        set -a
+        . /usr/local/etc/gymbag/.env
+        set +a
+    fi
+}
+
+run_rc_command "$1"

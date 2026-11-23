@@ -215,6 +215,95 @@ func TestSetupSSHProtectionValidationRollbackAndFirewalls(t *testing.T) {
 			t.Fatalf("expected non-linux warning, got %+v", res)
 		}
 	})
+
+	for _, tc := range []struct {
+		name            string
+		goos            string
+		available       []string
+		wantBackend     string
+		wantReload      string
+		wantCmdContains string
+	}{
+		{
+			name:            "freebsd_pf",
+			goos:            "freebsd",
+			available:       []string{"sshd", "service", "pfctl"},
+			wantBackend:     "pf",
+			wantReload:      "service sshd reload",
+			wantCmdContains: "pfctl -a gymbag_ssh -f",
+		},
+		{
+			name:            "freebsd_ipfw",
+			goos:            "freebsd",
+			available:       []string{"sshd", "service", "ipfw"},
+			wantBackend:     "ipfw",
+			wantReload:      "service sshd reload",
+			wantCmdContains: "ipfw add 51 set 29 deny tcp from any to me dst-port 34567 in",
+		},
+		{
+			name:            "openbsd_pf",
+			goos:            "openbsd",
+			available:       []string{"sshd", "rcctl", "pfctl"},
+			wantBackend:     "pf",
+			wantReload:      "rcctl reload sshd",
+			wantCmdContains: "pfctl -a gymbag_ssh -f",
+		},
+		{
+			name:            "netbsd_npf",
+			goos:            "netbsd",
+			available:       []string{"sshd", "service", "npfctl"},
+			wantBackend:     "npf",
+			wantReload:      "service sshd reload",
+			wantCmdContains: "npfctl rule gymbag_ssh add block in final proto tcp to any port 34567",
+		},
+	} {
+		t.Run("bsd_"+tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "sshd_config")
+			if err := os.WriteFile(cfgPath, []byte("Port 22\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var invoked []string
+			res, err := SetupSSHProtection(context.Background(), SSHSetupOptions{
+				ConfigPath:    cfgPath,
+				BackendPort:   34567,
+				SSHListenPort: 22,
+				VerifyPort:    8443,
+				GOOS:          tc.goos,
+				LookPath: func(file string) (string, error) {
+					if slices.Contains(tc.available, file) {
+						return "/sbin/" + file, nil
+					}
+					return "", errors.New("not found")
+				},
+				Runner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+					cmdLine := name + " " + strings.Join(args, " ")
+					invoked = append(invoked, cmdLine)
+					switch {
+					case strings.HasSuffix(name, "pfctl") && len(args) >= 2 && args[0] == "-s":
+						return []byte("Status: Enabled for 1 days 00:00:00\n"), nil
+					case strings.HasSuffix(name, "npfctl") && len(args) >= 1 && args[0] == "status":
+						return []byte("filtering:      active\n"), nil
+					}
+					return []byte("ok"), nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("SetupSSHProtection(%s): %v", tc.goos, err)
+			}
+			if res.FirewallBackend != tc.wantBackend {
+				t.Fatalf("firewall backend = %q, want %q", res.FirewallBackend, tc.wantBackend)
+			}
+			joined := strings.Join(res.FirewallCommands, "\n")
+			if !strings.Contains(joined, tc.wantCmdContains) {
+				t.Fatalf("expected command containing %q in:\n%s", tc.wantCmdContains, joined)
+			}
+			if !slices.ContainsFunc(invoked, func(s string) bool { return strings.Contains(s, tc.wantReload) }) {
+				t.Fatalf("expected reload call %q in %v", tc.wantReload, invoked)
+			}
+		})
+	}
 }
 
 func TestSetupMinecraftProtection(t *testing.T) {

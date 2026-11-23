@@ -230,6 +230,27 @@ func TestParseJavaVersionOutputDiscoverAndSelect(t *testing.T) {
 		t.Fatalf("expected compatibility warning for explicit Java 17, got sel=%+v err=%v", selWarn, err)
 	}
 
+	// BSD candidate patterns
+	for goos, wantSub := range map[string]string{
+		"freebsd":   "/usr/local/openjdk*/bin/java",
+		"dragonfly": "/usr/local/openjdk*/bin/java",
+		"openbsd":   "/usr/local/jdk-*/bin/java",
+		"netbsd":    "/usr/pkg/java/openjdk*/bin/java",
+	} {
+		pats := osJavaCandidatePatterns(goos, func(string) string { return "/home/mc" })
+		if !slicesContains(pats, wantSub) {
+			t.Fatalf("osJavaCandidatePatterns(%q) missing %q: %v", goos, wantSub, pats)
+		}
+	}
+}
+
+func slicesContains(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 // TestFakeJavaHelperProcess emulates a Java Minecraft server subprocess in tests.

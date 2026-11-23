@@ -179,6 +179,60 @@ func Install(ctx context.Context, opts Options) (InstallResult, error) {
 				return res, err
 			}
 		}
+	case ManagerFreeBSDRC:
+		rcName := bsdRCVarName(spec.Name)
+		if opts.Enable {
+			if err := run("sysrc", rcName+"_enable=YES"); err != nil {
+				return res, err
+			}
+		}
+		if opts.Start {
+			startCmd := "onestart"
+			if opts.Enable {
+				startCmd = "start"
+			}
+			if err := run("service", spec.Name, startCmd); err != nil {
+				return res, err
+			}
+		}
+	case ManagerOpenBSDRC:
+		if opts.Enable {
+			if err := run("rcctl", "enable", spec.Name); err != nil {
+				return res, err
+			}
+		}
+		if opts.Start {
+			if opts.Enable {
+				if err := run("rcctl", "start", spec.Name); err != nil {
+					return res, err
+				}
+			} else {
+				if err := run("rcctl", "-f", "start", spec.Name); err != nil {
+					return res, err
+				}
+			}
+		}
+	case ManagerNetBSDRC:
+		rcName := bsdRCVarName(spec.Name)
+		if opts.Enable {
+			if confPath := netbsdRCConfPath(spec.UnitPath, rcName); confPath != "" {
+				if err := os.MkdirAll(filepath.Dir(confPath), 0o755); err != nil {
+					return res, wrapPermErr(err, filepath.Dir(confPath), mgr, spec.UserScope)
+				}
+				if err := os.WriteFile(confPath, []byte(rcName+"=YES\n"), 0o644); err != nil {
+					return res, wrapPermErr(err, confPath, mgr, spec.UserScope)
+				}
+			}
+		}
+		if opts.Start {
+			startCmd := "onestart"
+			if opts.Enable {
+				startCmd = "start"
+			}
+			if err := run("service", spec.Name, startCmd); err != nil {
+				return res, err
+			}
+		}
 	}
 
 	res.Output = strings.Join(outputs, "\n")
@@ -268,6 +322,22 @@ func Control(ctx context.Context, action string, opts Options) (ActionResult, er
 		default:
 			return res, fmt.Errorf("unsupported service action %q", action)
 		}
+	case ManagerFreeBSDRC, ManagerNetBSDRC:
+		switch action {
+		case "start", "stop", "restart", "status":
+			err = run("service", spec.Name, action)
+		default:
+			return res, fmt.Errorf("unsupported service action %q", action)
+		}
+	case ManagerOpenBSDRC:
+		switch action {
+		case "start", "stop", "restart":
+			err = run("rcctl", action, spec.Name)
+		case "status":
+			err = run("rcctl", "check", spec.Name)
+		default:
+			return res, fmt.Errorf("unsupported service action %q", action)
+		}
 	default:
 		return res, fmt.Errorf("unsupported service manager %q", mgr)
 	}
@@ -325,11 +395,26 @@ func Uninstall(ctx context.Context, opts Options) (ActionResult, error) {
 			bestEffort("rc-update", "del", spec.Name, "default")
 		case ManagerSupervisor:
 			bestEffort("supervisorctl", "stop", spec.Name)
+		case ManagerFreeBSDRC:
+			bestEffort("service", spec.Name, "stop")
+			bestEffort("sysrc", "-x", bsdRCVarName(spec.Name)+"_enable")
+		case ManagerOpenBSDRC:
+			bestEffort("rcctl", "stop", spec.Name)
+			bestEffort("rcctl", "disable", spec.Name)
+		case ManagerNetBSDRC:
+			bestEffort("service", spec.Name, "stop")
 		}
 	}
 
 	if rmErr := os.Remove(spec.UnitPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return res, wrapPermErr(rmErr, spec.UnitPath, mgr, spec.UserScope)
+	}
+	if mgr == ManagerNetBSDRC {
+		if confPath := netbsdRCConfPath(spec.UnitPath, bsdRCVarName(spec.Name)); confPath != "" {
+			if rmErr := os.Remove(confPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				return res, wrapPermErr(rmErr, confPath, mgr, spec.UserScope)
+			}
+		}
 	}
 
 	if !opts.NoReload {
@@ -344,6 +429,14 @@ func Uninstall(ctx context.Context, opts Options) (ActionResult, error) {
 
 	res.Output = strings.Join(outputs, "\n")
 	return res, nil
+}
+
+func netbsdRCConfPath(unitPath, rcName string) string {
+	dir := filepath.Dir(unitPath)
+	if filepath.Base(dir) != "rc.d" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(dir), "rc.conf.d", rcName)
 }
 
 func startLaunchd(ctx context.Context, runner CommandRunner, spec Spec, uid int, cmds *[]string, outputs *[]string) error {

@@ -58,6 +58,30 @@ jobs:
             goarch: arm64
             ext: ""
             archive: tar.gz
+          - goos: freebsd
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: freebsd
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: openbsd
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: openbsd
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: netbsd
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: netbsd
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
           - goos: windows
             goarch: amd64
             ext: ".exe"

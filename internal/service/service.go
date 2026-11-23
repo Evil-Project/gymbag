@@ -21,6 +21,9 @@ const (
 	ManagerLaunchd    ManagerType = "launchd"
 	ManagerOpenRC     ManagerType = "openrc"
 	ManagerSupervisor ManagerType = "supervisor"
+	ManagerFreeBSDRC  ManagerType = "freebsd-rc"
+	ManagerOpenBSDRC  ManagerType = "openbsd-rc"
+	ManagerNetBSDRC   ManagerType = "netbsd-rc"
 )
 
 // SupportedManagers lists the concrete service manager types supported by Gymbag.
@@ -29,9 +32,12 @@ var SupportedManagers = []ManagerType{
 	ManagerLaunchd,
 	ManagerOpenRC,
 	ManagerSupervisor,
+	ManagerFreeBSDRC,
+	ManagerOpenBSDRC,
+	ManagerNetBSDRC,
 }
 
-// ParseManagerType normalizes a service manager name ("auto", "systemd", "launchd", "openrc", "supervisor").
+// ParseManagerType normalizes a service manager name ("auto", "systemd", "launchd", "openrc", "supervisor", "freebsd-rc", "openbsd-rc", "netbsd-rc").
 func ParseManagerType(raw string) (ManagerType, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "auto":
@@ -44,8 +50,14 @@ func ParseManagerType(raw string) (ManagerType, error) {
 		return ManagerOpenRC, nil
 	case "supervisor", "supervisord":
 		return ManagerSupervisor, nil
+	case "freebsd-rc", "freebsd", "bsd", "bsd-rc", "rc.d", "dragonfly", "dragonfly-rc":
+		return ManagerFreeBSDRC, nil
+	case "openbsd-rc", "openbsd", "rcctl":
+		return ManagerOpenBSDRC, nil
+	case "netbsd-rc", "netbsd":
+		return ManagerNetBSDRC, nil
 	default:
-		return "", fmt.Errorf("unsupported service manager %q (expected auto, systemd, launchd, openrc, or supervisor)", raw)
+		return "", fmt.Errorf("unsupported service manager %q (expected auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, or netbsd-rc)", raw)
 	}
 }
 
@@ -79,8 +91,41 @@ func detectManagerWith(
 			return ManagerSupervisor, nil
 		}
 		return "", fmt.Errorf("could not auto-detect init system on linux; specify --type (systemd, openrc, or supervisor)")
+	case "freebsd", "dragonfly":
+		if _, err := statFn("/etc/rc.subr"); err == nil {
+			return ManagerFreeBSDRC, nil
+		}
+		if _, err := lookPathFn("service"); err == nil {
+			return ManagerFreeBSDRC, nil
+		}
+		if _, err := lookPathFn("supervisorctl"); err == nil {
+			return ManagerSupervisor, nil
+		}
+		return "", fmt.Errorf("could not auto-detect init system on %s; specify --type (freebsd-rc or supervisor)", goos)
+	case "openbsd":
+		if _, err := lookPathFn("rcctl"); err == nil {
+			return ManagerOpenBSDRC, nil
+		}
+		if _, err := statFn("/etc/rc.d/rc.subr"); err == nil {
+			return ManagerOpenBSDRC, nil
+		}
+		if _, err := lookPathFn("supervisorctl"); err == nil {
+			return ManagerSupervisor, nil
+		}
+		return "", fmt.Errorf("could not auto-detect init system on openbsd; specify --type (openbsd-rc or supervisor)")
+	case "netbsd":
+		if _, err := statFn("/etc/rc.subr"); err == nil {
+			return ManagerNetBSDRC, nil
+		}
+		if _, err := lookPathFn("service"); err == nil {
+			return ManagerNetBSDRC, nil
+		}
+		if _, err := lookPathFn("supervisorctl"); err == nil {
+			return ManagerSupervisor, nil
+		}
+		return "", fmt.Errorf("could not auto-detect init system on netbsd; specify --type (netbsd-rc or supervisor)")
 	default:
-		return "", fmt.Errorf("automatic service registration is not supported on %s; use --type systemd|launchd|openrc|supervisor with render to generate a template", goos)
+		return "", fmt.Errorf("automatic service registration is not supported on %s; use --type systemd|launchd|openrc|supervisor|freebsd-rc|openbsd-rc|netbsd-rc with render to generate a template", goos)
 	}
 }
 
@@ -196,7 +241,7 @@ func (s *Spec) NormalizeAndValidate(mgr ManagerType, homeDir string) error {
 			} else {
 				s.LogDir = filepath.Join("/var/log", s.Name)
 			}
-		case ManagerOpenRC:
+		case ManagerOpenRC, ManagerFreeBSDRC, ManagerNetBSDRC:
 			s.LogDir = "/var/log"
 		}
 	}
@@ -245,6 +290,12 @@ func DefaultUnitPath(mgr ManagerType, name, label string, userScope bool, homeDi
 			return filepath.Join(homeDir, ".config", "supervisor", "conf.d", name+".conf"), nil
 		}
 		return filepath.Join("/etc/supervisor/conf.d", name+".conf"), nil
+	case ManagerFreeBSDRC:
+		return filepath.Join("/usr/local/etc/rc.d", name), nil
+	case ManagerOpenBSDRC:
+		return filepath.Join("/etc/rc.d", name), nil
+	case ManagerNetBSDRC:
+		return filepath.Join("/etc/rc.d", name), nil
 	default:
 		return "", fmt.Errorf("unsupported service manager %q", mgr)
 	}
@@ -298,6 +349,27 @@ func RenderUnit(mgr ManagerType, spec Spec, homeDir string) (RenderedUnit, error
 			UnitPath: spec.UnitPath,
 			FileMode: 0o644,
 			Content:  renderSupervisorConf(spec, args),
+		}, nil
+	case ManagerFreeBSDRC:
+		return RenderedUnit{
+			Manager:  mgr,
+			UnitPath: spec.UnitPath,
+			FileMode: 0o755,
+			Content:  renderFreeBSDRCScript(spec, args),
+		}, nil
+	case ManagerOpenBSDRC:
+		return RenderedUnit{
+			Manager:  mgr,
+			UnitPath: spec.UnitPath,
+			FileMode: 0o755,
+			Content:  renderOpenBSDRCScript(spec, args),
+		}, nil
+	case ManagerNetBSDRC:
+		return RenderedUnit{
+			Manager:  mgr,
+			UnitPath: spec.UnitPath,
+			FileMode: 0o755,
+			Content:  renderNetBSDRCScript(spec, args),
 		}, nil
 	default:
 		return RenderedUnit{}, fmt.Errorf("unsupported service manager %q", mgr)
@@ -462,6 +534,161 @@ func renderSupervisorConf(spec Spec, args []string) string {
 		b.WriteString("stdout_logfile=" + filepath.Join(spec.LogDir, spec.Name+".log") + "\n")
 		b.WriteString("stderr_logfile=" + filepath.Join(spec.LogDir, spec.Name+".err.log") + "\n")
 	}
+	return b.String()
+}
+
+func bsdRCVarName(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			if i == 0 && r >= '0' && r <= '9' {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "gymbag"
+	}
+	return b.String()
+}
+
+func joinShellArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = quoteShell(a)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func renderFreeBSDRCScript(spec Spec, args []string) string {
+	rcName := bsdRCVarName(spec.Name)
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n\n")
+	b.WriteString("# PROVIDE: " + rcName + "\n")
+	b.WriteString("# REQUIRE: NETWORKING\n")
+	b.WriteString("# KEYWORD: shutdown\n\n")
+	b.WriteString(". /etc/rc.subr\n\n")
+	b.WriteString("name=\"" + rcName + "\"\n")
+	b.WriteString("rcvar=\"${name}_enable\"\n")
+	b.WriteString("desc=" + quoteShell(spec.Description) + "\n\n")
+	b.WriteString("load_rc_config \"$name\"\n")
+	b.WriteString(fmt.Sprintf(": ${%s_enable:=\"NO\"}\n\n", rcName))
+	b.WriteString("pidfile=\"/var/run/${name}.pid\"\n")
+	b.WriteString("procname=" + quoteShell(spec.BinaryPath) + "\n")
+	b.WriteString("command=\"/usr/sbin/daemon\"\n")
+
+	var cmdArgs []string
+	cmdArgs = append(cmdArgs, "-P", "${pidfile}", "-r", "-f", "-T", "${name}")
+	if spec.User != "" {
+		cmdArgs = append(cmdArgs, "-u", quoteShell(spec.User))
+	}
+	if spec.LogDir != "" {
+		cmdArgs = append(cmdArgs, "-o", quoteShell(filepath.Join(spec.LogDir, spec.Name+".log")))
+	}
+	cmdArgs = append(cmdArgs, "--", quoteShell(spec.BinaryPath))
+	for _, a := range args {
+		cmdArgs = append(cmdArgs, quoteShell(a))
+	}
+	b.WriteString("command_args=\"" + strings.Join(cmdArgs, " ") + "\"\n")
+
+	if spec.WorkingDir != "" || spec.EnvFile != "" {
+		b.WriteString("start_precmd=\"${name}_prestart\"\n\n")
+		b.WriteString(rcName + "_prestart() {\n")
+		if spec.WorkingDir != "" {
+			b.WriteString("    cd " + quoteShell(spec.WorkingDir) + " || return 1\n")
+		}
+		if spec.EnvFile != "" {
+			b.WriteString("    if [ -f " + quoteShell(spec.EnvFile) + " ]; then\n")
+			b.WriteString("        set -a\n")
+			b.WriteString("        . " + quoteShell(spec.EnvFile) + "\n")
+			b.WriteString("        set +a\n")
+			b.WriteString("    fi\n")
+		}
+		b.WriteString("}\n")
+	}
+
+	b.WriteString("\nrun_rc_command \"$1\"\n")
+	return b.String()
+}
+
+func renderOpenBSDRCScript(spec Spec, args []string) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/ksh\n\n")
+	b.WriteString("daemon=" + quoteShell(spec.BinaryPath) + "\n")
+	b.WriteString("daemon_flags=" + quoteShell(joinShellArgs(args)) + "\n")
+	if spec.User != "" {
+		b.WriteString("daemon_user=" + quoteShell(spec.User) + "\n")
+	}
+	b.WriteString("\n. /etc/rc.d/rc.subr\n\n")
+	b.WriteString("rc_bg=YES\n")
+	b.WriteString("rc_reload=NO\n")
+
+	if spec.WorkingDir != "" || spec.EnvFile != "" {
+		b.WriteString("\nrc_pre() {\n")
+		if spec.WorkingDir != "" {
+			b.WriteString("    cd " + quoteShell(spec.WorkingDir) + " || return 1\n")
+		}
+		if spec.EnvFile != "" {
+			b.WriteString("    if [ -f " + quoteShell(spec.EnvFile) + " ]; then\n")
+			b.WriteString("        set -a\n")
+			b.WriteString("        . " + quoteShell(spec.EnvFile) + "\n")
+			b.WriteString("        set +a\n")
+			b.WriteString("    fi\n")
+		}
+		b.WriteString("}\n")
+	}
+
+	b.WriteString("\nrc_cmd $1\n")
+	return b.String()
+}
+
+func renderNetBSDRCScript(spec Spec, args []string) string {
+	rcName := bsdRCVarName(spec.Name)
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n\n")
+	b.WriteString("# PROVIDE: " + rcName + "\n")
+	b.WriteString("# REQUIRE: NETWORKING\n")
+	b.WriteString("# KEYWORD: shutdown\n\n")
+	b.WriteString("$_rc_subr_loaded . /etc/rc.subr\n\n")
+	b.WriteString("name=\"" + rcName + "\"\n")
+	b.WriteString("rcvar=\"${name}\"\n")
+	b.WriteString("command=" + quoteShell(spec.BinaryPath) + "\n")
+	b.WriteString("pidfile=\"/var/run/${name}.pid\"\n")
+	b.WriteString("start_cmd=\"${name}_start\"\n\n")
+
+	outLog := "/dev/null"
+	errLog := "/dev/null"
+	if spec.LogDir != "" {
+		outLog = filepath.Join(spec.LogDir, spec.Name+".log")
+		errLog = filepath.Join(spec.LogDir, spec.Name+".err.log")
+	}
+
+	b.WriteString(rcName + "_start() {\n")
+	if spec.WorkingDir != "" {
+		b.WriteString("    cd " + quoteShell(spec.WorkingDir) + " || return 1\n")
+	}
+	if spec.EnvFile != "" {
+		b.WriteString("    if [ -f " + quoteShell(spec.EnvFile) + " ]; then\n")
+		b.WriteString("        set -a\n")
+		b.WriteString("        . " + quoteShell(spec.EnvFile) + "\n")
+		b.WriteString("        set +a\n")
+		b.WriteString("    fi\n")
+	}
+	joined := joinShellArgs(args)
+	if spec.User != "" {
+		inner := fmt.Sprintf("%s %s >%s 2>%s & echo $! > %s",
+			quoteShell(spec.BinaryPath), joined, quoteShell(outLog), quoteShell(errLog), `"$pidfile"`)
+		b.WriteString("    su -m " + quoteShell(spec.User) + " -c " + quoteShell(inner) + "\n")
+	} else {
+		b.WriteString(fmt.Sprintf("    \"${command}\" %s >%s 2>%s &\n", joined, quoteShell(outLog), quoteShell(errLog)))
+		b.WriteString("    echo $! > \"${pidfile}\"\n")
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("load_rc_config \"$name\"\n")
+	b.WriteString("run_rc_command \"$1\"\n")
 	return b.String()
 }
 
