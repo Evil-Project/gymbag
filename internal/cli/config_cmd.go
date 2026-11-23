@@ -236,8 +236,12 @@ func runConfigList(args []string, stdout, stderr io.Writer) int {
 		if !s.Protect {
 			prot = "protect off"
 		}
-		_, _ = fmt.Fprintf(stdout, "  - %s -> %s (%s, rules=%d, rule_sources=%d)\n",
-			s.Domain, target, prot, len(s.WAF.Rules), len(s.WAF.RuleSources)+len(s.WAF.RemoteRules))
+		authNote := ""
+		if s.Auth != nil {
+			authNote = ", auth=" + s.Auth.URL
+		}
+		_, _ = fmt.Fprintf(stdout, "  - %s -> %s (%s, rules=%d, rule_sources=%d%s)\n",
+			s.Domain, target, prot, len(s.WAF.Rules), len(s.WAF.RuleSources)+len(s.WAF.RemoteRules), authNote)
 	}
 	if cfg.SSHEnabled() {
 		prot := fmt.Sprintf("verify %d [%s]", int(cfg.SSH.VerifyLevel), cfg.SSH.VerifyLevel.Label())
@@ -320,6 +324,9 @@ func runConfigAddSite(args []string, stdout, stderr io.Writer) int {
 		redirTo        string
 		redirCode      int
 		headerFlags    multiStringFlag
+		autheliaURL    string
+		autheliaURI    string
+		autheliaPortal string
 		force          bool
 	)
 	fs.StringVar(&cfgPath, "c", "", "Path to config file")
@@ -344,6 +351,9 @@ func runConfigAddSite(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&redirTo, "redir", "", "Redirect target URL")
 	fs.IntVar(&redirCode, "code", 0, "Redirect HTTP status code (default 302)")
 	fs.Var(&headerFlags, "header", "Response header mutation Name=Value or -Name (repeatable)")
+	fs.StringVar(&autheliaURL, "authelia", "", "Enable Authelia forward auth using this URL")
+	fs.StringVar(&autheliaURI, "authelia-uri", "", "Authelia forward-auth endpoint URI (default /api/authz/forward-auth)")
+	fs.StringVar(&autheliaPortal, "authelia-portal", "", "Authelia login portal URL")
 	fs.BoolVar(&force, "f", false, "Overwrite existing site with the same domain")
 	fs.BoolVar(&force, "force", false, "Overwrite existing site with the same domain")
 	if err := parseInterspersedFlags(fs, args); err != nil {
@@ -455,11 +465,33 @@ func runConfigAddSite(args []string, stdout, stderr io.Writer) int {
 			waf.DefaultRules = &f
 		}
 
+		var siteAuth *config.ForwardAuthConfig
+		if strings.TrimSpace(autheliaURL) != "" {
+			siteAuth = &config.ForwardAuthConfig{
+				Provider:  "authelia",
+				URL:       autheliaURL,
+				URI:       autheliaURI,
+				PortalURL: autheliaPortal,
+			}
+		} else if (autheliaURI != "" || autheliaPortal != "") && cfg.Authelia != nil {
+			siteAuth = cfg.Authelia.Clone()
+			if autheliaURI != "" {
+				siteAuth.URI = autheliaURI
+			}
+			if autheliaPortal != "" {
+				siteAuth.PortalURL = autheliaPortal
+			}
+		} else if autheliaURI != "" || autheliaPortal != "" {
+			_, _ = fmt.Fprintln(stderr, "ERROR gymbag config add: --authelia-uri/--authelia-portal requires --authelia <url> or global authelia")
+			return 2
+		}
+
 		site := config.SiteConfig{
 			Domain:    d,
 			Upstreams: append([]string(nil), normUpstreams...),
 			Routes:    routes,
 			Headers:   hdrs,
+			Auth:      siteAuth,
 			Protect:   prot,
 			WAF:       waf,
 			CertFile:  certFile,
@@ -514,19 +546,23 @@ func runConfigUpdateSite(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gymbag config update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		cfgPath       string
-		domain        string
-		upstreams     multiStringFlag
-		verifyLevel   string
-		difficulty    int
-		verifyTimeout string
-		protectStr    string
-		defRulesStr   string
-		certFile      string
-		keyFile       string
-		clearTLS      bool
-		headerFlags   multiStringFlag
-		removeHeaders multiStringFlag
+		cfgPath        string
+		domain         string
+		upstreams      multiStringFlag
+		verifyLevel    string
+		difficulty     int
+		verifyTimeout  string
+		protectStr     string
+		defRulesStr    string
+		certFile       string
+		keyFile        string
+		clearTLS       bool
+		headerFlags    multiStringFlag
+		removeHeaders  multiStringFlag
+		autheliaURL    string
+		autheliaURI    string
+		autheliaPortal string
+		clearAuthelia  bool
 	)
 	fs.StringVar(&cfgPath, "c", "", "Path to config file")
 	fs.StringVar(&cfgPath, "config", "", "Path to config file")
@@ -545,6 +581,10 @@ func runConfigUpdateSite(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&clearTLS, "clear-tls", false, "Clear per-site TLS cert and key")
 	fs.Var(&headerFlags, "header", "Set/delete response header Name=Value or -Name (repeatable)")
 	fs.Var(&removeHeaders, "remove-header", "Remove a configured site response header mutation by key")
+	fs.StringVar(&autheliaURL, "authelia", "", "Enable or update Authelia forward auth URL (use 'off' or --clear-authelia to remove)")
+	fs.StringVar(&autheliaURI, "authelia-uri", "", "Authelia forward-auth endpoint URI")
+	fs.StringVar(&autheliaPortal, "authelia-portal", "", "Authelia login portal URL")
+	fs.BoolVar(&clearAuthelia, "clear-authelia", false, "Remove forward auth from this site")
 	if err := parseInterspersedFlags(fs, args); err != nil {
 		return 2
 	}
@@ -651,6 +691,27 @@ func runConfigUpdateSite(args []string, stdout, stderr io.Writer) int {
 	for _, rk := range removeHeaders {
 		if s.Headers != nil {
 			delete(s.Headers, strings.TrimSpace(rk))
+		}
+	}
+	if clearAuthelia || strings.EqualFold(strings.TrimSpace(autheliaURL), "off") {
+		s.Auth = nil
+	} else if strings.TrimSpace(autheliaURL) != "" || autheliaURI != "" || autheliaPortal != "" {
+		if s.Auth == nil {
+			if cfg.Authelia != nil {
+				s.Auth = cfg.Authelia.Clone()
+			} else {
+				s.Auth = &config.ForwardAuthConfig{Provider: "authelia"}
+			}
+		}
+		if strings.TrimSpace(autheliaURL) != "" {
+			s.Auth.URL = autheliaURL
+			s.Auth.Provider = "authelia"
+		}
+		if autheliaURI != "" {
+			s.Auth.URI = autheliaURI
+		}
+		if autheliaPortal != "" {
+			s.Auth.PortalURL = autheliaPortal
 		}
 	}
 
@@ -1096,6 +1157,25 @@ func applyGlobalKeySet(cfg *config.Config, key, val string) error {
 		cfg.TLS.EABKID = val
 	case "eab_hmac_key":
 		cfg.TLS.EABHMACKey = val
+	case "authelia", "authelia_url":
+		if strings.EqualFold(val, "off") || strings.EqualFold(val, "none") {
+			cfg.Authelia = nil
+		} else {
+			if cfg.Authelia == nil {
+				cfg.Authelia = &config.ForwardAuthConfig{Provider: "authelia"}
+			}
+			cfg.Authelia.URL = val
+		}
+	case "authelia_uri":
+		if cfg.Authelia == nil {
+			return fmt.Errorf("set authelia_url first before setting authelia_uri")
+		}
+		cfg.Authelia.URI = val
+	case "authelia_portal", "authelia_portal_url":
+		if cfg.Authelia == nil {
+			return fmt.Errorf("set authelia_url first before setting authelia_portal")
+		}
+		cfg.Authelia.PortalURL = val
 	default:
 		return fmt.Errorf("unsupported global key %q", key)
 	}
@@ -1104,6 +1184,16 @@ func applyGlobalKeySet(cfg *config.Config, key, val string) error {
 
 func applyGlobalKeyUnset(cfg *config.Config, key string) error {
 	switch key {
+	case "authelia", "authelia_url":
+		cfg.Authelia = nil
+	case "authelia_uri":
+		if cfg.Authelia != nil {
+			cfg.Authelia.URI = ""
+		}
+	case "authelia_portal", "authelia_portal_url":
+		if cfg.Authelia != nil {
+			cfg.Authelia.PortalURL = ""
+		}
 	case "email", "acme_email":
 		cfg.TLS.ACMEEmail = ""
 	case "ssl_provider", "acme_provider", "ca":

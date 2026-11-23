@@ -294,6 +294,7 @@ type routeScope struct {
 	fileMatch     string
 
 	headers map[string]string
+	auth    *ForwardAuthConfig
 	routes  []RouteConfig
 }
 
@@ -374,6 +375,13 @@ func (sc *routeScope) finalize() []RouteConfig {
 				merged[k] = v
 			}
 			sc.routes[i].Headers = merged
+		}
+	}
+	if sc.auth != nil {
+		for i := range sc.routes {
+			if sc.routes[i].Auth == nil {
+				sc.routes[i].Auth = sc.auth.Clone()
+			}
 		}
 	}
 	return sc.routes
@@ -614,7 +622,7 @@ func parseHeaderBlockOrLine(item statementItem, matchers map[string][]string) (h
 	return
 }
 
-func parseHandleScope(item statementItem, matchers map[string][]string, isHandlePath bool) ([]RouteConfig, error) {
+func parseHandleScope(item statementItem, matchers map[string][]string, isHandlePath bool, globalAuthelia *ForwardAuthConfig) ([]RouteConfig, error) {
 	sc := newRouteScope(matchers)
 	args := item.words[1:]
 	if len(args) > 0 {
@@ -638,16 +646,30 @@ func parseHandleScope(item statementItem, matchers map[string][]string, isHandle
 		sname := strings.ToLower(subItem.words[0])
 		sargs := subItem.words[1:]
 
+		if sname == "authelia" || sname == "forward_auth" {
+			authCfg, handled, aErr := parseAuthDirective(subItem, globalAuthelia, matchers, false)
+			if aErr != nil {
+				return nil, aErr
+			}
+			if handled {
+				sc.auth = authCfg
+				continue
+			}
+		}
+
 		if subItem.sub != nil {
 			switch sname {
 			case "handle", "handle_path", "route":
-				nested, err := parseHandleScope(subItem, matchers, sname == "handle_path")
+				nested, err := parseHandleScope(subItem, matchers, sname == "handle_path", globalAuthelia)
 				if err != nil {
 					return nil, err
 				}
 				for i := range nested {
 					if nested[i].StripPrefix == "" && sc.stripPrefix != "" {
 						nested[i].StripPrefix = sc.stripPrefix
+					}
+					if nested[i].Auth == nil && sc.auth != nil {
+						nested[i].Auth = sc.auth.Clone()
 					}
 				}
 				sc.routes = append(sc.routes, nested...)
@@ -968,3 +990,238 @@ func parseRuleSourceBlock(block *parsedBlock) (RuleSource, error) {
 	}
 	return rs, nil
 }
+
+func parseAuthDirective(
+	item statementItem,
+	globalAuthelia *ForwardAuthConfig,
+	matchers map[string][]string,
+	isGlobal bool,
+) (*ForwardAuthConfig, bool, error) {
+	if len(item.words) == 0 {
+		return nil, false, nil
+	}
+	dname := strings.ToLower(item.words[0])
+	if dname != "authelia" && dname != "forward_auth" {
+		return nil, false, nil
+	}
+	args := item.words[1:]
+
+	var cfg *ForwardAuthConfig
+	if dname == "authelia" {
+		if item.sub == nil {
+			switch len(args) {
+			case 0:
+				if isGlobal || globalAuthelia == nil {
+					return nil, true, fmt.Errorf("authelia requires a URL or a global authelia { ... } configuration")
+				}
+				return globalAuthelia.Clone(), true, nil
+			case 1:
+				if b, err := parseBool(args[0], "authelia"); err == nil {
+					if !b {
+						return nil, true, nil
+					}
+					if isGlobal || globalAuthelia == nil {
+						return nil, true, fmt.Errorf("authelia on requires a global authelia { ... } configuration")
+					}
+					return globalAuthelia.Clone(), true, nil
+				}
+				cfg = &ForwardAuthConfig{
+					Provider: "authelia",
+					URL:      args[0],
+				}
+			default:
+				return nil, true, fmt.Errorf("authelia accepts at most a URL or on/off")
+			}
+		} else {
+			if len(args) > 1 {
+				return nil, true, fmt.Errorf("authelia block accepts at most a URL")
+			}
+			if len(args) == 0 && !isGlobal && globalAuthelia != nil {
+				cfg = globalAuthelia.Clone()
+			} else {
+				cfg = &ForwardAuthConfig{Provider: "authelia"}
+				if len(args) == 1 {
+					cfg.URL = args[0]
+				}
+			}
+		}
+	} else {
+		// forward_auth [matcher] <target> [ { ... } ]
+		cfg = &ForwardAuthConfig{Provider: "forward_auth"}
+		rest := args
+		if len(rest) >= 1 && isMatcherToken(rest[0]) {
+			if len(rest) == 1 && item.sub == nil {
+				return nil, true, fmt.Errorf("forward_auth requires an upstream URL after matcher %q", rest[0])
+			}
+			if len(rest) >= 2 || item.sub != nil {
+				if len(rest) >= 2 || rest[0] == "*" || strings.HasPrefix(rest[0], "@") || strings.HasPrefix(rest[0], "/") || strings.HasPrefix(rest[0], "~") {
+					if len(rest) >= 2 {
+						resolved, err := resolveMatcherPaths(rest[0], matchers)
+						if err != nil {
+							return nil, true, err
+						}
+						for _, p := range resolved {
+							if p != "" {
+								cfg.Paths = append(cfg.Paths, p)
+							}
+						}
+						rest = rest[1:]
+					}
+				}
+			}
+		}
+		if len(rest) > 0 {
+			cfg.URL = rest[0]
+		} else if item.sub == nil {
+			return nil, true, fmt.Errorf("forward_auth requires an upstream URL")
+		}
+	}
+
+	if item.sub != nil {
+		sawCopyHeaders := false
+		sawPaths := false
+		sawExcept := false
+		for _, subItem := range item.sub.body {
+			if len(subItem.words) == 0 {
+				continue
+			}
+			sname := strings.ToLower(subItem.words[0])
+			sargs := subItem.words[1:]
+
+			if subItem.sub != nil {
+				switch sname {
+				case "copy_headers":
+					if !sawCopyHeaders {
+						cfg.CopyHeaders = nil
+						sawCopyHeaders = true
+					}
+					for _, chLine := range subItem.sub.body {
+						if len(chLine.words) == 0 {
+							continue
+						}
+						if len(chLine.words) == 3 && chLine.words[1] == ">" {
+							cfg.CopyHeaders = append(cfg.CopyHeaders, chLine.words[0]+">"+chLine.words[2])
+						} else {
+							cfg.CopyHeaders = append(cfg.CopyHeaders, chLine.words...)
+						}
+					}
+				case "transport":
+					for _, tLine := range subItem.sub.body {
+						if len(tLine.words) == 0 {
+							continue
+						}
+						tk := strings.ToLower(tLine.words[0])
+						if tk == "tls_insecure_skip_verify" {
+							if len(tLine.words) == 1 {
+								cfg.InsecureSkipTLS = true
+							} else {
+								b, err := parseBool(tLine.words[1], tk)
+								if err != nil {
+									return nil, true, err
+								}
+								cfg.InsecureSkipTLS = b
+							}
+						}
+					}
+				default:
+					return nil, true, fmt.Errorf("unexpected nested block %q inside %s", subItem.words[0], dname)
+				}
+				continue
+			}
+
+			switch sname {
+			case "url", "upstream", "to":
+				if len(sargs) != 1 {
+					return nil, true, fmt.Errorf("%s %s requires a single URL", dname, sname)
+				}
+				cfg.URL = sargs[0]
+			case "uri":
+				if len(sargs) != 1 {
+					return nil, true, fmt.Errorf("%s uri requires a path", dname)
+				}
+				cfg.URI = sargs[0]
+			case "copy_headers", "copy_header":
+				if len(sargs) == 0 {
+					return nil, true, fmt.Errorf("%s %s requires at least one header name", dname, sname)
+				}
+				if !sawCopyHeaders {
+					cfg.CopyHeaders = nil
+					sawCopyHeaders = true
+				}
+				for _, a := range sargs {
+					for _, part := range strings.Split(a, ",") {
+						if trimmed := strings.TrimSpace(part); trimmed != "" {
+							cfg.CopyHeaders = append(cfg.CopyHeaders, trimmed)
+						}
+					}
+				}
+			case "header", "header_up":
+				if len(sargs) == 0 {
+					return nil, true, fmt.Errorf("%s %s requires a header name", dname, sname)
+				}
+				if cfg.Headers == nil {
+					cfg.Headers = make(map[string]string)
+				}
+				if len(sargs) == 1 && strings.HasPrefix(sargs[0], "-") {
+					cfg.Headers[sargs[0]] = ""
+				} else if len(sargs) >= 2 {
+					cfg.Headers[sargs[0]] = strings.Join(sargs[1:], " ")
+				} else {
+					return nil, true, fmt.Errorf("%s %s %q requires a value", dname, sname, sargs[0])
+				}
+			case "path", "paths":
+				if len(sargs) == 0 {
+					return nil, true, fmt.Errorf("%s %s requires at least one path pattern", dname, sname)
+				}
+				if !sawPaths {
+					cfg.Paths = nil
+					sawPaths = true
+				}
+				cfg.Paths = append(cfg.Paths, sargs...)
+			case "except", "except_paths", "bypass":
+				if len(sargs) == 0 {
+					return nil, true, fmt.Errorf("%s %s requires at least one path pattern", dname, sname)
+				}
+				if !sawExcept {
+					cfg.ExceptPaths = nil
+					sawExcept = true
+				}
+				cfg.ExceptPaths = append(cfg.ExceptPaths, sargs...)
+			case "portal_url", "portal", "rd":
+				if len(sargs) != 1 {
+					return nil, true, fmt.Errorf("%s %s requires a URL", dname, sname)
+				}
+				cfg.PortalURL = sargs[0]
+			case "timeout":
+				if len(sargs) != 1 {
+					return nil, true, fmt.Errorf("%s timeout requires seconds or a duration (e.g. 5s)", dname)
+				}
+				sec, err := ParseDurationSeconds(sargs[0], "auth timeout")
+				if err != nil {
+					return nil, true, err
+				}
+				cfg.Timeout = sec
+			case "insecure_skip_tls", "tls_insecure_skip_verify":
+				if len(sargs) == 0 {
+					cfg.InsecureSkipTLS = true
+				} else if len(sargs) == 1 {
+					b, err := parseBool(sargs[0], sname)
+					if err != nil {
+						return nil, true, err
+					}
+					cfg.InsecureSkipTLS = b
+				} else {
+					return nil, true, fmt.Errorf("%s %s accepts at most true or false", dname, sname)
+				}
+			default:
+				return nil, true, fmt.Errorf("unknown directive inside %s: %s", dname, subItem.words[0])
+			}
+		}
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, true, err
+	}
+	return cfg, true, nil
+}
+

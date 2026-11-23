@@ -270,6 +270,9 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		if !s.Protect {
 			state = fmt.Sprintf("unprotected (WAF verification off, custom rules: %d, remote rules: %d, rule sources: %d)", len(s.WAF.Rules), len(s.WAF.RemoteRules), len(s.WAF.RuleSources))
 		}
+		if s.Auth != nil {
+			state += fmt.Sprintf(", auth: %s (%s)", s.Auth.Provider, s.Auth.URL)
+		}
 		_, _ = fmt.Fprintf(stdout, "  - %s -> %s [%s]\n", s.Domain, target, state)
 	}
 	if cfg.SSHEnabled() {

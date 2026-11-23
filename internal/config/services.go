@@ -533,14 +533,15 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 	}
 
 	type conciseSite struct {
-		Domain    string            `json:"domain"`
-		Upstreams []string          `json:"upstreams,omitempty"`
-		Routes    []RouteConfig     `json:"routes,omitempty"`
-		Headers   map[string]string `json:"headers,omitempty"`
-		Protect   *bool             `json:"protect,omitempty"`
-		WAF       *conciseWAF       `json:"waf,omitempty"`
-		CertFile  string            `json:"cert_file,omitempty"`
-		KeyFile   string            `json:"key_file,omitempty"`
+		Domain    string             `json:"domain"`
+		Upstreams []string           `json:"upstreams,omitempty"`
+		Routes    []RouteConfig      `json:"routes,omitempty"`
+		Headers   map[string]string  `json:"headers,omitempty"`
+		Auth      *ForwardAuthConfig `json:"auth,omitempty"`
+		Protect   *bool              `json:"protect,omitempty"`
+		WAF       *conciseWAF        `json:"waf,omitempty"`
+		CertFile  string             `json:"cert_file,omitempty"`
+		KeyFile   string             `json:"key_file,omitempty"`
 	}
 
 	type conciseTCP struct {
@@ -573,25 +574,27 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 	}
 
 	type conciseConfig struct {
-		Sites              []conciseSite  `json:"sites,omitempty"`
-		SSH                *conciseTCP    `json:"ssh,omitempty"`
-		Minecraft          *conciseTCP    `json:"minecraft,omitempty"`
-		Verify             *conciseVerify `json:"verify,omitempty"`
-		BindHost           string         `json:"bind_host,omitempty"`
-		HTTPPort           int            `json:"http_port,omitempty"`
-		HTTPSPort          int            `json:"https_port,omitempty"`
-		AdminAddr          string         `json:"admin_addr,omitempty"`
-		TLS                map[string]any `json:"tls,omitempty"`
-		Intel              map[string]any `json:"intel,omitempty"`
-		RemoteRulesRefresh int            `json:"remote_rules_refresh,omitempty"`
-		RulesWatchInterval int            `json:"rules_watch_interval,omitempty"`
-		RedisURL           string         `json:"redis_url,omitempty"`
-		Secret             string         `json:"secret,omitempty"`
-		TrustedProxies     []string       `json:"trusted_proxies,omitempty"`
-		Defaults           *conciseWAF    `json:"defaults,omitempty"`
+		Sites              []conciseSite      `json:"sites,omitempty"`
+		SSH                *conciseTCP        `json:"ssh,omitempty"`
+		Minecraft          *conciseTCP        `json:"minecraft,omitempty"`
+		Verify             *conciseVerify     `json:"verify,omitempty"`
+		Authelia           *ForwardAuthConfig `json:"authelia,omitempty"`
+		BindHost           string             `json:"bind_host,omitempty"`
+		HTTPPort           int                `json:"http_port,omitempty"`
+		HTTPSPort          int                `json:"https_port,omitempty"`
+		AdminAddr          string             `json:"admin_addr,omitempty"`
+		TLS                map[string]any     `json:"tls,omitempty"`
+		Intel              map[string]any     `json:"intel,omitempty"`
+		RemoteRulesRefresh int                `json:"remote_rules_refresh,omitempty"`
+		RulesWatchInterval int                `json:"rules_watch_interval,omitempty"`
+		RedisURL           string             `json:"redis_url,omitempty"`
+		Secret             string             `json:"secret,omitempty"`
+		TrustedProxies     []string           `json:"trusted_proxies,omitempty"`
+		Defaults           *conciseWAF        `json:"defaults,omitempty"`
 	}
 
 	out := conciseConfig{
+		Authelia:       c.Authelia,
 		AdminAddr:      c.AdminAddr,
 		RedisURL:       c.RedisURL,
 		Secret:         c.Secret,
@@ -620,6 +623,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 			Upstreams: s.Upstreams,
 			Routes:    s.Routes,
 			Headers:   s.Headers,
+			Auth:      s.Auth,
 			CertFile:  s.CertFile,
 			KeyFile:   s.KeyFile,
 		}

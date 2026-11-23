@@ -530,14 +530,15 @@ func (w *SiteWAFConfig) Validate() error {
 
 // SiteConfig describes a single downstream website hosted and optionally protected by Gymbag.
 type SiteConfig struct {
-	Domain    string            `json:"domain"`
-	Upstreams []string          `json:"upstreams,omitempty"`
-	Routes    []RouteConfig     `json:"routes,omitempty"`  // path-matched handlers evaluated before Upstreams
-	Headers   map[string]string `json:"headers,omitempty"` // response header mutations applied to every response ("-Name" deletes)
-	Protect   bool              `json:"protect"`
-	WAF       SiteWAFConfig     `json:"waf"`
-	CertFile  string            `json:"cert_file,omitempty"`
-	KeyFile   string            `json:"key_file,omitempty"`
+	Domain    string             `json:"domain"`
+	Upstreams []string           `json:"upstreams,omitempty"`
+	Routes    []RouteConfig      `json:"routes,omitempty"`  // path-matched handlers evaluated before Upstreams
+	Headers   map[string]string  `json:"headers,omitempty"` // response header mutations applied to every response ("-Name" deletes)
+	Auth      *ForwardAuthConfig `json:"auth,omitempty"`    // optional forward authentication (Authelia / Caddy forward_auth)
+	Protect   bool               `json:"protect"`
+	WAF       SiteWAFConfig      `json:"waf"`
+	CertFile  string             `json:"cert_file,omitempty"`
+	KeyFile   string             `json:"key_file,omitempty"`
 }
 
 // UnmarshalJSON initializes sensible defaults when decoding a new SiteConfig from concise JSON.
@@ -566,6 +567,7 @@ func (s SiteConfig) Clone() SiteConfig {
 		}
 	}
 	out.Headers = cloneHeaderMap(s.Headers)
+	out.Auth = s.Auth.Clone()
 	out.WAF = cloneSiteWAF(s.WAF)
 	return out
 }
@@ -603,6 +605,11 @@ func (s *SiteConfig) Validate() error {
 	}
 	if err := validateHeaderMap(s.Headers); err != nil {
 		return fmt.Errorf("site %s: %w", s.Domain, err)
+	}
+	if s.Auth != nil {
+		if err := s.Auth.Validate(); err != nil {
+			return fmt.Errorf("site %s: %w", s.Domain, err)
+		}
 	}
 	if s.WAF.Difficulty == 0 {
 		s.WAF.Difficulty = 4
@@ -677,6 +684,7 @@ type Config struct {
 	SSH                *SSHConfig         `json:"ssh,omitempty"`
 	Minecraft          *MinecraftConfig   `json:"minecraft,omitempty"`
 	Verify             VerifyServerConfig `json:"verify,omitempty"`
+	Authelia           *ForwardAuthConfig `json:"authelia,omitempty"`
 	BindHost           string             `json:"bind_host"`
 	HTTPPort           int                `json:"http_port"`
 	HTTPSPort          int                `json:"https_port"`
@@ -835,6 +843,11 @@ func (c Config) Redacted() Config {
 func (c *Config) Validate() error {
 	if err := c.Verify.Validate(); err != nil {
 		return err
+	}
+	if c.Authelia != nil {
+		if err := c.Authelia.Validate(); err != nil {
+			return err
+		}
 	}
 	if c.SSH != nil {
 		if err := c.SSH.Validate(); err != nil {

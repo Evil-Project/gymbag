@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"gymbag/internal/host"
@@ -52,6 +53,7 @@ type GenerateOptions struct {
 	SSH                *TCPSpec
 	Minecraft          *TCPSpec
 	Verify             VerifyServerConfig
+	Authelia           *ForwardAuthConfig
 	VerifyLevel        string
 	Protect            *bool
 	Difficulty         int
@@ -348,15 +350,31 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 			if len(sp.RuleSources) > 0 {
 				wafCfg.RuleSources = append(wafCfg.RuleSources, sp.RuleSources...)
 			}
+			var siteAuth *ForwardAuthConfig
+			if opts.Authelia != nil {
+				skipPortal := false
+				if opts.Authelia.PortalURL != "" {
+					if pu, pErr := url.Parse(opts.Authelia.PortalURL); pErr == nil && host.Normalize(pu.Hostname()) == d {
+						skipPortal = true
+					}
+				}
+				if !skipPortal {
+					siteAuth = opts.Authelia.Clone()
+				}
+			}
 			cfg.Sites = append(cfg.Sites, SiteConfig{
 				Domain:    d,
 				Upstreams: append([]string(nil), sp.Upstreams...),
+				Auth:      siteAuth,
 				Protect:   prot,
 				WAF:       wafCfg,
 				CertFile:  strings.TrimSpace(sp.CertFile),
 				KeyFile:   strings.TrimSpace(sp.KeyFile),
 			})
 		}
+	}
+	if opts.Authelia != nil {
+		cfg.Authelia = opts.Authelia.Clone()
 	}
 
 	if useSSH {

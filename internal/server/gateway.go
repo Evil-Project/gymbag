@@ -70,6 +70,7 @@ type GatewayHandler struct {
 	wsProxy        WebSocketForwarder
 	acmeBoard      ACMEChallengeLookup
 	trustedProxies []netip.Prefix
+	auth           *ForwardAuthenticator
 }
 
 // NewGatewayHandler constructs the core HTTPS GatewayHandler.
@@ -89,6 +90,11 @@ func NewGatewayHandler(
 		acmeBoard:      acmeBoard,
 		trustedProxies: trustedProxies,
 	}
+}
+
+// SetAuthenticator configures the optional forward-authentication verifier used by ServeRouted.
+func (g *GatewayHandler) SetAuthenticator(auth *ForwardAuthenticator) {
+	g.auth = auth
 }
 
 func (g *GatewayHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -135,27 +141,41 @@ func (g *GatewayHandler) ServeRouted(
 	}
 
 	scheme := RequestScheme(r)
+	matched := route.MatchRoute(path)
 
-	// 3. Path-matched routes (proxy, static files, respond, redirect)
-	if matched := route.MatchRoute(path); matched != nil {
+	// 3. Forward authentication (Authelia / forward_auth)
+	effectiveAuth := route.Auth
+	if matched != nil && matched.Auth != nil {
+		effectiveAuth = matched.Auth
+	}
+	if effectiveAuth != nil && g.auth != nil {
+		authedReq, ok := g.auth.Authenticate(w, r, effectiveAuth, hostName, clientIP, scheme)
+		if !ok {
+			return
+		}
+		r = authedReq
+	}
+
+	// 4. Path-matched routes (proxy, static files, respond, redirect)
+	if matched != nil {
 		g.serveCompiledRoute(w, r, route, matched, path, hostName, clientIP, scheme, isWS)
 		return
 	}
 
-	// 4. Fallback when no site-wide upstreams are configured
+	// 5. Fallback when no site-wide upstreams are configured
 	if len(route.Config.Upstreams) == 0 {
 		proxy.ApplyResponseHeaders(w.Header(), route.Config.Headers)
 		http.NotFound(w, r)
 		return
 	}
 
-	// 5. WebSocket upgrade tunnel
+	// 6. WebSocket upgrade tunnel
 	if isWS {
 		g.wsProxy.Forward(w, r, route, clientIP, scheme)
 		return
 	}
 
-	// 6. Streaming HTTP reverse proxy
+	// 7. Streaming HTTP reverse proxy
 	g.httpProxy.Forward(w, r, route, clientIP, scheme)
 }
 

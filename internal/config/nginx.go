@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -242,30 +243,36 @@ func expandNginxIncludes(stmts []nginxStmt, baseDir string, depth int) ([]nginxS
 }
 
 type parsedNginxLocation struct {
-	modifier string // "", "=", "~", "~*", "^~"
-	pattern  string
-	rank     int
-	order    int
-	route    RouteConfig
+	modifier       string // "", "=", "~", "~*", "^~"
+	pattern        string
+	rank           int
+	order          int
+	isInternal     bool
+	authRequest    string
+	authSetHeaders []string
+	route          RouteConfig
 }
 
 type parsedNginxServer struct {
-	domains        []string
-	hasSSL         bool
-	listenHTTP     int
-	listenHTTPS    int
-	certFile       string
-	keyFile        string
-	root           string
-	index          []string
-	browse         bool
-	headers        map[string]string
-	rules          []CustomRule
-	upstreams      []string
-	locations      []parsedNginxLocation
-	waf            SiteWAFConfig
-	protect        bool
-	isHTTPRedirect bool
+	domains           []string
+	hasSSL            bool
+	listenHTTP        int
+	listenHTTPS       int
+	certFile          string
+	keyFile           string
+	root              string
+	index             []string
+	browse            bool
+	headers           map[string]string
+	rules             []CustomRule
+	upstreams         []string
+	locations         []parsedNginxLocation
+	internalLocations map[string]string
+	authRequest       string
+	authSetHeaders    []string
+	waf               SiteWAFConfig
+	protect           bool
+	isHTTPRedirect    bool
 }
 
 // ParseNginx parses a native nginx configuration into a validated Gymbag Config.
@@ -407,6 +414,15 @@ func ParseNginxWithBaseDir(text, baseDir string) (Config, error) {
 
 		var siteUpstreams []string
 		var siteRoutes []RouteConfig
+		var siteAuth *ForwardAuthConfig
+
+		if ps.authRequest != "" {
+			resolved, aErr := resolveNginxForwardAuth(ps.authRequest, ps.authSetHeaders, ps.internalLocations)
+			if aErr != nil {
+				return Config{}, aErr
+			}
+			siteAuth = resolved
+		}
 
 		if len(ps.locations) == 1 &&
 			ps.locations[0].modifier == "" &&
@@ -415,10 +431,36 @@ func ParseNginxWithBaseDir(text, baseDir string) (Config, error) {
 			ps.locations[0].route.StripPrefix == "" &&
 			len(ps.locations[0].route.Headers) == 0 {
 			siteUpstreams = ps.locations[0].route.Upstreams
+			if ps.locations[0].authRequest != "" {
+				if strings.EqualFold(ps.locations[0].authRequest, "off") {
+					siteAuth = nil
+				} else {
+					hdrs := ps.locations[0].authSetHeaders
+					if len(hdrs) == 0 {
+						hdrs = ps.authSetHeaders
+					}
+					resolved, aErr := resolveNginxForwardAuth(ps.locations[0].authRequest, hdrs, ps.internalLocations)
+					if aErr != nil {
+						return Config{}, aErr
+					}
+					siteAuth = resolved
+				}
+			}
 		} else {
 			hasCatchAll := false
 			for _, loc := range ps.locations {
 				rc := loc.route
+				if loc.authRequest != "" && !strings.EqualFold(loc.authRequest, "off") {
+					hdrs := loc.authSetHeaders
+					if len(hdrs) == 0 {
+						hdrs = ps.authSetHeaders
+					}
+					resolved, aErr := resolveNginxForwardAuth(loc.authRequest, hdrs, ps.internalLocations)
+					if aErr != nil {
+						return Config{}, aErr
+					}
+					rc.Auth = resolved
+				}
 				if rc.Path == "" {
 					hasCatchAll = true
 				}
@@ -457,6 +499,7 @@ func ParseNginxWithBaseDir(text, baseDir string) (Config, error) {
 				Upstreams: slicesClone(siteUpstreams),
 				Routes:    clonedRoutes,
 				Headers:   cloneHeaderMap(ps.headers),
+				Auth:      siteAuth.Clone(),
 				Protect:   ps.protect,
 				WAF:       cloneSiteWAF(ps.waf),
 				CertFile:  ps.certFile,
@@ -481,8 +524,9 @@ func ParseNginxWithBaseDir(text, baseDir string) (Config, error) {
 
 func parseNginxServerBlock(sb nginxStmt, upstreams map[string][]string, defWAF SiteWAFConfig) (parsedNginxServer, error) {
 	ps := parsedNginxServer{
-		waf:     cloneSiteWAF(defWAF),
-		protect: true,
+		waf:               cloneSiteWAF(defWAF),
+		protect:           true,
+		internalLocations: make(map[string]string),
 	}
 
 	for _, st := range sb.block {
@@ -537,6 +581,14 @@ func parseNginxServerBlock(sb nginxStmt, upstreams map[string][]string, defWAF S
 				}
 				ps.headers[args[0]] = args[1]
 			}
+		case "auth_request":
+			if len(args) >= 1 && !strings.EqualFold(args[0], "off") {
+				ps.authRequest = args[0]
+			}
+		case "auth_request_set":
+			if hdr := parseNginxAuthRequestSetHeader(args); hdr != "" {
+				ps.authSetHeaders = append(ps.authSetHeaders, hdr)
+			}
 		case "allow", "deny":
 			if len(args) >= 1 && !strings.EqualFold(args[0], "all") {
 				act := RuleActionAllow
@@ -567,6 +619,12 @@ func parseNginxServerBlock(sb nginxStmt, upstreams map[string][]string, defWAF S
 			loc, err := parseNginxLocation(st, ps.root, ps.index, ps.browse, upstreams, len(ps.locations))
 			if err != nil {
 				return ps, err
+			}
+			if loc.isInternal {
+				if len(loc.route.Upstreams) > 0 {
+					ps.internalLocations[loc.pattern] = loc.route.Upstreams[0]
+				}
+				continue
 			}
 			ps.locations = append(ps.locations, loc)
 		case "gymbag_verify":
@@ -690,6 +748,9 @@ func parseNginxLocation(
 	var locProxy string
 	var locHeaders map[string]string
 	var locReturn *RouteConfig
+	var locInternal bool
+	var locAuthRequest string
+	var locAuthSetHeaders []string
 
 	for _, sub := range st.block {
 		if len(sub.words) == 0 {
@@ -698,6 +759,16 @@ func parseNginxLocation(
 		kw := strings.ToLower(sub.words[0])
 		args := sub.words[1:]
 		switch kw {
+		case "internal":
+			locInternal = true
+		case "auth_request":
+			if len(args) >= 1 {
+				locAuthRequest = args[0]
+			}
+		case "auth_request_set":
+			if hdr := parseNginxAuthRequestSetHeader(args); hdr != "" {
+				locAuthSetHeaders = append(locAuthSetHeaders, hdr)
+			}
 		case "proxy_pass":
 			if len(args) >= 1 {
 				locProxy = args[0]
@@ -773,12 +844,59 @@ func parseNginxLocation(
 	}
 
 	return parsedNginxLocation{
-		modifier: mod,
-		pattern:  rawPat,
-		rank:     rank,
-		order:    order,
-		route:    rc,
+		modifier:       mod,
+		pattern:        rawPat,
+		rank:           rank,
+		order:          order,
+		isInternal:     locInternal,
+		authRequest:    locAuthRequest,
+		authSetHeaders: locAuthSetHeaders,
+		route:          rc,
 	}, nil
+}
+
+func parseNginxAuthRequestSetHeader(args []string) string {
+	for _, a := range args[min(1, len(args)):] {
+		lower := strings.ToLower(strings.TrimSpace(a))
+		if rest, ok := strings.CutPrefix(lower, "$upstream_http_"); ok && rest != "" {
+			return http.CanonicalHeaderKey(strings.ReplaceAll(rest, "_", "-"))
+		}
+	}
+	return ""
+}
+
+func resolveNginxForwardAuth(authURI string, copyHeaders []string, internalLocs map[string]string) (*ForwardAuthConfig, error) {
+	trimmed := strings.TrimSpace(authURI)
+	if trimmed == "" || strings.EqualFold(trimmed, "off") {
+		return nil, nil
+	}
+	target := trimmed
+	if u, ok := internalLocs[trimmed]; ok {
+		target = u
+	} else {
+		for pat, u := range internalLocs {
+			if pat != "" && strings.HasPrefix(trimmed, pat) {
+				target = u
+				break
+			}
+		}
+	}
+	if !strings.HasPrefix(strings.ToLower(target), "http://") && !strings.HasPrefix(strings.ToLower(target), "https://") {
+		return nil, fmt.Errorf("nginx auth_request %q could not be resolved to an internal proxy_pass location", authURI)
+	}
+	provider := "forward_auth"
+	if strings.Contains(target, "/api/authz/") || strings.Contains(target, "/api/verify") {
+		provider = "authelia"
+	}
+	cfg := &ForwardAuthConfig{
+		Provider:    provider,
+		URL:         target,
+		CopyHeaders: slicesClone(copyHeaders),
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func nginxPrefixToGlob(prefix string) string {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -363,6 +364,8 @@ var knownDirectiveNames = map[string]struct{}{
 	"mc":                   {},
 	"port":                 {},
 	"server_properties":    {},
+	"authelia":             {},
+	"forward_auth":         {},
 }
 
 var ruleFieldKeywords = map[string]struct{}{
@@ -389,6 +392,7 @@ type parseState struct {
 	verify             VerifyServerConfig
 	ssh                *SSHConfig
 	minecraft          *MinecraftConfig
+	authelia           *ForwardAuthConfig
 	remoteRulesRefresh int
 	rulesWatchInterval int
 	bindHost           string
@@ -1123,6 +1127,19 @@ func applyGlobalDirective(
 		return nil, nil
 	}
 
+	if isGlobalScope && len(words) > 0 {
+		if lw := strings.ToLower(words[0]); lw == "authelia" || lw == "forward_auth" {
+			authCfg, handled, err := parseAuthDirective(item, st.authelia, nil, true)
+			if err != nil {
+				return nil, err
+			}
+			if handled {
+				st.authelia = authCfg
+				return nil, nil
+			}
+		}
+	}
+
 	if item.sub != nil {
 		subName := strings.ToLower(words[0])
 		switch subName {
@@ -1691,6 +1708,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			protectExplicit := false
 			var siteUpstreams []string
 			var siteCert, siteKey string
+			var siteAuth *ForwardAuthConfig
 			matchers := make(map[string][]string)
 			siteScope := newRouteScope(matchers)
 			siteHeaders := make(map[string]string)
@@ -1712,10 +1730,21 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					continue
 				}
 
+				if lowerFirst == "authelia" || lowerFirst == "forward_auth" {
+					authCfg, handled, aErr := parseAuthDirective(stmt, st.authelia, matchers, false)
+					if aErr != nil {
+						return Config{}, aErr
+					}
+					if handled {
+						siteAuth = authCfg
+						continue
+					}
+				}
+
 				if stmt.sub != nil {
 					switch lowerFirst {
 					case "handle", "handle_path", "route":
-						routes, hErr := parseHandleScope(stmt, matchers, lowerFirst == "handle_path")
+						routes, hErr := parseHandleScope(stmt, matchers, lowerFirst == "handle_path", st.authelia)
 						if hErr != nil {
 							return Config{}, hErr
 						}
@@ -1860,6 +1889,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					Upstreams: append([]string(nil), siteUpstreams...),
 					Routes:    clonedRoutes,
 					Headers:   cloneHeaderMap(siteHeaders),
+					Auth:      siteAuth.Clone(),
 					Protect:   effectiveProtect,
 					WAF:       cloneSiteWAF(siteWAF),
 					CertFile:  siteCert,
@@ -1916,6 +1946,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			sites = append(sites, SiteConfig{
 				Domain:    h,
 				Upstreams: append([]string(nil), st.flatUpstreams...),
+				Auth:      st.authelia.Clone(),
 				Protect:   effectiveProtect,
 				WAF:       cloneSiteWAF(st.defaultWAF),
 			})
@@ -1931,6 +1962,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		SSH:                st.ssh,
 		Minecraft:          st.minecraft,
 		Verify:             st.verify,
+		Authelia:           st.authelia,
 		BindHost:           st.bindHost,
 		HTTPPort:           st.httpPort,
 		HTTPSPort:          st.httpsPort,
@@ -2457,6 +2489,9 @@ func FormatConfig(cfg Config) string {
 	for _, rs := range cfg.Defaults.RuleSources {
 		globalLines = append(globalLines, formatRuleSourceLines("    ", rs)...)
 	}
+	if cfg.Authelia != nil {
+		globalLines = append(globalLines, formatAuthLines("    ", cfg.Authelia, nil)...)
+	}
 
 	if len(globalLines) > 0 {
 		b.WriteString("{\n")
@@ -2482,6 +2517,10 @@ func FormatConfig(cfg Config) string {
 			b.WriteByte('\n')
 		}
 		formatHeaderLines(&b, "    ", site.Headers)
+		for _, ln := range formatAuthLines("    ", site.Auth, cfg.Authelia) {
+			b.WriteString(ln)
+			b.WriteByte('\n')
+		}
 		if !site.Protect {
 			b.WriteString("    protect off\n")
 		} else {
@@ -2708,8 +2747,78 @@ func formatHeaderLines(b *strings.Builder, indent string, headers map[string]str
 	}
 }
 
+func formatAuthLines(indent string, auth, globalAuth *ForwardAuthConfig) []string {
+	if auth == nil {
+		return nil
+	}
+	if globalAuth != nil && reflect.DeepEqual(auth, globalAuth) {
+		return []string{indent + "authelia"}
+	}
+
+	kw := "authelia"
+	if auth.Provider == "forward_auth" {
+		kw = "forward_auth"
+	}
+
+	isDefaultCopy := slices.Equal(auth.CopyHeaders, DefaultAutheliaCopyHeaders)
+	isDefaultURI := auth.URI == "" || (kw == "authelia" && auth.URI == DefaultAutheliaURI)
+	hasExtra := !isDefaultURI ||
+		(kw == "authelia" && !isDefaultCopy && len(auth.CopyHeaders) > 0) ||
+		(kw == "forward_auth" && len(auth.CopyHeaders) > 0) ||
+		len(auth.Headers) > 0 ||
+		len(auth.Paths) > 0 ||
+		len(auth.ExceptPaths) > 0 ||
+		auth.PortalURL != "" ||
+		(auth.Timeout != 0 && auth.Timeout != DefaultAuthTimeout) ||
+		auth.InsecureSkipTLS
+
+	if !hasExtra {
+		return []string{fmt.Sprintf("%s%s %s", indent, kw, quoteIfNeeded(auth.URL))}
+	}
+
+	lines := []string{fmt.Sprintf("%s%s %s {", indent, kw, quoteIfNeeded(auth.URL))}
+	sub := indent + "    "
+	if auth.URI != "" && !(kw == "authelia" && auth.URI == DefaultAutheliaURI) {
+		lines = append(lines, fmt.Sprintf("%suri %s", sub, quoteIfNeeded(auth.URI)))
+	}
+	if auth.PortalURL != "" {
+		lines = append(lines, fmt.Sprintf("%sportal_url %s", sub, quoteIfNeeded(auth.PortalURL)))
+	}
+	if len(auth.CopyHeaders) > 0 && !(kw == "authelia" && isDefaultCopy) {
+		lines = append(lines, fmt.Sprintf("%scopy_headers %s", sub, formatQuotedArgs(auth.CopyHeaders)))
+	}
+	if len(auth.Paths) > 0 {
+		lines = append(lines, fmt.Sprintf("%spath %s", sub, formatQuotedArgs(auth.Paths)))
+	}
+	if len(auth.ExceptPaths) > 0 {
+		lines = append(lines, fmt.Sprintf("%sexcept %s", sub, formatQuotedArgs(auth.ExceptPaths)))
+	}
+	if len(auth.Headers) > 0 {
+		keys := make([]string, 0, len(auth.Headers))
+		for k := range auth.Headers {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if strings.HasPrefix(k, "-") {
+				lines = append(lines, fmt.Sprintf("%sheader %s", sub, quoteIfNeeded(k)))
+			} else {
+				lines = append(lines, fmt.Sprintf("%sheader %s %s", sub, quoteIfNeeded(k), quoteIfNeeded(auth.Headers[k])))
+			}
+		}
+	}
+	if auth.Timeout != 0 && auth.Timeout != DefaultAuthTimeout {
+		lines = append(lines, fmt.Sprintf("%stimeout %d", sub, auth.Timeout))
+	}
+	if auth.InsecureSkipTLS {
+		lines = append(lines, fmt.Sprintf("%sinsecure_skip_tls on", sub))
+	}
+	lines = append(lines, indent+"}")
+	return lines
+}
+
 func formatRouteConfig(b *strings.Builder, rc RouteConfig) {
-	useBlock := rc.StripPrefix != "" || len(rc.Headers) > 0 ||
+	useBlock := rc.StripPrefix != "" || len(rc.Headers) > 0 || rc.Auth != nil ||
 		(rc.Path == "" && rc.HandlerKind() == "proxy") ||
 		(rc.Path != "" && rc.HandlerKind() == "static")
 	if useBlock {
@@ -2727,6 +2836,10 @@ func formatRouteConfig(b *strings.Builder, rc RouteConfig) {
 			b.WriteString(fmt.Sprintf("    %s {\n", headerKw))
 		}
 		formatHeaderLines(b, "        ", rc.Headers)
+		for _, ln := range formatAuthLines("        ", rc.Auth, nil) {
+			b.WriteString(ln)
+			b.WriteByte('\n')
+		}
 		formatRouteHandlerBody(b, "        ", rc, false)
 		b.WriteString("    }\n")
 		return

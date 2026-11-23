@@ -63,6 +63,9 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mcWorkDir          string
 		verifyURL          string
 		verifyPort         int
+		autheliaURL        string
+		autheliaURI        string
+		autheliaPortal     string
 		noAutoSetup        bool
 		noFirewall         bool
 		verifyLevel        string
@@ -133,6 +136,9 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&mcWorkDir, "mc-work-dir", "", "Working directory for managed Minecraft server (defaults to JAR directory)")
 	fs.StringVar(&verifyURL, "verify-url", "", "Public HTTPS verification portal URL for SSH/Minecraft (defaults to server IP)")
 	fs.IntVar(&verifyPort, "verify-port", 0, "Shared HTTPS verification portal port (default 8443)")
+	fs.StringVar(&autheliaURL, "authelia", "", "Enable Authelia forward auth with this URL (e.g. http://127.0.0.1:9091)")
+	fs.StringVar(&autheliaURI, "authelia-uri", "", "Authelia forward-auth endpoint URI (default /api/authz/forward-auth)")
+	fs.StringVar(&autheliaPortal, "authelia-portal", "", "Authelia login portal URL for browser 401 redirect / rd=")
 	fs.BoolVar(&noAutoSetup, "no-auto-setup", false, "Skip automatic sshd_config/firewall and server.properties modifications")
 	fs.BoolVar(&noFirewall, "no-firewall", false, "Skip automatic firewall rules when configuring SSH protection")
 	fs.StringVar(&verifyLevel, "l", "", "Verify level: 0 (always), 1 (only suspicious), 2 (only ai), 3 (suspicious & ai), or off")
@@ -172,7 +178,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.BoolVar(&interactive, "interactive", false, "Run interactive setup wizard")
 	fs.BoolVar(&dryRun, "dry-run", false, "Print generated config to stdout without writing to disk")
 	fs.BoolVar(&dryRun, "stdout", false, "Print generated config to stdout without writing to disk")
-	fs.StringVar(&serviceType, "service", "", "Also register a system service (auto, systemd, launchd, openrc, supervisor)")
+	fs.StringVar(&serviceType, "service", "", "Also register a system service (auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)")
 	fs.StringVar(&serviceName, "service-name", "gymbag", "System service name when --service is used")
 	fs.StringVar(&serviceUser, "service-user", "", "Run-as user for system-level service")
 	fs.BoolVar(&serviceUserScope, "user", false, "Register user-level service when --service is used")
@@ -287,12 +293,28 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		autoHostsOpt = &f
 	}
 
+	if (autheliaURI != "" || autheliaPortal != "") && strings.TrimSpace(autheliaURL) == "" {
+		_, _ = fmt.Fprintln(stderr, "ERROR gymbag init: --authelia-uri and --authelia-portal require --authelia <url>")
+		return 2
+	}
+
+	var autheliaOpt *config.ForwardAuthConfig
+	if strings.TrimSpace(autheliaURL) != "" {
+		autheliaOpt = &config.ForwardAuthConfig{
+			Provider:  "authelia",
+			URL:       autheliaURL,
+			URI:       autheliaURI,
+			PortalURL: autheliaPortal,
+		}
+	}
+
 	opts := config.GenerateOptions{
 		Preset:             preset,
 		Domain:             domain,
 		Upstream:           upstream,
 		Sites:              parsedSites,
 		Verify:             config.VerifyServerConfig{URL: verifyURL, Port: verifyPort},
+		Authelia:           autheliaOpt,
 		VerifyLevel:        verifyLevel,
 		Protect:            protectOpt,
 		Difficulty:         difficulty,
@@ -332,7 +354,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	hasConfigFlags := len(templateFlags) > 0 || preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
-		useSSH || useMC || verifyURL != "" || verifyPort != 0 ||
+		useSSH || useMC || verifyURL != "" || verifyPort != 0 || autheliaURL != "" ||
 		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || len(initRuleSources) > 0 ||
 		rulesWatchInterval != "" || noProtect || sslProvider != "" || email != "" ||
 		httpPort != 0 || httpsPort != 0 || adminAddr != ""
@@ -824,7 +846,7 @@ func runInitWizard(
 		}
 	}
 
-	svcAns, err := promptLine(r, out, "Register system service? (none, auto, systemd, launchd, openrc, supervisor)", "none")
+	svcAns, err := promptLine(r, out, "Register system service? (none, auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)", "none")
 	if err != nil {
 		return "", err
 	}
@@ -961,6 +983,9 @@ Flags:
       --mc-work-dir <dir>      Working directory for managed Minecraft server (defaults to JAR directory)
       --verify-url <url>       Public HTTPS verify portal URL for SSH/Minecraft (defaults to server IP + IP SSL cert)
       --verify-port <port>     Shared HTTPS verify portal port for SSH/Minecraft (default 8443)
+      --authelia <url>         Enable Authelia forward auth using this URL (e.g. http://127.0.0.1:9091)
+      --authelia-uri <path>    Authelia verification URI (default /api/authz/forward-auth)
+      --authelia-portal <url>  Authelia portal URL for browser 401 redirect / rd=
       --no-auto-setup          Skip automatic sshd_config/firewall and server.properties modifications
       --no-firewall            Skip automatic firewall setup when configuring SSH protection
   -l, --verify <0-3|off>       Verify level (0=always, 1=suspicious, 2=ai, 3=suspicious & ai, off=disable)
@@ -990,7 +1015,7 @@ Flags:
   -y, --yes                    Non-interactive mode (use defaults for omitted flags)
   -i, --interactive            Force interactive setup wizard
       --dry-run                Print generated config to stdout without writing a file
-      --service <type>         Also register a system service (auto, systemd, launchd, openrc, supervisor)
+      --service <type>         Also register a system service (auto, systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)
       --service-name <name>    Service name when --service is used (default gymbag)
       --service-user <user>    Run-as user for system-level service
       --user                   Register user-level service

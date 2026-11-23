@@ -34,9 +34,92 @@ func parseUpstream(raw string) ParsedUpstream {
 	}
 }
 
+// HeaderCopyPair maps a canonical auth response header name to a canonical upstream request header name.
+type HeaderCopyPair struct {
+	Src string
+	Dst string
+}
+
+// CompiledAuth holds pre-compiled forward-authentication matchers and header copy rules.
+type CompiledAuth struct {
+	Config      config.ForwardAuthConfig
+	EndpointURL string
+	CopyPairs   []HeaderCopyPair
+	StripDst    []string
+	matchPaths  []func(string) bool
+	exceptPaths []func(string) bool
+}
+
+// AppliesTo reports whether forward authentication applies to reqPath.
+func (ca *CompiledAuth) AppliesTo(reqPath string) bool {
+	if ca == nil {
+		return false
+	}
+	for _, ex := range ca.exceptPaths {
+		if ex(reqPath) {
+			return false
+		}
+	}
+	if len(ca.matchPaths) == 0 {
+		return true
+	}
+	for _, m := range ca.matchPaths {
+		if m(reqPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func compileAuth(raw *config.ForwardAuthConfig) *CompiledAuth {
+	if raw == nil {
+		return nil
+	}
+	cloned := raw.Clone()
+	endpoint, err := cloned.EndpointURL()
+	if err != nil {
+		return nil
+	}
+	pairs := make([]HeaderCopyPair, 0, len(cloned.CopyHeaders))
+	stripSeen := make(map[string]struct{}, len(cloned.CopyHeaders))
+	var stripDst []string
+	for _, entry := range cloned.CopyHeaders {
+		src, dst, pErr := config.ParseCopyHeaderMapping(entry)
+		if pErr != nil {
+			continue
+		}
+		pairs = append(pairs, HeaderCopyPair{Src: src, Dst: dst})
+		if _, ok := stripSeen[dst]; !ok {
+			stripSeen[dst] = struct{}{}
+			stripDst = append(stripDst, dst)
+		}
+	}
+	var matchFns []func(string) bool
+	for _, p := range cloned.Paths {
+		if fn, mErr := config.CompilePathMatcher(p); mErr == nil {
+			matchFns = append(matchFns, fn)
+		}
+	}
+	var exceptFns []func(string) bool
+	for _, p := range cloned.ExceptPaths {
+		if fn, mErr := config.CompilePathMatcher(p); mErr == nil {
+			exceptFns = append(exceptFns, fn)
+		}
+	}
+	return &CompiledAuth{
+		Config:      *cloned,
+		EndpointURL: endpoint,
+		CopyPairs:   pairs,
+		StripDst:    stripDst,
+		matchPaths:  matchFns,
+		exceptPaths: exceptFns,
+	}
+}
+
 // CompiledRoute holds a compiled path matcher and pre-parsed upstreams for a RouteConfig.
 type CompiledRoute struct {
 	Config    config.RouteConfig
+	Auth      *CompiledAuth
 	match     func(string) bool
 	upstreams []ParsedUpstream
 	rr        atomic.Uint64
@@ -80,10 +163,11 @@ func (cr *CompiledRoute) NextParsedUpstream() ParsedUpstream {
 }
 
 // SiteRoute bundles a website's immutable SiteConfig, pre-parsed upstreams, compiled routes,
-// compiled WAF AccessGate, and upstream load-balancer index.
+// compiled WAF AccessGate, compiled forward auth, and upstream load-balancer index.
 type SiteRoute struct {
 	Config    config.SiteConfig
 	Gate      waf.AccessGate
+	Auth      *CompiledAuth
 	Routes    []*CompiledRoute
 	upstreams []ParsedUpstream
 	rr        atomic.Uint64
@@ -218,6 +302,7 @@ func (r *SiteRouter) ReloadWithProviders(
 			}
 			compiledRoutes = append(compiledRoutes, &CompiledRoute{
 				Config:    rc,
+				Auth:      compileAuth(rc.Auth),
 				match:     matcher,
 				upstreams: routeUps,
 			})
@@ -225,6 +310,7 @@ func (r *SiteRouter) ReloadWithProviders(
 		entry := &SiteRoute{
 			Config:    sc,
 			Gate:      waf.BuildSiteEngineWithProviders(sc, counter, tokens, intel, ipSecurityAction, remoteRules),
+			Auth:      compileAuth(sc.Auth),
 			Routes:    compiledRoutes,
 			upstreams: parsed,
 		}

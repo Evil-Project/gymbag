@@ -42,6 +42,7 @@ type RuntimeOptions struct {
 	RemoteRulesHTTP      *http.Client
 	LocalWatchInterval   time.Duration
 	HTTPTransport        http.RoundTripper
+	AuthHTTPClient       *http.Client
 	WSDialer             proxy.DialContextFunc
 	ACMEHTTP             *http.Client
 	HostsFilePath        string
@@ -403,6 +404,11 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 	remoteMgr.SetOnUpdate(rt.reloadRouter)
 
 	gateway := NewGatewayHandler(challenges, clearance, httpProxy, wsProxy, board, trustedNets)
+	authClient := opts.AuthHTTPClient
+	if authClient == nil && opts.HTTPTransport != nil {
+		authClient = &http.Client{Transport: opts.HTTPTransport}
+	}
+	gateway.SetAuthenticator(NewForwardAuthenticator(authClient, logger))
 	// Fused high-throughput HTTPS handler: avoids per-request context cloning, duplicate IP resolution,
 	// and duplicate WebSocket upgrade checks while preserving identical security semantics.
 	rt.HTTPSHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

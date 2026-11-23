@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -135,9 +136,13 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 		sites := make([]SiteConfig, 0, len(domains))
 		var baseRoutes []RouteConfig
 		var baseHeaders map[string]string
-		if upstream == "" && len(cfg.Sites) > 0 && len(cfg.Sites[0].Routes) > 0 {
-			baseRoutes = cfg.Sites[0].Routes
-			baseHeaders = cfg.Sites[0].Headers
+		var baseAuth *ForwardAuthConfig
+		if len(cfg.Sites) > 0 {
+			baseAuth = cfg.Sites[0].Auth
+			if upstream == "" && len(cfg.Sites[0].Routes) > 0 {
+				baseRoutes = cfg.Sites[0].Routes
+				baseHeaders = cfg.Sites[0].Headers
+			}
 		}
 		for _, d := range domains {
 			sc := SiteConfig{
@@ -145,6 +150,7 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 				Protect: true,
 				WAF:     cloneSiteWAF(cfg.Defaults),
 				Headers: cloneHeaderMap(baseHeaders),
+				Auth:    baseAuth.Clone(),
 			}
 			if upstream != "" {
 				sc.Upstreams = []string{upstream}
@@ -293,6 +299,9 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		}
 		if base.Minecraft != nil {
 			cfg.Minecraft = base.Minecraft.Clone()
+		}
+		if base.Authelia != nil {
+			cfg.Authelia = base.Authelia.Clone()
 		}
 	} else {
 		cfg = Default()
@@ -715,6 +724,10 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		cfg.Sites = nil
 	}
 
+	if err := applyAutheliaEnv(&cfg, getenv); err != nil {
+		return Config{}, err
+	}
+
 	rawBind := strings.TrimSpace(getenv("GYMBAG_BIND"))
 	if rawBind != "" {
 		cfg.BindHost = rawBind
@@ -864,6 +877,100 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 		cfg.Minecraft.Protect = b
 	}
 	return cfg.Minecraft.Enabled, nil
+}
+
+func applyAutheliaEnv(cfg *Config, getenv func(string) string) error {
+	rawURL := firstNonEmpty(getenv("GYMBAG_AUTHELIA_URL"), getenv("GYMBAG_FORWARD_AUTH_URL"))
+	rawURI := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_URI"))
+	rawCopy := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_COPY_HEADERS"))
+	rawPortal := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_PORTAL_URL"))
+	rawTimeout := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_TIMEOUT"))
+	rawInsecure := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_INSECURE_TLS"))
+	rawDomains := strings.TrimSpace(getenv("GYMBAG_AUTHELIA_DOMAINS"))
+
+	if rawURL == "" && rawURI == "" && rawCopy == "" && rawPortal == "" &&
+		rawTimeout == "" && rawInsecure == "" && rawDomains == "" {
+		return nil
+	}
+
+	var authCfg *ForwardAuthConfig
+	if cfg.Authelia != nil {
+		authCfg = cfg.Authelia.Clone()
+	} else {
+		authCfg = &ForwardAuthConfig{}
+	}
+	if rawURL != "" {
+		authCfg.URL = rawURL
+		if strings.TrimSpace(getenv("GYMBAG_AUTHELIA_URL")) != "" {
+			authCfg.Provider = "authelia"
+		}
+	}
+	if authCfg.URL == "" {
+		return fmt.Errorf("GYMBAG_AUTHELIA_URL is required when configuring Authelia via environment variables")
+	}
+	if rawURI != "" {
+		authCfg.URI = rawURI
+	}
+	if rawCopy != "" {
+		fields := strings.FieldsFunc(rawCopy, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t'
+		})
+		authCfg.CopyHeaders = fields
+	}
+	if rawPortal != "" {
+		authCfg.PortalURL = rawPortal
+	}
+	if rawTimeout != "" {
+		sec, err := ParseDurationSeconds(rawTimeout, "GYMBAG_AUTHELIA_TIMEOUT")
+		if err != nil {
+			return err
+		}
+		authCfg.Timeout = sec
+	}
+	if rawInsecure != "" {
+		b, err := parseBool(rawInsecure, "GYMBAG_AUTHELIA_INSECURE_TLS")
+		if err != nil {
+			return err
+		}
+		authCfg.InsecureSkipTLS = b
+	}
+	if err := authCfg.Validate(); err != nil {
+		return err
+	}
+	cfg.Authelia = authCfg
+
+	if rawDomains != "" {
+		doms, err := splitDomains(rawDomains)
+		if err != nil {
+			return err
+		}
+		targetSet := make(map[string]struct{}, len(doms))
+		for _, d := range doms {
+			targetSet[d] = struct{}{}
+		}
+		for i := range cfg.Sites {
+			if _, ok := targetSet[cfg.Sites[i].Domain]; ok {
+				cfg.Sites[i].Auth = authCfg.Clone()
+			}
+		}
+		return nil
+	}
+
+	var portalHost string
+	if authCfg.PortalURL != "" {
+		if pu, pErr := url.Parse(authCfg.PortalURL); pErr == nil {
+			portalHost = host.Normalize(pu.Hostname())
+		}
+	}
+	for i := range cfg.Sites {
+		if portalHost != "" && cfg.Sites[i].Domain == portalHost {
+			continue
+		}
+		if cfg.Sites[i].Auth == nil || rawURL != "" {
+			cfg.Sites[i].Auth = authCfg.Clone()
+		}
+	}
+	return nil
 }
 
 func envPositiveInt(getenv func(string) string, name string) (int, bool, error) {

@@ -53,6 +53,9 @@ type RouteConfig struct {
 	// Headers mutates response headers. A key prefixed with "-" deletes that header (value ignored);
 	// any other key sets (replaces) the header to the given value.
 	Headers map[string]string `json:"headers,omitempty"`
+
+	// Auth configures per-route forward authentication (overrides any site-level Auth when set).
+	Auth *ForwardAuthConfig `json:"auth,omitempty"`
 }
 
 // HandlerKind reports which handler the route uses: "proxy", "static", "respond", "redirect", or "" if none.
@@ -85,6 +88,7 @@ func (r RouteConfig) Clone() RouteConfig {
 		out.Redirect = &v
 	}
 	out.Headers = cloneHeaderMap(r.Headers)
+	out.Auth = r.Auth.Clone()
 	return out
 }
 
@@ -168,7 +172,13 @@ func (r *RouteConfig) Validate() error {
 	if handlers > 1 {
 		return fmt.Errorf("route %q must use exactly one handler (upstreams, root, respond, or redirect)", r.Path)
 	}
-	return validateHeaderMap(r.Headers)
+	if err := validateHeaderMap(r.Headers); err != nil {
+		return err
+	}
+	if r.Auth != nil {
+		return r.Auth.Validate()
+	}
+	return nil
 }
 
 func validateHeaderMap(h map[string]string) error {
