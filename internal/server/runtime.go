@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -49,6 +50,9 @@ type RuntimeOptions struct {
 	DisablePublicIPProbe bool
 	ServerIPs            []string
 	MCServerOptions      *mcserver.Options
+	ConsoleIn            io.Reader
+	ConsoleOut           io.Writer
+	ConsoleErr           io.Writer
 	Logger               *slog.Logger
 }
 
@@ -356,14 +360,29 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 			mcProxy = tcpguard.NewMinecraftProxy(*cfg.Minecraft, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
 			if cfg.Minecraft.ServerJar != "" {
 				mcOpts := mcserver.Options{
-					BaseDir: cfg.BaseDir,
-					Config:  *cfg.Minecraft,
-					Logger:  logger,
+					BaseDir:    cfg.BaseDir,
+					Config:     *cfg.Minecraft,
+					Logger:     logger,
+					ConsoleIn:  opts.ConsoleIn,
+					ConsoleOut: opts.ConsoleOut,
+					ConsoleErr: opts.ConsoleErr,
 				}
 				if opts.MCServerOptions != nil {
 					mcOpts.Discover = opts.MCServerOptions.Discover
 					mcOpts.CommandBuilder = opts.MCServerOptions.CommandBuilder
 					mcOpts.RestartBaseDelay = opts.MCServerOptions.RestartBaseDelay
+					if opts.MCServerOptions.ConsoleIn != nil {
+						mcOpts.ConsoleIn = opts.MCServerOptions.ConsoleIn
+					}
+					if opts.MCServerOptions.ConsoleOut != nil {
+						mcOpts.ConsoleOut = opts.MCServerOptions.ConsoleOut
+					}
+					if opts.MCServerOptions.ConsoleErr != nil {
+						mcOpts.ConsoleErr = opts.MCServerOptions.ConsoleErr
+					}
+					if opts.MCServerOptions.ConsoleBufferSize > 0 {
+						mcOpts.ConsoleBufferSize = opts.MCServerOptions.ConsoleBufferSize
+					}
 				}
 				mcServer = mcserver.NewManager(mcOpts)
 			}
@@ -603,6 +622,9 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	if rt.MinecraftProxy != nil && next.MinecraftEnabled() {
 		rt.MinecraftProxy.UpdateConfig(*next.Minecraft, next.Verify, next.Defaults.Rules, next.Intel.IPSecurityAction)
 	}
+	if rt.MinecraftServer != nil && next.Minecraft != nil {
+		rt.MinecraftServer.SetConsoleEnabled(next.Minecraft.Console)
+	}
 	if next.TLS.HSTS != nil {
 		rt.HSTS.Store(*next.TLS.HSTS)
 	} else {
@@ -795,6 +817,48 @@ func (rt *Runtime) MinecraftServerStatus() *mcserver.Status {
 	return &st
 }
 
+// MinecraftConsoleEnabled reports whether Minecraft server console integration is active.
+func (rt *Runtime) MinecraftConsoleEnabled() bool {
+	if rt.MinecraftServer == nil {
+		return false
+	}
+	return rt.MinecraftServer.ConsoleEnabled()
+}
+
+// MinecraftConsoleLines returns buffered console lines with Seq > sinceSeq.
+func (rt *Runtime) MinecraftConsoleLines(sinceSeq uint64, limit int) []mcserver.ConsoleLine {
+	if rt.MinecraftServer == nil {
+		return nil
+	}
+	return rt.MinecraftServer.ConsoleLines(sinceSeq, limit)
+}
+
+// MinecraftConsoleSubscribe subscribes to the managed Minecraft server console stream.
+func (rt *Runtime) MinecraftConsoleSubscribe() ([]mcserver.ConsoleLine, <-chan mcserver.ConsoleLine, func()) {
+	if rt.MinecraftServer == nil {
+		ch := make(chan mcserver.ConsoleLine)
+		close(ch)
+		return nil, ch, func() {}
+	}
+	return rt.MinecraftServer.SubscribeConsole()
+}
+
+// MinecraftSendCommand writes a command line to the running Minecraft server's console.
+func (rt *Runtime) MinecraftSendCommand(cmd string) error {
+	if rt.MinecraftServer == nil {
+		return mcserver.ErrNotRunning
+	}
+	return rt.MinecraftServer.SendCommand(cmd)
+}
+
+// MinecraftStartServer relaunches the managed Minecraft server after a manual stop.
+func (rt *Runtime) MinecraftStartServer() error {
+	if rt.MinecraftServer == nil {
+		return errors.New("no managed Minecraft server is configured")
+	}
+	return rt.MinecraftServer.RequestStart()
+}
+
 // Close stops any managed Minecraft server, removes managed hosts entries, and releases state store resources.
 func (rt *Runtime) Close() error {
 	var mcErr error
@@ -896,9 +960,13 @@ func (rt *Runtime) Serve(ctx context.Context) error {
 			"port", cfg.Minecraft.Port,
 			"upstream", cfg.Minecraft.Upstream,
 			"server_jar", cfg.Minecraft.ServerJar,
+			"console", cfg.Minecraft.Console,
 			"protected", cfg.Minecraft.Protect,
 			"verify_level", int(cfg.Minecraft.VerifyLevel),
 		)
+		if cfg.Minecraft.Console && cfg.Minecraft.ServerJar == "" {
+			rt.Logger.Warn("minecraft.console is enabled without minecraft.server_jar; set minecraft.server_jar so Gymbag manages the Minecraft server process and attaches its console")
+		}
 	}
 	if cfg.NeedsVerifyServer() {
 		rt.Logger.Info(

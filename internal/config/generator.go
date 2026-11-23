@@ -34,6 +34,7 @@ type TCPSpec struct {
 	ServerArgs       []string
 	WorkDir          string
 	AutoRestart      *bool
+	Console          bool
 	VerifyLevel      string
 	Protect          *bool
 	Difficulty       int
@@ -462,6 +463,7 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 				b := *opts.Minecraft.AutoRestart
 				mcCfg.AutoRestart = &b
 			}
+			mcCfg.Console = opts.Minecraft.Console
 			if opts.Minecraft.VerifyLevel != "" {
 				lvl, p, vErr := ParseVerifyLevel(opts.Minecraft.VerifyLevel)
 				if vErr != nil {

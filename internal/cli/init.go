@@ -61,6 +61,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mcJava             string
 		mcJVMArgs          string
 		mcWorkDir          string
+		mcConsole          bool
 		verifyURL          string
 		verifyPort         int
 		autheliaURL        string
@@ -134,6 +135,8 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&mcJava, "java", "", "Alias for --mc-java")
 	fs.StringVar(&mcJVMArgs, "mc-jvm-args", "", "Space-separated JVM flags for Minecraft server (e.g. '-Xms1G -Xmx2G')")
 	fs.StringVar(&mcWorkDir, "mc-work-dir", "", "Working directory for managed Minecraft server (defaults to JAR directory)")
+	fs.BoolVar(&mcConsole, "mc-console", false, "Bring managed Minecraft server console into Gymbag foreground & Admin API")
+	fs.BoolVar(&mcConsole, "minecraft-console", false, "Alias for --mc-console")
 	fs.StringVar(&verifyURL, "verify-url", "", "Public HTTPS verification portal URL for SSH/Minecraft (defaults to server IP)")
 	fs.IntVar(&verifyPort, "verify-port", 0, "Shared HTTPS verification portal port (default 8443)")
 	fs.StringVar(&autheliaURL, "authelia", "", "Enable Authelia forward auth with this URL (e.g. http://127.0.0.1:9091)")
@@ -258,7 +261,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		useSSH = true
 	}
 	if enableMC || mcPort != 0 || mcUpstream != "" || mcPropertiesPath != "" ||
-		mcJar != "" || mcJava != "" || mcJVMArgs != "" || mcWorkDir != "" {
+		mcJar != "" || mcJava != "" || mcJVMArgs != "" || mcWorkDir != "" || mcConsole {
 		useMC = true
 	}
 	if domain != "" || upstream != "" || len(parsedSites) > 0 {
@@ -350,6 +353,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			JavaPath:  mcJava,
 			JVMArgs:   strings.Fields(mcJVMArgs),
 			WorkDir:   mcWorkDir,
+			Console:   mcConsole,
 		}
 	}
 
@@ -721,6 +725,13 @@ func runInitWizard(
 			}
 			opts.Minecraft.ServerJar = ans
 		}
+		if opts.Minecraft.ServerJar != "" && !opts.Minecraft.Console {
+			enableConsole, err := promptYesNo(r, out, "Bring Minecraft server console into Gymbag app?", true)
+			if err != nil {
+				return "", err
+			}
+			opts.Minecraft.Console = enableConsole
+		}
 		if opts.Minecraft.Upstream == "" {
 			ans, err := promptLine(r, out, "Minecraft backend upstream ('auto' to randomize server.properties port, or host:port)", "auto")
 			if err != nil {
@@ -981,6 +992,7 @@ Flags:
       --mc-java, --java <bin>  Explicit Java binary path for Minecraft server (defaults to auto-select)
       --mc-jvm-args <args>     Space-separated JVM flags (e.g. "-Xms1G -Xmx4G")
       --mc-work-dir <dir>      Working directory for managed Minecraft server (defaults to JAR directory)
+      --mc-console             Bring managed Minecraft server console into Gymbag foreground & Admin API
       --verify-url <url>       Public HTTPS verify portal URL for SSH/Minecraft (defaults to server IP + IP SSL cert)
       --verify-port <port>     Shared HTTPS verify portal port for SSH/Minecraft (default 8443)
       --authelia <url>         Enable Authelia forward auth using this URL (e.g. http://127.0.0.1:9091)

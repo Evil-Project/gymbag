@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -100,6 +102,8 @@ func NewAdminHandler(ctrl ConfigController) http.Handler {
 			handleAdminRemoteRulesStatus(w, r, ctrl)
 		case path == "/api/v1/rules/remote/refresh":
 			handleAdminRemoteRulesRefresh(w, r, ctrl)
+		case path == "/api/v1/minecraft/console":
+			handleAdminMinecraftConsole(w, r, ctrl)
 		case path == "/api/v1/sites":
 			handleAdminSitesCollection(w, r, ctrl)
 		case strings.HasPrefix(path, "/api/v1/sites/"):
@@ -134,6 +138,197 @@ func NewAdminHandler(ctrl ConfigController) http.Handler {
 // managed Minecraft server subprocess health in /api/v1/health.
 type MinecraftServerStatusProvider interface {
 	MinecraftServerStatus() *mcserver.Status
+}
+
+// MinecraftConsoleProvider is an optional interface implemented by Runtime to expose the
+// managed Minecraft server console stream and command API.
+type MinecraftConsoleProvider interface {
+	MinecraftServerStatusProvider
+	MinecraftConsoleEnabled() bool
+	MinecraftConsoleLines(sinceSeq uint64, limit int) []mcserver.ConsoleLine
+	MinecraftConsoleSubscribe() ([]mcserver.ConsoleLine, <-chan mcserver.ConsoleLine, func())
+	MinecraftSendCommand(cmd string) error
+	MinecraftStartServer() error
+}
+
+func handleAdminMinecraftConsole(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {
+	prov, ok := ctrl.(MinecraftConsoleProvider)
+	if !ok {
+		writeAdminError(w, http.StatusNotFound, "not_found", "no managed Minecraft server is configured (set minecraft.server_jar)")
+		return
+	}
+	st := prov.MinecraftServerStatus()
+	if st == nil {
+		writeAdminError(w, http.StatusNotFound, "not_found", "no managed Minecraft server is configured (set minecraft.server_jar)")
+		return
+	}
+	if !prov.MinecraftConsoleEnabled() {
+		writeAdminError(w, http.StatusForbidden, "console_disabled", "Minecraft console is disabled (set minecraft.console to true)")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		var sinceSeq uint64
+		if rawSince := strings.TrimSpace(r.URL.Query().Get("since")); rawSince != "" {
+			v, err := strconv.ParseUint(rawSince, 10, 64)
+			if err != nil {
+				writeAdminError(w, http.StatusBadRequest, "bad_request", "invalid since sequence number")
+				return
+			}
+			sinceSeq = v
+		} else if rawLastID := strings.TrimSpace(r.Header.Get("Last-Event-ID")); rawLastID != "" {
+			if v, err := strconv.ParseUint(rawLastID, 10, 64); err == nil {
+				sinceSeq = v
+			}
+		}
+
+		limit := 200
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			v, err := strconv.Atoi(rawLimit)
+			if err != nil || v < 0 {
+				writeAdminError(w, http.StatusBadRequest, "bad_request", "invalid limit parameter")
+				return
+			}
+			if v > 1000 {
+				v = 1000
+			}
+			limit = v
+		}
+
+		streamParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("stream")))
+		isSSE := streamParam == "1" || streamParam == "true" ||
+			strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
+		if isSSE {
+			backlog, ch, unsub := prov.MinecraftConsoleSubscribe()
+			defer unsub()
+
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.Header().Set("X-Accel-Buffering", "no")
+			w.WriteHeader(http.StatusOK)
+
+			rc := http.NewResponseController(w)
+			var filtered []mcserver.ConsoleLine
+			if limit > 0 {
+				for _, ev := range backlog {
+					if ev.Seq > sinceSeq {
+						filtered = append(filtered, ev)
+					}
+				}
+				if len(filtered) > limit {
+					filtered = filtered[len(filtered)-limit:]
+				}
+			}
+
+			lastSentSeq := sinceSeq
+			if len(filtered) == 0 {
+				_, _ = io.WriteString(w, ": connected\n\n")
+			} else {
+				for _, ev := range filtered {
+					b, _ := json.Marshal(ev)
+					if _, err := fmt.Fprintf(w, "id: %d\nevent: console\ndata: %s\n\n", ev.Seq, b); err != nil {
+						return
+					}
+					if ev.Seq > lastSentSeq {
+						lastSentSeq = ev.Seq
+					}
+				}
+			}
+			_ = rc.Flush()
+
+			keepAlive := time.NewTicker(25 * time.Second)
+			defer keepAlive.Stop()
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case ev, open := <-ch:
+					if !open {
+						return
+					}
+					if ev.Seq <= lastSentSeq {
+						continue
+					}
+					lastSentSeq = ev.Seq
+					b, _ := json.Marshal(ev)
+					if _, err := fmt.Fprintf(w, "id: %d\nevent: console\ndata: %s\n\n", ev.Seq, b); err != nil {
+						return
+					}
+					_ = rc.Flush()
+				case <-keepAlive.C:
+					if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+						return
+					}
+					_ = rc.Flush()
+				}
+			}
+		}
+
+		var lines []mcserver.ConsoleLine
+		if limit > 0 {
+			lines = prov.MinecraftConsoleLines(sinceSeq, limit)
+		}
+		if lines == nil {
+			lines = []mcserver.ConsoleLine{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"running":         st.Running,
+			"pid":             st.PID,
+			"console_enabled": true,
+			"lines":           lines,
+		})
+
+	case http.MethodPost:
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var body struct {
+			Command string `json:"command"`
+		}
+		if !decodeStrictJSON(w, r.Body, &body) {
+			return
+		}
+		trimmed := strings.Trim(body.Command, "\r\n")
+		if strings.ContainsAny(trimmed, "\r\n") {
+			writeAdminError(w, http.StatusBadRequest, "invalid_command", "command must be a single line")
+			return
+		}
+		cmd := strings.TrimSpace(trimmed)
+		if cmd == "" {
+			writeAdminError(w, http.StatusBadRequest, "invalid_command", "command must not be empty")
+			return
+		}
+		if (strings.EqualFold(cmd, "start") || strings.EqualFold(cmd, "/start")) && !st.Running {
+			if err := prov.MinecraftStartServer(); err != nil {
+				writeAdminError(w, http.StatusConflict, "start_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"command": cmd,
+				"action":  "started",
+			})
+			return
+		}
+		if err := prov.MinecraftSendCommand(cmd); err != nil {
+			if errors.Is(err, mcserver.ErrNotRunning) {
+				writeAdminError(w, http.StatusConflict, "not_running", err.Error())
+				return
+			}
+			writeAdminError(w, http.StatusBadRequest, "invalid_command", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"command": cmd,
+		})
+
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST is required")
+	}
 }
 
 func handleAdminHealth(w http.ResponseWriter, r *http.Request, ctrl ConfigController) {

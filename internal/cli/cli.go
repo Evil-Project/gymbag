@@ -54,14 +54,16 @@ func ExecuteWithIO(argv []string, stdin io.Reader, stdout, stderr io.Writer) int
 			return runFmt(argv[1:], stdout, stderr)
 		case "reverse-proxy":
 			return runReverseProxyCmd(argv[1:], stdout, stderr)
+		case "console":
+			return runConsoleCmd(argv[1:], stdin, stdout, stderr)
 		case "run":
-			return runServerCmd(argv[1:], stdout, stderr)
+			return runServerCmd(argv[1:], stdin, stdout, stderr)
 		}
 	}
-	return runServerCmd(argv, stdout, stderr)
+	return runServerCmd(argv, stdin, stdout, stderr)
 }
 
-func runServerCmd(args []string, stdout, stderr io.Writer) int {
+func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gymbag run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -78,6 +80,7 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 		adminAddr          string
 		httpPort           int
 		httpsPort          int
+		mcConsole          bool
 		watch              bool
 	)
 
@@ -101,6 +104,8 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address (e.g. 127.0.0.1:2019 or off)")
 	fs.IntVar(&httpPort, "http-port", 0, "HTTP redirect/ACME port (default 80)")
 	fs.IntVar(&httpsPort, "https-port", 0, "HTTPS gateway port (default 443)")
+	fs.BoolVar(&mcConsole, "mc-console", false, "Bring managed Minecraft server console into Gymbag")
+	fs.BoolVar(&mcConsole, "minecraft-console", false, "Alias for --mc-console")
 	fs.BoolVar(&watch, "watch", false, "Watch config file for changes and hot-reload site policies")
 
 	if err := parseInterspersedFlags(fs, args); err != nil {
@@ -123,6 +128,11 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 		f := false
 		protectOpt = &f
 	}
+	var mcConsoleOpt *bool
+	if mcConsole {
+		t := true
+		mcConsoleOpt = &t
+	}
 
 	loadOpts := config.LoadOptions{
 		ConfigPath:         cfgFile,
@@ -136,6 +146,7 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 		AdminAddr:          adminAddr,
 		HTTPPort:           httpPort,
 		HTTPSPort:          httpsPort,
+		MCConsole:          mcConsoleOpt,
 	}
 
 	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
@@ -144,7 +155,7 @@ func runServerCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	return serveWithSignals(cfg, resolveWatchedPath(cfgFile), watch, loadOpts, sslProvider, stderr)
+	return serveWithSignals(cfg, resolveWatchedPath(cfgFile), watch, loadOpts, sslProvider, stdin, stdout, stderr)
 }
 
 func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
@@ -213,7 +224,7 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "ERROR gymbag: %v\n", err)
 		return 1
 	}
-	return serveWithSignals(cfg, "", false, loadOpts, sslProvider, stderr)
+	return serveWithSignals(cfg, "", false, loadOpts, sslProvider, nil, stdout, stderr)
 }
 
 func runValidate(args []string, stdout, stderr io.Writer) int {
@@ -289,7 +300,13 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		if !cfg.Minecraft.Protect {
 			mcState = "unprotected"
 		}
+		if cfg.Minecraft.Console {
+			mcState += ", console=on"
+		}
 		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s [%s]\n", cfg.Minecraft.Port, cfg.Minecraft.Upstream, mcState)
+		if cfg.Minecraft.Console && cfg.Minecraft.ServerJar == "" {
+			_, _ = fmt.Fprintf(stdout, "    console_note=minecraft.console is on without server_jar (only managed server_jar launches attach a subprocess console)\n")
+		}
 		if cfg.Minecraft.ServerJar != "" {
 			jarResolved := cfg.Minecraft.ServerJar
 			if !filepath.IsAbs(jarResolved) && cfg.BaseDir != "" {
@@ -397,12 +414,17 @@ func runFmt(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func serveWithSignals(cfg config.Config, watchPath string, watch bool, opts config.LoadOptions, sslProvider string, stderr io.Writer) int {
+func serveWithSignals(cfg config.Config, watchPath string, watch bool, opts config.LoadOptions, sslProvider string, stdin io.Reader, stdout, stderr io.Writer) int {
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rt, err := server.BuildRuntime(ctx, cfg, server.RuntimeOptions{Logger: logger})
+	rt, err := server.BuildRuntime(ctx, cfg, server.RuntimeOptions{
+		Logger:     logger,
+		ConsoleIn:  stdin,
+		ConsoleOut: stdout,
+		ConsoleErr: stderr,
+	})
 	if err != nil {
 		logger.Error("startup failed", "error", err)
 		return 1
@@ -507,6 +529,7 @@ Usage:
   gymbag ruleset <list|add|update|remove|validate|init|rule> [flags]
   gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
   gymbag run [--config Gymbagfile|gymbag.json] [--watch] [flags]
+  gymbag console [--config gymbag.json] [--admin 127.0.0.1:2019] [--cmd "..."]
   gymbag reverse-proxy --from <domains> --to <upstream> [--verify <0-3>]
   gymbag validate [--config gymbag.json]
   gymbag fmt [--overwrite] [Gymbagfile]
@@ -555,6 +578,7 @@ Flags:
       --admin <addr>         Enable local REST Admin API (e.g. 127.0.0.1:2019)
       --http-port <port>     HTTP redirect & ACME HTTP-01 port (default 80)
       --https-port <port>    HTTPS gateway port (default 443)
+      --mc-console           Bring managed Minecraft server console into Gymbag foreground & Admin API
       --watch                Hot-reload config file changes automatically
 `, Version)
 }

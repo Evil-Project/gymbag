@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,7 +78,7 @@ func TestInspectServerJarAndVersionMapping(t *testing.T) {
 		})
 		jar := writeTestJar(t, filepath.Join(dir, "bundler-1.20.4.jar"), map[string][]byte{
 			"META-INF/versions/1.20.4/server-1.20.4.jar": inner,
-			"io/papermc/paperclip/Main.class":             buildClassHeader(8),
+			"io/papermc/paperclip/Main.class":            buildClassHeader(8),
 		})
 		req, err := InspectServerJar(jar)
 		if err != nil {
@@ -227,6 +229,7 @@ func TestParseJavaVersionOutputDiscoverAndSelect(t *testing.T) {
 	if err != nil || selWarn.Warning == "" || !strings.Contains(selWarn.Warning, "requires Java 21+") {
 		t.Fatalf("expected compatibility warning for explicit Java 17, got sel=%+v err=%v", selWarn, err)
 	}
+
 }
 
 // TestFakeJavaHelperProcess emulates a Java Minecraft server subprocess in tests.
@@ -240,9 +243,13 @@ func TestFakeJavaHelperProcess(t *testing.T) {
 		fmt.Println("[Server thread/INFO]: Done (0.123s)! For help, type \"help\"")
 		sc := bufio.NewScanner(os.Stdin)
 		for sc.Scan() {
-			if strings.TrimSpace(sc.Text()) == "stop" {
+			line := strings.TrimSpace(sc.Text())
+			if line == "stop" {
 				fmt.Println("[Server thread/INFO]: Stopping server")
 				os.Exit(0)
+			}
+			if line != "" {
+				fmt.Printf("[Server thread/INFO]: ECHO %s\n", line)
 			}
 		}
 		os.Exit(0)
@@ -401,4 +408,140 @@ func TestManagerLifecycleGracefulStopEULAAndAutoRestart(t *testing.T) {
 		}
 		t.Fatalf("expected auto-restart to bring child back up, status=%+v", mgr.Status())
 	})
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestManagerInteractiveConsoleBufferStreamAndManualStop(t *testing.T) {
+	dir := t.TempDir()
+	jarPath := writeTestJar(t, filepath.Join(dir, "server.jar"), map[string][]byte{
+		"version.json": []byte(`{"id":"1.21.4","java_version":21}`),
+	})
+
+	consoleOut := &syncBuffer{}
+	consoleErr := &syncBuffer{}
+	inR, inW := io.Pipe()
+	defer func() {
+		_ = inW.Close()
+		_ = inR.Close()
+	}()
+
+	mgr := NewManager(Options{
+		Config: config.MinecraftConfig{
+			Enabled:   true,
+			Upstream:  "127.0.0.1:41237",
+			ServerJar: jarPath,
+			Console:   true,
+		},
+		Discover: DiscoverOptions{
+			Installs: []JavaInstall{{Path: "/usr/bin/java21", Major: 21, RawVersion: "21.0.5", Source: "system"}},
+		},
+		CommandBuilder:    helperCommandBuilder("graceful"),
+		ConsoleIn:         inR,
+		ConsoleOut:        consoleOut,
+		ConsoleErr:        consoleErr,
+		ConsoleBufferSize: 50,
+		RestartBaseDelay:  20 * time.Millisecond,
+	})
+
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Manager.Start: %v", err)
+	}
+	defer func() { _ = mgr.Stop(3 * time.Second) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := mgr.Status(); st.Running && st.ConsoleEnabled && strings.Contains(consoleOut.String(), `Done (0.123s)!`) {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !strings.Contains(consoleOut.String(), `Done (0.123s)!`) {
+		t.Fatalf("expected raw Minecraft startup line in ConsoleOut, got:\n%s", consoleOut.String())
+	}
+	// Verify raw format without slog level/msg wrapping
+	if strings.Contains(consoleOut.String(), "level=INFO") || strings.Contains(consoleOut.String(), "stream=stdout") {
+		t.Fatalf("expected raw Minecraft console lines without slog wrapping, got:\n%s", consoleOut.String())
+	}
+
+	backlog, subCh, unsub := mgr.SubscribeConsole()
+	defer unsub()
+	if len(backlog) == 0 {
+		t.Fatalf("expected non-empty console backlog from startup")
+	}
+
+	// Interactive ConsoleIn -> subprocess -> ConsoleOut + SubscribeConsole + ConsoleLines
+	if _, err := io.WriteString(inW, "say hello-gymbag\n"); err != nil {
+		t.Fatal(err)
+	}
+	gotEcho := false
+	subDeadline := time.After(3 * time.Second)
+	for !gotEcho {
+		select {
+		case ev := <-subCh:
+			if strings.Contains(ev.Line, "ECHO say hello-gymbag") {
+				gotEcho = true
+			}
+		case <-subDeadline:
+			t.Fatalf("timed out waiting for streamed ECHO line; out=%q buffered=%+v", consoleOut.String(), mgr.ConsoleLines(0, 0))
+		}
+	}
+	if !strings.Contains(consoleOut.String(), "ECHO say hello-gymbag") {
+		t.Fatalf("expected echoed command in ConsoleOut, got:\n%s", consoleOut.String())
+	}
+	lines := mgr.ConsoleLines(0, 0)
+	if len(lines) < 2 {
+		t.Fatalf("expected >=2 buffered console lines, got %+v", lines)
+	}
+
+	// SendCommand("stop") stops cleanly without auto-restart crash-looping
+	if err := mgr.SendCommand("stop"); err != nil {
+		t.Fatalf("SendCommand(stop): %v", err)
+	}
+	stopDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(stopDeadline) {
+		st := mgr.Status()
+		if !st.Running && strings.Contains(consoleOut.String(), "type 'start' to relaunch") {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	stStopped := mgr.Status()
+	if stStopped.Running || stStopped.Restarts != 0 {
+		t.Fatalf("expected manual stop to pause cleanly without Restarts, got %+v", stStopped)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if stCheck := mgr.Status(); stCheck.Running || stCheck.Restarts != 0 {
+		t.Fatalf("expected server to stay paused after manual stop, got %+v", stCheck)
+	}
+
+	// Typing 'start' or calling RequestStart() relaunches cleanly
+	if _, err := io.WriteString(inW, "start\n"); err != nil {
+		t.Fatal(err)
+	}
+	relaunchDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(relaunchDeadline) {
+		if mgr.Status().Running {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !mgr.Status().Running {
+		t.Fatalf("expected 'start' via console stdin to relaunch Minecraft server, status=%+v", mgr.Status())
+	}
 }

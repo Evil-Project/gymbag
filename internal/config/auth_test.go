@@ -216,3 +216,99 @@ server {
 }
 
 type CheckJSON map[string]any
+
+func TestMinecraftConsoleConfig(t *testing.T) {
+	// 1. JSON parsing & concise JSON round-trip
+	rawJSON := `{
+		"minecraft": {
+			"port": 25565,
+			"upstream": "127.0.0.1:25566",
+			"server_jar": "/srv/mc/paper.jar",
+			"console": true
+		}
+	}`
+	cfg, err := ParseConfigBytes([]byte(rawJSON), "gymbag.json", "/tmp")
+	if err != nil {
+		t.Fatalf("ParseConfigBytes JSON failed: %v", err)
+	}
+	if cfg.Minecraft == nil || !cfg.Minecraft.Console {
+		t.Fatalf("expected minecraft.console=true, got %+v", cfg.Minecraft)
+	}
+	concise, err := MarshalConciseJSONConfig(cfg)
+	if err != nil {
+		t.Fatalf("MarshalConciseJSONConfig failed: %v", err)
+	}
+	if !strings.Contains(string(concise), `"console": true`) {
+		t.Fatalf("expected concise JSON to include console: true, got:\n%s", string(concise))
+	}
+
+	// 2. Gymbagfile bare `console`, `console on`, `console off` & FormatConfig round-trip
+	gf := `
+minecraft {
+	upstream 127.0.0.1:25566
+	server_jar /srv/mc/server.jar
+	console
+}
+`
+	gfCfg, err := ParseCaddyfile(gf)
+	if err != nil {
+		t.Fatalf("ParseCaddyfile minecraft console failed: %v", err)
+	}
+	if gfCfg.Minecraft == nil || !gfCfg.Minecraft.Console {
+		t.Fatalf("expected bare 'console' directive to enable Console, got %+v", gfCfg.Minecraft)
+	}
+	formatted := FormatConfig(gfCfg)
+	if !strings.Contains(formatted, "console on") {
+		t.Fatalf("expected FormatConfig to emit 'console on', got:\n%s", formatted)
+	}
+	reparsed, err := ParseCaddyfile(formatted)
+	if err != nil {
+		t.Fatalf("reparse FormatConfig failed: %v", err)
+	}
+	if reparsed.Minecraft == nil || !reparsed.Minecraft.Console {
+		t.Fatalf("expected reparsed Console=true, got %+v", reparsed.Minecraft)
+	}
+
+	gfOff, err := ParseCaddyfile("minecraft {\n upstream 127.0.0.1:25566\n console off\n}\n")
+	if err != nil {
+		t.Fatalf("ParseCaddyfile console off failed: %v", err)
+	}
+	if gfOff.Minecraft == nil || gfOff.Minecraft.Console {
+		t.Fatalf("expected console off to set Console=false, got %+v", gfOff.Minecraft)
+	}
+
+	// 3. Reject console inside ssh block
+	if _, err := ParseCaddyfile("ssh {\n upstream 127.0.0.1:2222\n console on\n}\n"); err == nil {
+		t.Fatalf("expected error when using console directive inside ssh block")
+	}
+
+	// 4. Env var GYMBAG_MC_CONSOLE=true
+	envMap := map[string]string{
+		"GYMBAG_MC_UPSTREAM": "127.0.0.1:25566",
+		"GYMBAG_MC_JAR":      "/srv/mc/server.jar",
+		"GYMBAG_MC_CONSOLE":  "true",
+	}
+	envCfg, err := LoadWithEnv(LoadOptions{}, func(k string) string { return envMap[k] })
+	if err != nil {
+		t.Fatalf("LoadWithEnv failed: %v", err)
+	}
+	if envCfg.Minecraft == nil || !envCfg.Minecraft.Console {
+		t.Fatalf("expected GYMBAG_MC_CONSOLE=true to enable Console, got %+v", envCfg.Minecraft)
+	}
+
+	// 5. GenerateConfig with TCPSpec.Console=true
+	genCfg, err := GenerateConfig(GenerateOptions{
+		Templates: []string{"minecraft"},
+		Minecraft: &TCPSpec{
+			Upstream:  "127.0.0.1:25566",
+			ServerJar: "/srv/mc/server.jar",
+			Console:   true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+	if genCfg.Minecraft == nil || !genCfg.Minecraft.Console {
+		t.Fatalf("expected GenerateConfig to copy Console=true, got %+v", genCfg.Minecraft)
+	}
+}

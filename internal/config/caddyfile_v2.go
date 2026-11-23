@@ -1224,4 +1224,3 @@ func parseAuthDirective(
 	}
 	return cfg, true, nil
 }
-

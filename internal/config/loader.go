@@ -25,6 +25,7 @@ type LoadOptions struct {
 	AdminAddr          string
 	HTTPPort           int
 	HTTPSPort          int
+	MCConsole          *bool
 }
 
 // ParseFile reads a Gymbagfile, Caddyfile, nginx, Apache, or JSON configuration file from disk.
@@ -262,6 +263,9 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 	}
 	if opts.HTTPSPort > 0 {
 		cfg.HTTPSPort = opts.HTTPSPort
+	}
+	if opts.MCConsole != nil && cfg.Minecraft != nil {
+		cfg.Minecraft.Console = *opts.MCConsole
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -804,10 +808,11 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 	rawJVM := firstNonEmpty(getenv("GYMBAG_MC_JVM_ARGS"), getenv("GYMBAG_MINECRAFT_JVM_ARGS"))
 	rawWorkDir := firstNonEmpty(getenv("GYMBAG_MC_WORK_DIR"), getenv("GYMBAG_MINECRAFT_WORK_DIR"))
 	rawAutoRestart := firstNonEmpty(getenv("GYMBAG_MC_AUTO_RESTART"), getenv("GYMBAG_MINECRAFT_AUTO_RESTART"))
+	rawConsole := firstNonEmpty(getenv("GYMBAG_MC_CONSOLE"), getenv("GYMBAG_MINECRAFT_CONSOLE"))
 	rawVerify := firstNonEmpty(getenv("GYMBAG_MC_VERIFY_LEVEL"), getenv("GYMBAG_MINECRAFT_VERIFY_LEVEL"))
 	rawProtect := firstNonEmpty(getenv("GYMBAG_MC_PROTECT"), getenv("GYMBAG_MINECRAFT_PROTECT"))
 	if rawEnabled == "" && rawPort == "" && rawUp == "" && rawJar == "" && rawJava == "" &&
-		rawJVM == "" && rawWorkDir == "" && rawAutoRestart == "" && rawVerify == "" && rawProtect == "" {
+		rawJVM == "" && rawWorkDir == "" && rawAutoRestart == "" && rawConsole == "" && rawVerify == "" && rawProtect == "" {
 		return false, nil
 	}
 	if cfg.Minecraft == nil {
@@ -858,6 +863,13 @@ func applyMinecraftEnv(cfg *Config, getenv func(string) string) (bool, error) {
 			return false, err
 		}
 		cfg.Minecraft.AutoRestart = &b
+	}
+	if rawConsole != "" {
+		b, err := parseBool(rawConsole, "GYMBAG_MC_CONSOLE")
+		if err != nil {
+			return false, err
+		}
+		cfg.Minecraft.Console = b
 	}
 	if rawVerify != "" {
 		lvl, prot, err := ParseVerifyLevel(rawVerify)

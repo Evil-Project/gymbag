@@ -1997,6 +1997,7 @@ type tcpBlockFields struct {
 	serverArgs       []string
 	workDir          string
 	autoRestart      *bool
+	console          bool
 	protect          bool
 	waf              SiteWAFConfig
 	verifyURL        string
@@ -2138,6 +2139,21 @@ func parseTCPServiceBlock(block *parsedBlock, service string, defaultPort int, s
 				return out, err
 			}
 			out.autoRestart = &b
+		case "console", "mc_console", "interactive_console":
+			if service != "minecraft" {
+				return out, fmt.Errorf("%s is only valid inside minecraft block", dname)
+			}
+			if len(args) == 0 {
+				out.console = true
+			} else if len(args) == 1 {
+				b, err := parseBool(args[0], "minecraft console")
+				if err != nil {
+					return out, err
+				}
+				out.console = b
+			} else {
+				return out, fmt.Errorf("%s accepts at most one argument (on/off or true/false)", dname)
+			}
 		case "verify_url":
 			if len(args) != 1 {
 				return out, fmt.Errorf("%s verify_url requires a hostname or https:// URL", service)
@@ -2212,6 +2228,7 @@ func parseMinecraftBlock(block *parsedBlock, st *parseState) (MinecraftConfig, e
 		ServerArgs:       f.serverArgs,
 		WorkDir:          f.workDir,
 		AutoRestart:      f.autoRestart,
+		Console:          f.console,
 		Protect:          f.protect,
 		VerifyLevel:      f.waf.VerifyLevel,
 		Difficulty:       f.waf.Difficulty,
@@ -2609,6 +2626,7 @@ func FormatConfig(cfg Config) string {
 			serverArgs:   cfg.Minecraft.ServerArgs,
 			workDir:      cfg.Minecraft.WorkDir,
 			autoRestart:  cfg.Minecraft.AutoRestart,
+			console:      cfg.Minecraft.Console,
 			protect:      cfg.Minecraft.Protect,
 			verifyLevel:  cfg.Minecraft.VerifyLevel,
 			difficulty:   cfg.Minecraft.Difficulty,
@@ -2636,6 +2654,7 @@ type tcpFormatSpec struct {
 	serverArgs   []string
 	workDir      string
 	autoRestart  *bool
+	console      bool
 	protect      bool
 	verifyLevel  VerifyLevel
 	difficulty   int
@@ -2683,6 +2702,9 @@ func formatTCPServiceBlock(b *strings.Builder, s tcpFormatSpec) {
 	}
 	if s.autoRestart != nil && !*s.autoRestart {
 		b.WriteString("    auto_restart off\n")
+	}
+	if s.console {
+		b.WriteString("    console on\n")
 	}
 	if !s.protect {
 		b.WriteString("    protect off\n")

@@ -19,37 +19,59 @@ import (
 )
 
 const (
-	defaultRestartBaseDelay = 3 * time.Second
-	maxRestartDelay         = 30 * time.Second
-	stableRunReset          = 60 * time.Second
-	defaultStopTimeout      = 15 * time.Second
+	defaultRestartBaseDelay  = 3 * time.Second
+	maxRestartDelay          = 30 * time.Second
+	stableRunReset           = 60 * time.Second
+	defaultStopTimeout       = 15 * time.Second
+	defaultConsoleBufferSize = 500
+	consoleSubscriberBufSize = 128
 )
+
+var (
+	// ErrNotRunning is returned when a console command is sent while the Minecraft server process is stopped.
+	ErrNotRunning = errors.New("minecraft server is not running")
+	// ErrAlreadyRunning is returned when RequestStart is called while the Minecraft server process is already running.
+	ErrAlreadyRunning = errors.New("minecraft server is already running")
+)
+
+// ConsoleLine represents a single line emitted by the managed Minecraft server or console supervisor.
+type ConsoleLine struct {
+	Seq    uint64    `json:"seq"`
+	Time   time.Time `json:"time"`
+	Stream string    `json:"stream"`
+	Line   string    `json:"line"`
+}
 
 // Options configures managed Minecraft server execution inside Gymbag.
 type Options struct {
-	BaseDir          string
-	Config           config.MinecraftConfig
-	Discover         DiscoverOptions
-	CommandBuilder   func(ctx context.Context, javaPath string, args []string) *exec.Cmd
-	Logger           *slog.Logger
-	RestartBaseDelay time.Duration
+	BaseDir           string
+	Config            config.MinecraftConfig
+	Discover          DiscoverOptions
+	CommandBuilder    func(ctx context.Context, javaPath string, args []string) *exec.Cmd
+	Logger            *slog.Logger
+	RestartBaseDelay  time.Duration
+	ConsoleIn         io.Reader
+	ConsoleOut        io.Writer
+	ConsoleErr        io.Writer
+	ConsoleBufferSize int
 }
 
 // Status describes the live runtime state of the managed Minecraft server subprocess.
 type Status struct {
-	Enabled      bool   `json:"enabled"`
-	Running      bool   `json:"running"`
-	PID          int    `json:"pid,omitempty"`
-	ServerJar    string `json:"server_jar"`
-	WorkDir      string `json:"work_dir,omitempty"`
-	JavaPath     string `json:"java_path,omitempty"`
-	JavaVersion  string `json:"java_version,omitempty"`
-	JavaMajor    int    `json:"java_major,omitempty"`
-	RequiredJava int    `json:"required_java,omitempty"`
-	MCVersion    string `json:"mc_version,omitempty"`
-	Restarts     int    `json:"restarts,omitempty"`
-	EULABlocked  bool   `json:"eula_blocked,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
+	Enabled        bool   `json:"enabled"`
+	Running        bool   `json:"running"`
+	PID            int    `json:"pid,omitempty"`
+	ConsoleEnabled bool   `json:"console_enabled,omitempty"`
+	ServerJar      string `json:"server_jar"`
+	WorkDir        string `json:"work_dir,omitempty"`
+	JavaPath       string `json:"java_path,omitempty"`
+	JavaVersion    string `json:"java_version,omitempty"`
+	JavaMajor      int    `json:"java_major,omitempty"`
+	RequiredJava   int    `json:"required_java,omitempty"`
+	MCVersion      string `json:"mc_version,omitempty"`
+	Restarts       int    `json:"restarts,omitempty"`
+	EULABlocked    bool   `json:"eula_blocked,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
 }
 
 // Manager supervises an external Minecraft server .jar child process alongside Gymbag's proxy.
@@ -62,13 +84,28 @@ type Manager struct {
 	logger    *slog.Logger
 	baseDelay time.Duration
 
-	mu      sync.Mutex
-	started bool
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stdin   io.WriteCloser
-	proc    *os.Process
-	status  Status
+	mu                  sync.Mutex
+	started             bool
+	cancel              context.CancelFunc
+	runCtx              context.Context
+	done                chan struct{}
+	stdin               io.WriteCloser
+	proc                *os.Process
+	status              Status
+	consoleEnabled      bool
+	consoleInputStarted bool
+	manualStop          bool
+	restartCh           chan struct{}
+
+	stdinMu      sync.Mutex
+	consoleOutMu sync.Mutex
+
+	consoleMu   sync.Mutex
+	consoleBuf  []ConsoleLine
+	consoleMax  int
+	consoleSeq  uint64
+	consoleSubs map[uint64]chan ConsoleLine
+	nextSubID   uint64
 }
 
 // NewManager constructs a managed Minecraft server supervisor from opts.
@@ -97,19 +134,28 @@ func NewManager(opts Options) *Manager {
 	if baseDelay <= 0 {
 		baseDelay = defaultRestartBaseDelay
 	}
+	bufMax := opts.ConsoleBufferSize
+	if bufMax <= 0 {
+		bufMax = defaultConsoleBufferSize
+	}
 
 	return &Manager{
-		opts:      opts,
-		cfg:       cfg,
-		jarPath:   jarPath,
-		workDir:   workDir,
-		propsPath: propsPath,
-		logger:    logger,
-		baseDelay: baseDelay,
+		opts:           opts,
+		cfg:            cfg,
+		jarPath:        jarPath,
+		workDir:        workDir,
+		propsPath:      propsPath,
+		logger:         logger,
+		baseDelay:      baseDelay,
+		consoleEnabled: cfg.Console,
+		restartCh:      make(chan struct{}, 1),
+		consoleMax:     bufMax,
+		consoleSubs:    make(map[uint64]chan ConsoleLine),
 		status: Status{
-			Enabled:   jarPath != "",
-			ServerJar: jarPath,
-			WorkDir:   workDir,
+			Enabled:        jarPath != "",
+			ConsoleEnabled: cfg.Console,
+			ServerJar:      jarPath,
+			WorkDir:        workDir,
 		},
 	}
 }
@@ -184,6 +230,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	done := make(chan struct{})
 	m.started = true
 	m.cancel = cancel
+	m.runCtx = runCtx
 	m.done = done
 	m.status.Enabled = true
 	m.status.ServerJar = jarPath
@@ -194,8 +241,15 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.status.RequiredJava = sel.Requirement.MinMajor
 	m.status.MCVersion = sel.Requirement.MCVersion
 	m.status.LastError = ""
+	startConsoleInput := m.consoleEnabled && !m.consoleInputStarted && m.opts.ConsoleIn != nil
+	if startConsoleInput {
+		m.consoleInputStarted = true
+	}
 	m.mu.Unlock()
 
+	if startConsoleInput {
+		go m.readConsoleInput(runCtx, m.opts.ConsoleIn)
+	}
 	go m.supervise(runCtx, sel.Java.Path, absJar, done)
 	return nil
 }
@@ -243,6 +297,10 @@ func (m *Manager) supervise(ctx context.Context, javaPath, absJar string, done c
 			return
 		}
 
+		m.mu.Lock()
+		m.manualStop = false
+		m.mu.Unlock()
+
 		startAt := time.Now()
 		exitErr, eulaBlocked := m.runOnce(ctx, javaPath, args)
 		ranFor := time.Since(startAt)
@@ -252,10 +310,12 @@ func (m *Manager) supervise(ctx context.Context, javaPath, absJar string, done c
 		m.status.PID = 0
 		m.stdin = nil
 		m.proc = nil
+		wasManualStop := m.manualStop
+		m.manualStop = false
 		if eulaBlocked {
 			m.status.EULABlocked = true
 		}
-		if exitErr != nil && ctx.Err() == nil {
+		if exitErr != nil && ctx.Err() == nil && !wasManualStop {
 			m.status.LastError = exitErr.Error()
 		}
 		m.mu.Unlock()
@@ -266,6 +326,16 @@ func (m *Manager) supervise(ctx context.Context, javaPath, absJar string, done c
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if wasManualStop {
+			m.recordConsoleLine("system", "[gymbag] Minecraft server stopped cleanly. Press Ctrl+C to exit Gymbag or type 'start' to relaunch.")
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.restartCh:
+				backoff = m.baseDelay
+				continue
+			}
 		}
 		if !m.cfg.AutoRestartEnabled() {
 			if exitErr != nil {
@@ -371,7 +441,7 @@ func (m *Manager) runOnce(ctx context.Context, javaPath string, args []string) (
 		sc.Buffer(buf, 512*1024)
 		for sc.Scan() {
 			line := sc.Text()
-			m.logger.Info("minecraft server", "stream", stream, "line", line)
+			m.recordConsoleLine(stream, line)
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "agree to the eula") {
 				eulaMu.Lock()
@@ -397,7 +467,16 @@ func (m *Manager) runOnce(ctx context.Context, javaPath string, args []string) (
 		waitErr = m.gracefulKillProcess(stdinPipe, cmd.Process, waitDone)
 	}
 
+	m.mu.Lock()
+	m.stdin = nil
+	m.proc = nil
+	m.status.Running = false
+	m.status.PID = 0
+	m.mu.Unlock()
+
+	m.stdinMu.Lock()
 	_ = stdinPipe.Close()
+	m.stdinMu.Unlock()
 	eulaMu.Lock()
 	eulaFlag := sawEULA
 	eulaMu.Unlock()
@@ -406,7 +485,9 @@ func (m *Manager) runOnce(ctx context.Context, javaPath string, args []string) (
 
 func (m *Manager) gracefulKillProcess(stdin io.WriteCloser, proc *os.Process, waitDone <-chan error) error {
 	if stdin != nil {
+		m.stdinMu.Lock()
 		_, _ = io.WriteString(stdin, "stop\n")
+		m.stdinMu.Unlock()
 	}
 	softWait := defaultStopTimeout * 3 / 4
 	select {
@@ -447,7 +528,9 @@ func (m *Manager) Stop(timeout time.Duration) error {
 	m.mu.Unlock()
 
 	if stdin != nil {
+		m.stdinMu.Lock()
 		_, _ = io.WriteString(stdin, "stop\n")
+		m.stdinMu.Unlock()
 	}
 	if cancel != nil {
 		cancel()
@@ -491,4 +574,212 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.status
+}
+
+// ConsoleEnabled reports whether Gymbag's interactive Minecraft console integration is active.
+func (m *Manager) ConsoleEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.consoleEnabled
+}
+
+// SetConsoleEnabled dynamically enables or disables Minecraft console integration.
+func (m *Manager) SetConsoleEnabled(enabled bool) {
+	m.mu.Lock()
+	m.consoleEnabled = enabled
+	m.status.ConsoleEnabled = enabled
+	startInput := enabled && m.started && !m.consoleInputStarted && m.opts.ConsoleIn != nil && m.runCtx != nil
+	runCtx := m.runCtx
+	if startInput {
+		m.consoleInputStarted = true
+	}
+	m.mu.Unlock()
+
+	if startInput {
+		go m.readConsoleInput(runCtx, m.opts.ConsoleIn)
+	}
+}
+
+// ConsoleLines returns buffered console lines with Seq > sinceSeq, bounded to the latest limit lines when limit > 0.
+func (m *Manager) ConsoleLines(sinceSeq uint64, limit int) []ConsoleLine {
+	m.consoleMu.Lock()
+	defer m.consoleMu.Unlock()
+
+	var matched []ConsoleLine
+	for _, entry := range m.consoleBuf {
+		if entry.Seq > sinceSeq {
+			matched = append(matched, entry)
+		}
+	}
+	if limit > 0 && len(matched) > limit {
+		matched = matched[len(matched)-limit:]
+	}
+	out := make([]ConsoleLine, len(matched))
+	copy(out, matched)
+	return out
+}
+
+// SubscribeConsole returns a snapshot of the current buffer, a live stream channel, and an idempotent unsubscribe function.
+func (m *Manager) SubscribeConsole() ([]ConsoleLine, <-chan ConsoleLine, func()) {
+	m.consoleMu.Lock()
+	backlog := make([]ConsoleLine, len(m.consoleBuf))
+	copy(backlog, m.consoleBuf)
+
+	if m.consoleSubs == nil {
+		m.consoleSubs = make(map[uint64]chan ConsoleLine)
+	}
+	m.nextSubID++
+	subID := m.nextSubID
+	ch := make(chan ConsoleLine, consoleSubscriberBufSize)
+	m.consoleSubs[subID] = ch
+	m.consoleMu.Unlock()
+
+	var once sync.Once
+	unsub := func() {
+		once.Do(func() {
+			m.consoleMu.Lock()
+			if existing, ok := m.consoleSubs[subID]; ok {
+				delete(m.consoleSubs, subID)
+				close(existing)
+			}
+			m.consoleMu.Unlock()
+		})
+	}
+	return backlog, ch, unsub
+}
+
+// SendCommand writes a single command line to the running Minecraft server's standard input.
+func (m *Manager) SendCommand(raw string) error {
+	trimmed := strings.Trim(raw, "\r\n")
+	if strings.ContainsAny(trimmed, "\r\n") {
+		return errors.New("minecraft console command must be a single line")
+	}
+	cmd := strings.TrimSpace(trimmed)
+	if cmd == "" {
+		return errors.New("minecraft console command must not be empty")
+	}
+
+	m.mu.Lock()
+	if m.stdin == nil || !m.status.Running {
+		m.mu.Unlock()
+		return ErrNotRunning
+	}
+	stdin := m.stdin
+	if strings.EqualFold(cmd, "stop") || strings.EqualFold(cmd, "/stop") {
+		m.manualStop = true
+	}
+	m.mu.Unlock()
+
+	m.stdinMu.Lock()
+	_, err := io.WriteString(stdin, cmd+"\n")
+	m.stdinMu.Unlock()
+	return err
+}
+
+// RequestStart relaunches the managed Minecraft server after a manual stop.
+func (m *Manager) RequestStart() error {
+	m.mu.Lock()
+	if !m.started {
+		m.mu.Unlock()
+		return errors.New("minecraft server supervisor has not been started")
+	}
+	if m.status.Running {
+		m.mu.Unlock()
+		return ErrAlreadyRunning
+	}
+	if m.status.EULABlocked {
+		m.mu.Unlock()
+		return errors.New("minecraft server cannot start until eula=true is set in eula.txt")
+	}
+	m.manualStop = false
+	m.mu.Unlock()
+
+	select {
+	case m.restartCh <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (m *Manager) recordConsoleLine(stream, line string) {
+	ev := ConsoleLine{
+		Time:   time.Now().UTC(),
+		Stream: stream,
+		Line:   line,
+	}
+
+	m.consoleMu.Lock()
+	m.consoleSeq++
+	ev.Seq = m.consoleSeq
+	if m.consoleMax > 0 {
+		if len(m.consoleBuf) >= m.consoleMax {
+			copy(m.consoleBuf, m.consoleBuf[1:])
+			m.consoleBuf[len(m.consoleBuf)-1] = ev
+		} else {
+			m.consoleBuf = append(m.consoleBuf, ev)
+		}
+	}
+	for _, ch := range m.consoleSubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+	m.consoleMu.Unlock()
+
+	if m.ConsoleEnabled() {
+		out := m.opts.ConsoleOut
+		if out == nil {
+			out = os.Stdout
+		}
+		if stream == "stderr" {
+			out = m.opts.ConsoleErr
+			if out == nil {
+				out = os.Stderr
+			}
+		}
+		m.consoleOutMu.Lock()
+		_, _ = io.WriteString(out, line+"\n")
+		m.consoleOutMu.Unlock()
+		return
+	}
+
+	if stream == "system" {
+		m.logger.Info(line)
+	} else {
+		m.logger.Info("minecraft server", "stream", stream, "line", line)
+	}
+}
+
+func (m *Manager) readConsoleInput(ctx context.Context, in io.Reader) {
+	sc := bufio.NewScanner(in)
+	buf := make([]byte, 0, 16*1024)
+	sc.Buffer(buf, 256*1024)
+	for sc.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if !m.ConsoleEnabled() {
+			continue
+		}
+		st := m.Status()
+		lower := strings.ToLower(line)
+		if !st.Running && (lower == "start" || lower == "/start" || lower == "restart") {
+			if err := m.RequestStart(); err != nil {
+				m.recordConsoleLine("system", fmt.Sprintf("[gymbag] failed to start Minecraft server: %v", err))
+			}
+			continue
+		}
+		if err := m.SendCommand(line); err != nil {
+			if errors.Is(err, ErrNotRunning) {
+				m.recordConsoleLine("system", "[gymbag] Minecraft server is not running. Type 'start' to relaunch.")
+			} else {
+				m.recordConsoleLine("system", fmt.Sprintf("[gymbag] command error: %v", err))
+			}
+		}
+	}
 }

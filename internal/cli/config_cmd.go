@@ -260,8 +260,12 @@ func runConfigList(args []string, stdout, stderr io.Writer) int {
 		if cfg.Minecraft.ServerJar != "" {
 			jarNote = ", jar=" + cfg.Minecraft.ServerJar
 		}
-		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s (%s, rules=%d%s)\n",
-			cfg.Minecraft.Port, cfg.Minecraft.Upstream, prot, len(cfg.Minecraft.Rules), jarNote)
+		consoleNote := ""
+		if cfg.Minecraft.Console {
+			consoleNote = ", console=on"
+		}
+		_, _ = fmt.Fprintf(stdout, "  - minecraft :%d -> %s (%s, rules=%d%s%s)\n",
+			cfg.Minecraft.Port, cfg.Minecraft.Upstream, prot, len(cfg.Minecraft.Rules), jarNote, consoleNote)
 	}
 	if cfg.NeedsVerifyServer() {
 		vTarget := cfg.Verify.URL
@@ -1176,6 +1180,15 @@ func applyGlobalKeySet(cfg *config.Config, key, val string) error {
 			return fmt.Errorf("set authelia_url first before setting authelia_portal")
 		}
 		cfg.Authelia.PortalURL = val
+	case "mc_console", "minecraft_console", "minecraft.console":
+		if cfg.Minecraft == nil {
+			return fmt.Errorf("minecraft block is not configured yet")
+		}
+		b, err := parseCLIPositiveBool(val, key)
+		if err != nil {
+			return err
+		}
+		cfg.Minecraft.Console = b
 	default:
 		return fmt.Errorf("unsupported global key %q", key)
 	}
@@ -1193,6 +1206,10 @@ func applyGlobalKeyUnset(cfg *config.Config, key string) error {
 	case "authelia_portal", "authelia_portal_url":
 		if cfg.Authelia != nil {
 			cfg.Authelia.PortalURL = ""
+		}
+	case "mc_console", "minecraft_console", "minecraft.console":
+		if cfg.Minecraft != nil {
+			cfg.Minecraft.Console = false
 		}
 	case "email", "acme_email":
 		cfg.TLS.ACMEEmail = ""

@@ -243,6 +243,7 @@ type MinecraftConfig struct {
 	ServerArgs       []string     `json:"server_args,omitempty"`
 	WorkDir          string       `json:"work_dir,omitempty"`
 	AutoRestart      *bool        `json:"auto_restart,omitempty"`
+	Console          bool         `json:"console,omitempty"`
 	Protect          bool         `json:"protect"`
 	VerifyLevel      VerifyLevel  `json:"verify_level"`
 	Difficulty       int          `json:"difficulty,omitempty"`
@@ -554,6 +555,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		ServerArgs       []string     `json:"server_args,omitempty"`
 		WorkDir          string       `json:"work_dir,omitempty"`
 		AutoRestart      *bool        `json:"auto_restart,omitempty"`
+		Console          bool         `json:"console,omitempty"`
 		Protect          *bool        `json:"protect,omitempty"`
 		VerifyLevel      *VerifyLevel `json:"verify_level,omitempty"`
 		Difficulty       int          `json:"difficulty,omitempty"`
@@ -682,6 +684,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 			JVMArgs:          c.Minecraft.JVMArgs,
 			ServerArgs:       c.Minecraft.ServerArgs,
 			WorkDir:          c.Minecraft.WorkDir,
+			Console:          c.Minecraft.Console,
 		}
 		if c.Minecraft.AutoRestart != nil && !*c.Minecraft.AutoRestart {
 			f := false
