@@ -33,7 +33,7 @@ The Admin API takes no authentication token and mutates live routing and firewal
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | Status, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, `remote_rules` count, and `minecraft_server` status (`running`, `pid`, `java_major`, `required_java`, `mc_version`, `restarts`, `eula_blocked`, `last_error`) when `server_jar` is configured |
+| `GET` | `/api/v1/health` | Status, `sites_count`, `ssh_enabled`, `minecraft_enabled`, `tls_source`, `threat_entries`, `ai_entries`, `vpn_entries`, `remote_rules` count, and `minecraft_server` status (`running`, `pid`, `console_enabled`, `java_major`, `required_java`, `mc_version`, `restarts`, `eula_blocked`, `last_error`) when `server_jar` is configured |
 | `GET` | `/api/v1/tls` | Active TLS source, cert path, SSL provider, HSTS state, and supported CA catalog |
 | `POST` | `/api/v1/tls/renew` | Force immediate certificate renewal and atomic reload |
 | `GET` | `/api/v1/intel` | Threat, AI crawler, and VPN/Tor feed counts (`vpn_detection_enabled`, `vpn_entries`, `vpn_cache_size`, `reputation_cache_size`), refresh timestamps, and per-feed status (`threat`, `ai`, `vpn`) |
@@ -46,12 +46,14 @@ The Admin API takes no authentication token and mutates live routing and firewal
 | `POST` | `/api/v1/sites` | Add a website at runtime (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | Inspect one website's configuration |
 | `PUT` | `/api/v1/sites/{domain}` | Replace a website's configuration |
-| `PATCH` | `/api/v1/sites/{domain}` | Live-patch `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, or `rule_sources` |
+| `PATCH` | `/api/v1/sites/{domain}` | Live-patch `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `auth`, `clear_auth`, or `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | Remove a website (`204 No Content`; returns `409 Conflict` on the last remaining site when neither SSH nor Minecraft is active) |
 | `GET` | `/api/v1/sites/{domain}/rules` | List local custom rules on a website |
 | `POST` | `/api/v1/sites/{domain}/rules` | Append a custom rule (`201 Created`) |
 | `PUT` | `/api/v1/sites/{domain}/rules` | Replace all custom rules on a website |
 | `DELETE` | `/api/v1/sites/{domain}/rules/{index_or_name}` | Delete a custom rule by numeric index or `name` (`204 No Content`) |
+| `GET` | `/api/v1/minecraft/console` | Return JSON console snapshot (`running`, `pid`, `console_enabled`, `lines`) or live SSE stream (`?stream=1` / `Accept: text/event-stream`), supporting `?since=<seq>` (`Last-Event-ID`) and `?limit=<n>`; returns `403 console_disabled` when off |
+| `POST` | `/api/v1/minecraft/console` | Execute `{"command":"..."}` on the managed Minecraft server console (supports `"start"` when paused after a manual `stop`); returns `403 console_disabled` when off or `409 not_running` when stopped |
 
 ### Live Mitigation Examples
 
@@ -74,6 +76,12 @@ curl -X POST http://127.0.0.1:2019/api/v1/sites/app.example.com/rules \
 # Refresh remote rules and threat/VPN/AI feeds
 curl -X POST http://127.0.0.1:2019/api/v1/rules/remote/refresh
 curl -X POST http://127.0.0.1:2019/api/v1/intel/refresh
+
+# Attach / send a command to the managed Minecraft server console (requires minecraft.console: true)
+curl -N http://127.0.0.1:2019/api/v1/minecraft/console?stream=1
+curl -X POST http://127.0.0.1:2019/api/v1/minecraft/console \
+  -H "Content-Type: application/json" \
+  -d '{"command": "say Maintenance in 5 minutes"}'
 ```
 
 ## Redis Shared State

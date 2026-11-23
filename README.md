@@ -33,7 +33,7 @@ Self-hosted apps, Git forges, SSH ports, and Minecraft servers all get hammered 
 
 ## Quick start
 
-Prebuilt static binaries (`CGO_ENABLED=0` for Linux, macOS, and Windows on `amd64`/`arm64`), Debian/Ubuntu `.deb` packages, Arch `.pkg.tar.zst` packages, and NixOS tarballs/NARs are published on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases). You can also run the GHCR container image, use the Nix flake, or build from source:
+Prebuilt static binaries (`CGO_ENABLED=0` for Linux, macOS, Windows, FreeBSD, OpenBSD, and NetBSD on `amd64`/`arm64`), Debian/Ubuntu `.deb` packages, Arch `.pkg.tar.zst` packages, and NixOS tarballs/NARs are published on [GitHub Releases](https://github.com/Evil-Project/gymbag/releases). You can also run the GHCR container image, use the Nix flake, or build from source:
 
 ```bash
 go build -o gymbag ./cmd/gymbag
@@ -84,7 +84,7 @@ sudo ./gymbag init -t http,ssh,minecraft -d app.example.com -u :3000 --server-ja
 sudo ./gymbag
 ```
 
-You can also point Gymbag directly at an existing **nginx** (`nginx.conf`), **Apache** (`httpd.conf` / `apache2.conf`), or **Caddyfile v2** config, or register it as a system service (`systemd`, `launchd`, `openrc`, or `supervisor`):
+You can also point Gymbag directly at an existing **nginx** (`nginx.conf`, including `auth_request`), **Apache** (`httpd.conf` / `apache2.conf`), or **Caddyfile v2** (`forward_auth` / `authelia`) config, or register it as a system service (`systemd`, `launchd`, `openrc`, `supervisor`, `freebsd-rc`, `openbsd-rc`, or `netbsd-rc`):
 
 ```bash
 ./gymbag init -d app.example.com -u :3000 --service auto
@@ -120,8 +120,8 @@ You do not need to write regexes or import blocklists before putting Gymbag in f
 
 When an unverified SSH or Minecraft connection hits Gymbag and triggers the configured verify level, Gymbag does not forward it to the backend daemon or game server. Instead, it replies inside the protocol's own disconnect message with a one-time HTTPS link (`/v/<token>`):
 
-- **SSH (`port` `22` by default)**: `sudo ./gymbag init -t ssh` picks an unused local port in `20000–59999`, backs up `/etc/ssh/sshd_config` to `/etc/ssh/sshd_config.gymbag.bak`, writes the new `Port` before any `Match` blocks, runs `sshd -t` (rolling back automatically if validation fails), reloads `sshd`, and updates the active Linux firewall (`ufw`, `firewalld`, `nftables`, or `iptables`+`ip6tables`) so the backend port is only reachable from loopback while `22` and `8443` stay open. (Keep a second SSH shell open while changing `sshd_config`, or pass `--ssh-upstream 127.0.0.1:2222`, `--no-auto-setup`, or `--no-firewall` to handle it manually.) Once an IP passes the browser challenge, connections go straight through via raw TCP relay without touching the SSH handshake. At levels `1` and `3`, malformed banners or scripted SSH clients (`libssh`, `paramiko`, `zgrab`, `masscan`, `nmap`, `asyncssh`, `ssh2go`, `jsch`, `hydra`, `medusa`, `patator`, `python`, `curl`, `ssh-2.0-go`) are challenged; everyone else sees RFC 4253 `SSH_MSG_DISCONNECT` with the verification URL right in the terminal.
-- **Minecraft Java (`port` `25565` by default)**: `./gymbag init -t minecraft --server-properties ./server.properties` backs up `server.properties` to `server.properties.gymbag.bak`, moves `server-port` to a free random port in `20000–59999`, and sets empty/wildcard `server-ip` to `127.0.0.1`. Server List Pings (`nextState == 1` and legacy `0xFE`) still pass through unless blocked by a rule, so players continue to see MOTD and player counts. On Login or Transfer, if verification is needed, Gymbag returns a Minecraft Login Disconnect packet (`0x00`) displaying the verification link inside the **"Connection Lost"** dialog.
+- **SSH (`port` `22` by default)**: `sudo ./gymbag init -t ssh` picks an unused local port in `20000–59999`, backs up `/etc/ssh/sshd_config` to `/etc/ssh/sshd_config.gymbag.bak`, writes the new `Port` before any `Match` blocks, runs `sshd -t` (rolling back automatically if validation fails), reloads `sshd` (via `systemctl`/`service`/`rc-service`/`rcctl`), and updates the active Linux or BSD firewall (`ufw`, `firewalld`, `nftables`, `iptables`+`ip6tables`, `pf`, `ipfw`, or `npf`) so the backend port is only reachable from loopback while `22` and `8443` stay open. (Keep a second SSH shell open while changing `sshd_config`, or pass `--ssh-upstream 127.0.0.1:2222`, `--no-auto-setup`, or `--no-firewall` to handle it manually.) Once an IP passes the browser challenge, connections go straight through via raw TCP relay without touching the SSH handshake. At levels `1` and `3`, malformed banners or scripted SSH clients (`libssh`, `paramiko`, `zgrab`, `masscan`, `nmap`, `asyncssh`, `ssh2go`, `jsch`, `hydra`, `medusa`, `patator`, `python`, `curl`, `ssh-2.0-go`) are challenged; everyone else sees RFC 4253 `SSH_MSG_DISCONNECT` with the verification URL right in the terminal.
+- **Minecraft Java (`port` `25565` by default)**: `./gymbag init -t minecraft --server-properties ./server.properties` backs up `server.properties` to `server.properties.gymbag.bak`, moves `server-port` to a free random port in `20000–59999`, and sets empty/wildcard `server-ip` to `127.0.0.1`. With `--server-jar /srv/mc/paper.jar`, Gymbag also launches the JAR with auto-selected Java; adding `--mc-console` (`console on` / `"console": true`) brings the live Minecraft server console straight into Gymbag's interactive terminal, `gymbag console`, and `/api/v1/minecraft/console`. Server List Pings (`nextState == 1` and legacy `0xFE`) still pass through unless blocked by a rule, so players continue to see MOTD and player counts. On Login or Transfer, if verification is needed, Gymbag returns a Minecraft Login Disconnect packet (`0x00`) displaying the verification link inside the **"Connection Lost"** dialog.
 - **Shared HTTPS Verification Portal (default `:8443`)**: Both SSH and Minecraft share `verify_port` (set `--verify-url https://verify.example.com:8443` to use your own domain, or leave it blank to use the server's detected IP). When using the server IP over ACME, Gymbag requests an **RFC 8738** IP certificate (using the CA's `shortlived` profile if offered) and falls back to Gymbag's Local CA or a self-signed IP cert when HTTP-01 isn't reachable. If `verify_port` matches `https_port` and HTTP sites are configured, the portal shares port `443`.
 
 ```caddyfile
@@ -279,9 +279,9 @@ The equivalent `routes` array in `gymbag.json`:
 }
 ```
 
-Manage routes with `gymbag config route list|add|update|remove` or `PATCH /api/v1/sites/{domain}`.
+Manage routes with `gymbag config route list|add|update|remove` or `PATCH /api/v1/sites/{domain}`. For **Authelia** / forward authentication, add `authelia http://127.0.0.1:9091` (or Caddy v2 `forward_auth`) globally, per site, or inside a `handle` route — WAF rules and challenges still run first, while verified traffic authenticates against Authelia before reaching the upstream with `Remote-User`, `Remote-Groups`, `Remote-Name`, and `Remote-Email` injected and client-spoofed identity headers stripped.
 
-**Importing existing configs:** `gymbag run -c /etc/nginx/nginx.conf` (or `httpd.conf` / `apache2.conf`) runs native nginx or Apache configs directly, and `gymbag config convert -c <file> -o gymbag.json --format json` converts nginx, Apache, and Caddyfile v2 (including snippets, `import`, `@matchers`, `handle`, `route`, `file_server`, `respond`, `redir`, and `header`).
+**Importing existing configs:** `gymbag run -c /etc/nginx/nginx.conf` (or `httpd.conf` / `apache2.conf`) runs native nginx or Apache configs directly, and `gymbag config convert -c <file> -o gymbag.json --format json` converts nginx (including `auth_request` / `auth_request_set`), Apache, and Caddyfile v2 (including snippets, `import`, `@matchers`, `handle`, `route`, `forward_auth`, `file_server`, `respond`, `redir`, and `header`).
 
 ## SSL providers, custom keys, and renewal
 
@@ -415,12 +415,13 @@ Gymbag loads `.env` from the working directory if present, then probes `./gymbag
 ./gymbag ruleset validate ./rules
 ./gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bot --ua "*BadBot*"
 
-# Run, watch, validate, format, or manage OS services
+# Run, watch, validate, attach console, format, or manage OS services
 ./gymbag
 ./gymbag run --config gymbag.json --watch
+./gymbag console --config gymbag.json
 ./gymbag service install --config gymbag.json
 ./gymbag service start
-./gymbag service render --type systemd
+./gymbag service render --type freebsd-rc
 ./gymbag reverse-proxy --from app.internal --to http://localhost:5173 --verify 3
 ./gymbag validate --config gymbag.json
 ./gymbag fmt --overwrite Gymbagfile
@@ -485,7 +486,9 @@ Precedence order is **config file -> `.env` / `GYMBAG_*` environment variables -
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Enable Minecraft protection (default port `25565`) and backend server target (`GYMBAG_MINECRAFT_*` aliases work) |
 | `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Path to Minecraft `server.jar` (auto-starts server with auto-selected Java) and optional Java binary override |
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Space-separated JVM flags, Minecraft working directory, and crash auto-restart toggle (`true`/`false`, default `true`) |
+| `GYMBAG_MC_CONSOLE` | Bring managed Minecraft server console into Gymbag foreground & Admin API (`on`/`off`, alias `GYMBAG_MINECRAFT_CONSOLE`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
+| `GYMBAG_AUTHELIA_URL` / `GYMBAG_AUTHELIA_PORTAL_URL` | Enable global Authelia forward auth (`http://127.0.0.1:9091`) and optional browser login redirect URL (`GYMBAG_AUTHELIA_URI`, `GYMBAG_AUTHELIA_COPY_HEADERS`, `GYMBAG_AUTHELIA_TIMEOUT`, `GYMBAG_AUTHELIA_INSECURE_TLS`, `GYMBAG_AUTHELIA_DOMAINS`, `GYMBAG_FORWARD_AUTH_URL`) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL (`redis://` or `rediss://`), HMAC secret, and Admin API listen address (e.g. `127.0.0.1:2019` or `off`) |
 
 ### REST APIs
@@ -514,8 +517,9 @@ Keep the Admin API bound to loopback (`127.0.0.1:2019`) or a private interface �
 | `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | Remote rule counts and fetch errors; force refresh and WAF reload |
 | `GET` / `PUT` | `/api/v1/config` | Dump redacted config; validate and replace active runtime config |
 | `GET` / `POST` | `/api/v1/sites` | List sites or add a site at runtime |
-| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspect, replace, live-patch (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `rules`, `remote_rules`, `rule_sources`), or delete a site |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspect, replace, live-patch (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `auth`, `clear_auth`, `rules`, `remote_rules`, `rule_sources`), or delete a site |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` & `.../{index_or_name}` | List, append, replace, or remove custom rules on a site |
+| `GET` / `POST` | `/api/v1/minecraft/console` | Snapshot (`lines`) or stream (`?stream=1` SSE) console output and send commands (`{"command":"..."}`) when `minecraft.console` is enabled |
 
 ## Benchmarks against Caddy and Nginx
 
@@ -547,7 +551,7 @@ Methodology, `go test -bench` microbenchmarks, and exact configs are in [Benchma
 │   ├── localpki/        # Two-tier local CA ("Neuro-sama Headquarters Root CA") & /etc/hosts manager
 │   ├── proxy/           # Lock-free multi-site & path router, pooled HTTP & RFC 6455 WebSocket proxies
 │   ├── server/          # Fused HTTPS gateway, HTTP->HTTPS/ACME redirector, Admin REST API
-│   ├── service/         # System service renderer & manager (systemd, launchd, openrc, supervisor)
+│   ├── service/         # System service renderer & manager (systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)
 │   ├── setup/           # Automated sshd_config/firewall setup and Minecraft server.properties port randomization
 │   ├── store/           # 64-shard in-memory store, pure-Go RESP2 Redis client (challenges, rate limits, gate tickets/clearances)
 │   ├── tcpguard/        # SSH & Minecraft Java TCP protection proxies, policy engine, shared HTTPS verify portal

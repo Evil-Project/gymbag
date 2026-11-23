@@ -14,8 +14,8 @@ Running `sudo ./gymbag init -t ssh` handles the host wiring automatically:
 2. Saves a backup of `/etc/ssh/sshd_config` to `/etc/ssh/sshd_config.gymbag.bak` (if one does not exist yet).
 3. Comments out existing top-level `Port` directives and writes the random port inside a `# gymbag-managed:start` / `# gymbag-managed:end` block before the first `Match` block.
 4. Runs `sshd -t -f /etc/ssh/sshd_config`. If validation fails, it restores the original file and aborts.
-5. Reloads `sshd` (via `systemctl`, `service`, or `rc-service` on Linux).
-6. Updates the active Linux firewall (`ufw`, `firewalld`, `nftables`, or `iptables`+`ip6tables`) to allow loopback traffic to the backend port, drop external traffic hitting the backend port directly, and keep the SSH listen port (`22`) and verify portal port (`8443`) open.
+5. Reloads `sshd` (`systemctl`/`service`/`rc-service` on Linux; `service sshd reload` on FreeBSD/DragonFly; `rcctl reload sshd` on OpenBSD; `/etc/rc.d/sshd reload` on NetBSD).
+6. Updates the active Linux (`ufw`, `firewalld`, `nftables`, `iptables`+`ip6tables`) or BSD firewall (`pf` via `gymbag_ssh` anchor in `/etc/pf.conf`, FreeBSD `ipfw` set 29, or NetBSD `npf`) to allow loopback traffic to the backend port, drop external traffic hitting the backend port directly, and keep the SSH listen port (`22`) and verify portal port (`8443`) open.
 7. Writes `gymbag.json` (or `Gymbagfile` with `--format gymbagfile`).
 
 ::: warning Keep a Second SSH Terminal Open
@@ -47,9 +47,29 @@ If you want Gymbag to supervise the Minecraft process itself, pass `--server-jar
 
 In managed mode, Gymbag:
 
-1. **Picks a compatible Java runtime automatically**: Inspects `version.json`, bundler nested JARs, `patch.properties`, or `.class` bytecode headers to distinguish legacy Java 8 servers from modern Java 17/21+ servers, and selects a matching `java` binary on the host (override with `--mc-java` / `java_path`).
+1. **Picks a compatible Java runtime automatically**: Inspects `version.json`, bundler nested JARs, `patch.properties`, or `.class` bytecode headers to distinguish legacy Java 8 servers from modern Java 17/21+ servers, and selects a matching `java` binary on Linux, macOS, Windows, or BSD (`/usr/local/openjdk*`, `/usr/local/jdk-*`, `/usr/pkg/java/openjdk*`; override with `--mc-java` / `java_path`).
 2. **Wires `server.properties` safely**: Picks an unused loopback port in `20000–59999`, creates `server.properties` with `server-ip=127.0.0.1` if it does not exist yet (or backs up and updates an existing file), and sets `upstream` automatically.
 3. **Manages the child process**: Starts the JAR with your `jvm_args` and `server_args`, restarts on crash by default (`auto_restart`), and sends a graceful console `stop` (15s timeout) when Gymbag shuts down.
+
+### Bringing the Minecraft Server Console into Gymbag (`minecraft.console`)
+
+When Gymbag launches the server via `server_jar`, set `console on` (Gymbagfile), `"console": true` (JSON), `--mc-console`, or `GYMBAG_MC_CONSOLE=on` to expose the Minecraft console directly in Gymbag:
+
+```bash
+# Enable interactive console during init (interactive wizard also prompts when server_jar is set)
+./gymbag init -t minecraft --server-jar /srv/mc/paper.jar --mc-console --admin 127.0.0.1:2019
+
+# Run Gymbag in the foreground with raw Minecraft console stdout/stderr + stdin command input
+./gymbag
+
+# Or run Gymbag as a daemon and attach from another shell via Admin API:
+./gymbag console                           # Live interactive console stream + command prompt
+./gymbag console --cmd "whitelist add Alice"
+./gymbag console --no-stream --tail 100
+```
+
+- Typing `stop` (or `/stop`) inside the console stops the Minecraft subprocess cleanly without triggering `auto_restart` crash loops; type `start` (or POST `{"command":"start"}` to `/api/v1/minecraft/console`) to relaunch it without restarting Gymbag.
+- When `console` is `false` (default), `/api/v1/minecraft/console` returns `403 console_disabled`.
 
 If you already run the Minecraft server separately (systemd, tmux, screen, Pterodactyl), point `init` at its `server.properties` instead:
 
@@ -111,6 +131,7 @@ minecraft {
     port 25565
     upstream 127.0.0.1:48291
     server_jar /srv/mc/paper.jar
+    console on
     jvm_args -Xms1G -Xmx4G
     server_properties /srv/mc/server.properties
     verify 3
@@ -141,6 +162,7 @@ And the equivalent `gymbag.json`:
     "port": 25565,
     "upstream": "127.0.0.1:48291",
     "server_jar": "/srv/mc/paper.jar",
+    "console": true,
     "jvm_args": ["-Xms1G", "-Xmx4G"],
     "server_properties": "/srv/mc/server.properties",
     "verify_level": 3

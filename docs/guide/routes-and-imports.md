@@ -73,11 +73,41 @@ Edit routes from the CLI or via `PATCH /api/v1/sites/{domain}`:
 ./gymbag config route remove -d app.example.com --index 0
 ```
 
+## Authelia & Forward Authentication
+
+Gymbag supports native **Authelia** integration, Caddy v2 `forward_auth` blocks, and nginx `auth_request` / `auth_request_set` subrequests at the global `{ ... }`, site, or `handle` route level:
+
+```caddyfile
+{
+    authelia http://127.0.0.1:9091 {
+        portal_url https://auth.example.com
+    }
+}
+
+auth.example.com {
+    reverse_proxy http://127.0.0.1:9091
+    verify 1
+}
+
+app.example.com {
+    reverse_proxy http://127.0.0.1:3000
+    authelia http://127.0.0.1:9091 {
+        portal_url https://auth.example.com
+        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+        except /healthz /public/*
+    }
+}
+```
+
+- **Execution order**: `/.well-known/acme-challenge/*` and `/.waf/*` are handled first, then WAF rules / PoW challenges run, and only allowed requests (both HTTP and WebSocket upgrades) invoke forward authentication before reaching upstreams.
+- **Anti-spoofing**: All configured `copy_headers` targets (including `Src>Dst` remappings) are stripped from incoming client requests before sending the auth subrequest and before injecting verified headers returned by Authelia.
+- **Redirects & fail-closed behavior**: If Authelia returns `401` without a `Location` header and `portal_url` is set, HTML browser `GET`/`HEAD` requests receive a `302 Found` redirect to `<portal_url>?rd=<original_url>`, while API/JSON and WebSocket clients receive the `401` status directly. Unreachable auth servers fail closed with `502 Bad Gateway`.
+
 ## Importing nginx, Apache & Caddyfile v2
 
 Gymbag reads these formats directly:
-- **Caddyfile v2**: Snippets `(name) { ... }`, `import` (file globs and `{args[n]}`), named `@matchers` (`path`, `path_regexp`, `method`), `handle`, `handle_path`, `route`, `root`, `file_server`, `try_files`, `respond`, `redir`, and `header`.
-- **nginx (`nginx.conf`)**: `http` / `server` / `location` blocks, `upstream` pools, `proxy_pass`, `root` / `alias` / `index` / `autoindex` / `try_files`, `return`, `rewrite ... permanent|redirect`, `add_header`, `ssl_certificate` / `ssl_certificate_key`, and `include`.
+- **Caddyfile v2**: Snippets `(name) { ... }`, `import` (file globs and `{args[n]}`), named `@matchers` (`path`, `path_regexp`, `method`), `handle`, `handle_path`, `route`, `forward_auth`, `authelia`, `root`, `file_server`, `try_files`, `respond`, `redir`, and `header`.
+- **nginx (`nginx.conf`)**: `http` / `server` / `location` blocks, `upstream` pools, `proxy_pass`, `internal`, `auth_request`, `auth_request_set` (`$upstream_http_*`), `root` / `alias` / `index` / `autoindex` / `try_files`, `return`, `rewrite ... permanent|redirect`, `add_header`, `ssl_certificate` / `ssl_certificate_key`, and `include`.
 - **Apache (`httpd.conf` / `apache2.conf`)**: `<VirtualHost>`, `ServerName` / `ServerAlias`, `ProxyPass` / `<Proxy balancer://...>`, `DocumentRoot` / `DirectoryIndex`, `Redirect` / `RedirectMatch`, `Header set|unset`, `SSLCertificateFile` / `SSLCertificateKeyFile`, and `Include` / `IncludeOptional`.
 
 Serve an imported config straight away or convert it into `gymbag.json` / `Gymbagfile`:

@@ -89,6 +89,8 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
 | `ruleset <name> { ... }` | Named local or remote rule source block (`source`/`file`/`dir`/`url`, `dynamic on\|off`) | — |
 | `rules_watch_interval` | Polling interval for `dynamic` local rule files and folders | `2` (`2s`) |
 | `verify_timeout` / `clearance_ttl` | Default clearance lifetime (seconds or duration like `30m`, `12h`, `7d`) | `86400` (`24h`) |
+| `authelia <url> [{ ... }]` | Default Authelia forward-auth settings inherited by sites writing bare `authelia` | — |
+| `forward_auth <url> { ... }` | Generic Caddy v2 forward-auth template | — |
 
 ## Site Block Directives
 
@@ -126,7 +128,9 @@ app.example.com, www.example.com {
 | `rules_file <path> [dynamic\|static]` | Local `.rules` or `.json` file (optionally hot-reloaded) |
 | `rules_dir <path> [dynamic\|static]` | Directory of `.rules`/`.json` files (optionally hot-reloaded) |
 | `ruleset <name> { ... }` | Named rule source block (`source`/`file`/`dir`/`url`, `dynamic on\|off`) |
-| `handle` / `handle_path` / `route` | Ordered path-matched route blocks (`reverse_proxy`, `root` + `file_server`, `respond`, `redir`, `header`) |
+| `handle` / `handle_path` / `route` | Ordered path-matched route blocks (`reverse_proxy`, `authelia`/`forward_auth`, `root` + `file_server`, `respond`, `redir`, `header`) |
+| `authelia [url] [{ ... }]` | Enforce Authelia forward auth on the site (bare `authelia` inherits global `{ authelia ... }`; supports `uri`, `portal_url`, `copy_headers`, `path`, `except`, `header`, `timeout`, `insecure_skip_tls`) |
+| `forward_auth [matcher] <url> { ... }` | Caddy v2 forward-auth directive (supports `uri`, `copy_headers`, `header_up`, `transport http { tls_insecure_skip_verify }`) |
 | `root` / `file_server` / `try_files` | Static file serving, directory listings (`browse`), and SPA fallback |
 | `respond` / `redir` / `header` | Static responses, redirects (`{scheme}`, `{host}`, `{uri}`, `{path}`, `{query}`), and header edits |
 | `ai_bots <patterns...>` | Extra User-Agent substrings treated as AI crawlers |
@@ -174,6 +178,7 @@ minecraft {
 | `server_args <args...>` | Extra arguments passed after the JAR path (`minecraft` block only) | — |
 | `work_dir <dir>` | Working directory for the managed Minecraft process (`minecraft` block only) | JAR directory |
 | `auto_restart <on\|off>` | Automatically restart the Minecraft server if it exits unexpectedly (`minecraft` block only) | `on` |
+| `console <on\|off>` | Bring the managed Minecraft server console into Gymbag foreground, `gymbag console`, and `/api/v1/minecraft/console` (`mc_console` alias; `minecraft` block only) | `off` |
 | `verify [0\|1\|2\|3\|off]` | Verification level (bare `verify` sets `3`) | `3` |
 | `protect <on\|off>` | Toggle PoW verification for this service | `on` |
 | `difficulty <1-5>` | PoW leading-hex-zero difficulty | `4` |
@@ -206,9 +211,10 @@ Time directives (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, `rate_wind
 ```
 
 Top-level JSON keys (`DisallowUnknownFields` is enforced):
-- `sites`: array of `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}`, where `waf` holds `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`.
+- `sites`: array of `{domain, upstreams, routes, headers, auth, protect, waf, cert_file, key_file}`, where `waf` holds `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}` and `auth` holds `{provider, url, uri, portal_url, copy_headers, headers, paths, except_paths, timeout, insecure_skip_tls}`.
+- `authelia`: optional global forward-auth object matching site `auth`.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
-- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
+- `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, console, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
 - `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
 - `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.

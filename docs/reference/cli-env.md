@@ -19,8 +19,11 @@ gymbag
 # Start with explicit config and hot-reload on file edits (polls every 2s)
 gymbag run --config Gymbagfile --watch
 
-# Manage OS services (systemd, launchd, openrc, supervisor)
+# Manage OS services (systemd, launchd, openrc, supervisor, freebsd-rc, openbsd-rc, netbsd-rc)
 gymbag service <install|start|stop|restart|status|uninstall|render> [flags]
+
+# Attach interactively or send commands to the managed Minecraft server console
+gymbag console [--config gymbag.json] [--admin 127.0.0.1:2019] [--cmd "..."] [--tail 200] [--no-stream]
 
 # Manage sites, routes, global settings, and config conversions
 gymbag config <list|show|add|update|remove|site|route|set|unset|convert> [flags]
@@ -57,6 +60,7 @@ gymbag version
 | `--admin <addr>` | Enable local REST Admin API (`127.0.0.1:2019` or `off`) |
 | `--http-port <port>` | HTTP redirect & ACME HTTP-01 port (default `80`) |
 | `--https-port <port>` | HTTPS gateway port (default `443`) |
+| `--mc-console` | Bring managed Minecraft server console into Gymbag foreground & Admin API (`--minecraft-console` alias) |
 | `--watch` | Watch config file and hot-reload changes (`run` / default only) |
 
 ## Config Management (`gymbag config`)
@@ -78,11 +82,11 @@ gymbag config convert -c /etc/nginx/nginx.conf -o gymbag.json --format json
 | Subcommand | Description |
 | :--- | :--- |
 | `list` / `show` | List sites & TCP services / print formatted config (`--format json\|gymbagfile`) |
-| `add` | Add a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--no-protect`, `--no-default-rules`, `--cert`, `--key`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header Name=Value\|-Name`, `-f` |
-| `update` | Update a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--protect on\|off`, `--default-rules on\|off`, `--cert`, `--key`, `--clear-tls`, `--header`, `--remove-header` |
+| `add` | Add a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--authelia`, `--authelia-uri`, `--authelia-portal`, `--no-protect`, `--no-default-rules`, `--cert`, `--key`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header Name=Value\|-Name`, `-f` |
+| `update` | Update a site: `-d`, `-u`, `-l`, `--difficulty`, `--verify-timeout`, `--authelia`, `--authelia-uri`, `--authelia-portal`, `--clear-authelia`, `--protect on\|off`, `--default-rules on\|off`, `--cert`, `--key`, `--clear-tls`, `--header`, `--remove-header` |
 | `remove` | Remove a site (`-d`) |
 | `route list\|add\|update\|remove` | Manage path routes: `-d`, `--path`, `--strip-prefix`, `-u`, `--root`, `--browse`, `--fallback`, `--respond`, `--status`, `--redir`, `--code`, `--header`, `--index` |
-| `set <key> <value>` / `unset <key>` | Set or reset global keys (`email`, `ssl_provider`, `http_port`, `https_port`, `bind`, `admin`, `cert_dir`, `redis`, `ip_security`, `ip_security_action`, `ip_reputation`, `ai_ip_list`, `intel_refresh`, `remote_rules_refresh`, `rules_watch_interval`, `verify_timeout`, `auto_hosts`, `hsts`, `eab_kid`, `eab_hmac_key`) |
+| `set <key> <value>` / `unset <key>` | Set or reset global keys (`email`, `ssl_provider`, `http_port`, `https_port`, `bind`, `admin`, `cert_dir`, `redis`, `ip_security`, `ip_security_action`, `ip_reputation`, `ai_ip_list`, `intel_refresh`, `remote_rules_refresh`, `rules_watch_interval`, `verify_timeout`, `auto_hosts`, `hsts`, `eab_kid`, `eab_hmac_key`, `authelia`, `authelia_uri`, `authelia_portal`, `mc_console`) |
 | `convert` | Convert nginx, Apache, Caddyfile, Gymbagfile, or JSON: `-c <in>`, `-o <out>`, `--format json\|gymbagfile`, `-f` |
 
 ## Ruleset Management (`gymbag ruleset`)
@@ -143,6 +147,8 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_ENABLED` / `GYMBAG_MC_PORT` / `GYMBAG_MC_UPSTREAM` | Enable Minecraft protection (default `25565`) and set backend target (`GYMBAG_MINECRAFT_*` aliases supported) |
 | `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Path to Minecraft `server.jar` (auto-starts server with auto-selected Java; alias `GYMBAG_MC_JAR`) and Java binary override (alias `GYMBAG_MC_JAVA_PATH`) |
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Space-separated JVM flags, Minecraft working directory, and crash auto-restart toggle (`true`/`false`, default `true`) |
+| `GYMBAG_MC_CONSOLE` | Bring managed Minecraft server console into Gymbag foreground & Admin API (`on`/`off`, alias `GYMBAG_MINECRAFT_CONSOLE`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
+| `GYMBAG_AUTHELIA_URL` / `GYMBAG_AUTHELIA_PORTAL_URL` | Global Authelia forward-auth URL and login portal redirect URL (`GYMBAG_AUTHELIA_URI`, `GYMBAG_AUTHELIA_COPY_HEADERS`, `GYMBAG_AUTHELIA_TIMEOUT`, `GYMBAG_AUTHELIA_INSECURE_TLS`, `GYMBAG_AUTHELIA_DOMAINS`, `GYMBAG_FORWARD_AUTH_URL`) |
 | `GYMBAG_REDIS_URL` | Redis URL (`redis://` or `rediss://`) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC clearance secret and Admin REST API listen address (`127.0.0.1:2019` or `off`) |

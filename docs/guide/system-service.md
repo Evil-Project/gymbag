@@ -1,6 +1,6 @@
 # System Service Setup
 
-`gymbag service` generates, installs, starts, stops, restarts, checks status for, and removes OS background services across four init systems:
+`gymbag service` generates, installs, starts, stops, restarts, checks status for, and removes OS background services across seven init systems (Linux, macOS, and BSD):
 
 | Manager | Target OS / Init | Default Unit Path |
 | :--- | :--- | :--- |
@@ -8,13 +8,16 @@
 | `launchd` | macOS (LaunchDaemons / LaunchAgents) | `/Library/LaunchDaemons/io.gymbag.<name>.plist` (or `~/Library/LaunchAgents/io.gymbag.<name>.plist` with `--user`) |
 | `openrc` | Linux (Alpine, Gentoo, Artix) | `/etc/init.d/<name>` |
 | `supervisor` | Unix / Containers (`supervisord`) | `/etc/supervisor/conf.d/<name>.conf` (or `~/.config/supervisor/conf.d/<name>.conf` with `--user`) |
+| `freebsd-rc` | FreeBSD / DragonFly BSD (`rc.d` + `sysrc`) | `/usr/local/etc/rc.d/<name>` |
+| `openbsd-rc` | OpenBSD (`rc.d` + `rcctl`) | `/etc/rc.d/<name>` |
+| `netbsd-rc` | NetBSD (`rc.d` + `/etc/rc.conf`) | `/etc/rc.d/<name>` |
 
 ## Two-Command Service Workflow
 
 Once you have a `gymbag.json` or `Gymbagfile`:
 
 ```bash
-# 1. Register the service (auto-detects systemd / launchd / openrc / supervisor)
+# 1. Register the service (auto-detects systemd / launchd / openrc / supervisor / BSD rc.d)
 sudo ./gymbag service install --config /etc/gymbag/gymbag.json
 
 # 2. Start it
@@ -47,8 +50,29 @@ sudo ./gymbag service start --system
 ### User vs System Scope
 
 - Without `sudo` (`euid != 0`), `gymbag service` defaults to `--user` scope (`systemd --user`, `~/Library/LaunchAgents`) on `systemd`, `launchd`, and `supervisor`.
-- As `root`, it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`).
+- As `root`, it defaults to `--system` scope (`/etc/systemd/system`, `/Library/LaunchDaemons`, `/etc/init.d`, `/usr/local/etc/rc.d`, `/etc/rc.d`).
+- BSD `rc.d` managers (`freebsd-rc`, `openbsd-rc`, `netbsd-rc`) are system-wide services only.
 - Pass `--user` or `--system` to pick explicitly.
+
+## BSD (`FreeBSD`, `OpenBSD`, `NetBSD`, `DragonFly BSD`)
+
+`gymbag service install` auto-detects the native `rc.d` manager on FreeBSD/DragonFly (`freebsd-rc`), OpenBSD (`openbsd-rc`), and NetBSD (`netbsd-rc`), and standalone reference templates live in `packaging/bsd/`:
+
+```bash
+# FreeBSD / DragonFly BSD
+sudo ./gymbag service install --config /usr/local/etc/gymbag/gymbag.json --start
+# Installs /usr/local/etc/rc.d/gymbag, runs sysrc (or /etc/rc.conf) and service gymbag onestart
+
+# OpenBSD
+doas ./gymbag service install --config /etc/gymbag/gymbag.json --start
+# Installs /etc/rc.d/gymbag, enables via rcctl enable/set flags, and starts via rcctl start
+
+# NetBSD
+sudo ./gymbag service install --config /usr/pkg/etc/gymbag/gymbag.json --start
+# Installs /etc/rc.d/gymbag, sets gymbag=YES in /etc/rc.conf, and runs /etc/rc.d/gymbag start
+```
+
+> **Privileged ports on FreeBSD without root:** enable non-root low-port binding with `sysctl net.inet.ip.portrange.reservedhigh=0` or run under a dedicated daemon user / pf redirect.
 
 ## Debian / Ubuntu (`.deb` + `systemd`)
 
@@ -115,14 +139,14 @@ The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, a
 
 | Flag | Description |
 | :--- | :--- |
-| `-t`, `--type <mgr>` | `auto` (default), `systemd`, `launchd`, `openrc`, or `supervisor` |
+| `-t`, `--type <mgr>` | `auto` (default), `systemd`, `launchd`, `openrc`, `supervisor`, `freebsd-rc`, `openbsd-rc`, or `netbsd-rc` |
 | `-n`, `--name <name>` | Service name (default `gymbag`) |
 | `--label <id>` | `launchd` label (default `io.gymbag.<name>`) |
 | `-c`, `--config <path>` | Path to `gymbag.json`, `Gymbagfile`, or `Caddyfile` |
 | `--bin <path>` | Path to `gymbag` binary (default current executable) |
 | `--workdir <dir>` | Working directory (default directory of the config file) |
 | `--env-file <path>` | Optional `.env` file (auto-detected if `<workdir>/.env` exists) |
-| `--log-dir <dir>` | Log directory for `launchd`, `openrc`, and `supervisor` |
+| `--log-dir <dir>` | Log directory for `launchd`, `openrc`, `supervisor`, `freebsd-rc`, `openbsd-rc`, and `netbsd-rc` |
 | `-o`, `--output <path>` | Override target unit/plist/script path |
 | `--service-user <user>` | Run-as OS user for system-level service |
 | `--service-group <grp>` | Run-as OS group for system-level service |
@@ -130,5 +154,5 @@ The module runs Gymbag with `DynamicUser = true`, `StateDirectory = "gymbag"`, a
 | `--watch` | Pass `--watch` to `gymbag run` (default `true`) |
 | `--enable` | Enable service on boot during `install` (default `true`) |
 | `--start`, `--now` | Start service immediately after `install` |
-| `--no-reload` | Write/remove unit file without running `systemctl`/`launchctl`/`rc-update`/`supervisorctl` |
+| `--no-reload` | Write/remove unit file without running service-manager reload/enable commands |
 | `-f`, `--force` | Overwrite an existing service file |
