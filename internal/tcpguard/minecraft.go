@@ -12,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -195,8 +196,14 @@ func isValidMCUsername(name string) bool {
 	return true
 }
 
+const (
+	defaultMaxLimboSessions int32 = 256
+	pendingTransferTTL            = 30 * time.Second
+)
+
 // MinecraftProxy protects a Minecraft Java Edition server by transparently forwarding Server List Pings
-// and requiring browser verification (shown in the "Connection Lost" screen) before Login reaches upstream.
+// and gating unverified logins behind an in-memory empty-world verification limbo (1.20.5+ with automatic
+// Transfer redirect) or a disconnect verification prompt for older clients.
 type MinecraftProxy struct {
 	mu               sync.RWMutex
 	cfg              config.MinecraftConfig
@@ -208,6 +215,12 @@ type MinecraftProxy struct {
 	detectedPublicIP string
 	dialer           func(ctx context.Context, network, addr string) (net.Conn, error)
 	logger           *slog.Logger
+
+	limboMu          sync.Mutex
+	limboWaiters     map[string]map[chan struct{}]struct{}
+	pendingTransfers map[string]time.Time
+	activeLimbo      atomic.Int32
+	maxLimboSessions int32
 }
 
 // NewMinecraftProxy constructs a MinecraftProxy wired to the shared store and intelligence manager.
@@ -232,9 +245,112 @@ func NewMinecraftProxy(
 		detectedPublicIP: detectedPublicIP,
 		dialer:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		logger:           logger,
+		maxLimboSessions: defaultMaxLimboSessions,
 	}
 	p.UpdateConfig(cfg, verifyCfg, globalRules, ipSecurityAction)
 	return p
+}
+
+// NotifyCleared wakes any active limbo sessions waiting for clientIP to complete verification.
+func (p *MinecraftProxy) NotifyCleared(clientIP string) {
+	p.limboMu.Lock()
+	waiters := p.limboWaiters[clientIP]
+	if len(waiters) > 0 {
+		delete(p.limboWaiters, clientIP)
+	}
+	p.limboMu.Unlock()
+
+	for ch := range waiters {
+		close(ch)
+	}
+}
+
+func (p *MinecraftProxy) subscribeClearance(clientIP string) (<-chan struct{}, func()) {
+	ch := make(chan struct{})
+	p.limboMu.Lock()
+	if p.limboWaiters == nil {
+		p.limboWaiters = make(map[string]map[chan struct{}]struct{})
+	}
+	set := p.limboWaiters[clientIP]
+	if set == nil {
+		set = make(map[chan struct{}]struct{})
+		p.limboWaiters[clientIP] = set
+	}
+	set[ch] = struct{}{}
+	p.limboMu.Unlock()
+
+	var once sync.Once
+	unsub := func() {
+		once.Do(func() {
+			p.limboMu.Lock()
+			if cur := p.limboWaiters[clientIP]; cur != nil {
+				delete(cur, ch)
+				if len(cur) == 0 {
+					delete(p.limboWaiters, clientIP)
+				}
+			}
+			p.limboMu.Unlock()
+		})
+	}
+	return ch, unsub
+}
+
+func (p *MinecraftProxy) markPendingTransfer(clientIP string) {
+	now := time.Now()
+	p.limboMu.Lock()
+	if p.pendingTransfers == nil {
+		p.pendingTransfers = make(map[string]time.Time)
+	}
+	for k, exp := range p.pendingTransfers {
+		if !exp.After(now) {
+			delete(p.pendingTransfers, k)
+		}
+	}
+	p.pendingTransfers[clientIP] = now.Add(pendingTransferTTL)
+	p.limboMu.Unlock()
+}
+
+func (p *MinecraftProxy) hasPendingTransfer(clientIP string) bool {
+	now := time.Now()
+	p.limboMu.Lock()
+	defer p.limboMu.Unlock()
+	exp, ok := p.pendingTransfers[clientIP]
+	if !ok {
+		return false
+	}
+	if !exp.After(now) {
+		delete(p.pendingTransfers, clientIP)
+		return false
+	}
+	return true
+}
+
+func (p *MinecraftProxy) consumePendingTransfer(clientIP string) bool {
+	now := time.Now()
+	p.limboMu.Lock()
+	defer p.limboMu.Unlock()
+	exp, ok := p.pendingTransfers[clientIP]
+	if !ok {
+		return false
+	}
+	delete(p.pendingTransfers, clientIP)
+	return exp.After(now)
+}
+
+func rewriteMCHandshakePacket(protoVer int32, serverAddr string, serverPort uint16, nextState int32) []byte {
+	var payload []byte
+	payload = AppendVarInt(payload, 0x00)
+	payload = AppendVarInt(payload, protoVer)
+	payload = AppendVarInt(payload, int32(len(serverAddr)))
+	payload = append(payload, serverAddr...)
+	var pb [2]byte
+	binary.BigEndian.PutUint16(pb[:], serverPort)
+	payload = append(payload, pb[:]...)
+	payload = AppendVarInt(payload, nextState)
+	var frame []byte
+	frame = AppendVarInt(frame, int32(len(payload)))
+	frame = append(frame, payload...)
+	return frame
 }
 
 // UpdateConfig atomically swaps the Minecraft protection policy and verify link settings.
@@ -291,11 +407,15 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 	p.mu.RUnlock()
 
 	clientIP := extractRemoteIP(conn.RemoteAddr())
+	pendingTransfer := p.hasPendingTransfer(clientIP)
 
 	// Fast path: unprotected, or already cleared without custom rules -> transparent relay.
-	if allow, decided, _ := eng.IsFastAllow(ctx, clientIP); decided && allow {
-		p.relayUpstream(ctx, conn, cfg.Upstream, nil)
-		return
+	// Skip fast path when a limbo Transfer reconnect is pending so nextState=3 can be rewritten to 2.
+	if !pendingTransfer {
+		if allow, decided, _ := eng.IsFastAllow(ctx, clientIP); decided && allow {
+			p.relayUpstream(ctx, conn, cfg.Upstream, nil)
+			return
+		}
 	}
 
 	br := bufio.NewReader(conn)
@@ -336,7 +456,7 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 	if err != nil || len(rest) < 2 {
 		return
 	}
-	_ = binary.BigEndian.Uint16(rest[:2])
+	serverPort := binary.BigEndian.Uint16(rest[:2])
 	nextState, _, err := readVarIntBytes(rest[2:])
 	if err != nil {
 		return
@@ -358,9 +478,24 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	// Many upstream Minecraft servers run with accepts-transfers=false and reject nextState=3.
+	// Rewrite a limbo Transfer reconnect (nextState=3 -> 2) so Login succeeds cleanly upstream.
+	if nextState == 3 && p.consumePendingTransfer(clientIP) {
+		nextState = 2
+		rawHS = rewriteMCHandshakePacket(protoVer, serverAddr, serverPort, 2)
+	}
+	if pendingTransfer && nextState == 2 {
+		if allow, decided, _ := eng.IsFastAllow(ctx, clientIP); decided && allow {
+			_ = conn.SetReadDeadline(time.Time{})
+			p.relayBuffered(ctx, conn, br, cfg.Upstream, rawHS)
+			return
+		}
+	}
+
 	// Login (nextState == 2) or Transfer (nextState == 3)
 	var rawLogin []byte
 	var username string
+	var playerUUID [16]byte
 	protoSuspicious := protoVer <= 0
 	if nextState == 2 || nextState == 3 {
 		lPID, lPayload, lRaw, lErr := ReadMCPacket(br, 4096)
@@ -369,10 +504,15 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 			protoSuspicious = true
 		} else {
 			rawLogin = lRaw
-			if u, _, uErr := ReadMCString(lPayload); uErr != nil || !isValidMCUsername(u) {
+			if u, restAfterUser, uErr := ReadMCString(lPayload); uErr != nil || !isValidMCUsername(u) {
 				protoSuspicious = true
 			} else {
 				username = u
+				if len(restAfterUser) >= 16 {
+					copy(playerUUID[:], restAfterUser[:16])
+				} else {
+					playerUUID = offlineUUID(username)
+				}
 			}
 		}
 	} else {
@@ -398,12 +538,20 @@ func (p *MinecraftProxy) HandleConn(ctx context.Context, conn net.Conn) {
 	case waf.ActionDeny:
 		p.sendDisconnect(conn, BuildBlockDisconnectJSON(dec.Reason))
 		return
-	default: // ActionChallenge -> show verify link inside Minecraft "Lost connection" notification!
+	default: // ActionChallenge -> enter empty limbo world (1.20.5+) or disconnect with verify link.
 		verifyURL, err := p.issueVerifyURL(ctx, cfg, verifyCfg, conn.LocalAddr(), clientIP, username)
 		if err != nil {
 			p.logger.Warn("failed to issue Minecraft verification link", "client_ip", clientIP, "error", err)
 			p.sendDisconnect(conn, BuildBlockDisconnectJSON("error"))
 			return
+		}
+		if !protoSuspicious && supportsLimbo(protoVer) {
+			if p.activeLimbo.Add(1) <= p.maxLimboSessions {
+				defer p.activeLimbo.Add(-1)
+				p.serveLimbo(ctx, conn, br, cfg, protoVer, serverAddr, serverPort, username, playerUUID, clientIP, verifyURL)
+				return
+			}
+			p.activeLimbo.Add(-1)
 		}
 		p.sendDisconnect(conn, BuildVerifyDisconnectJSONForProtocol(verifyURL, username, protoVer))
 	}

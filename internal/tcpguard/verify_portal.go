@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"gymbag/internal/store"
 	"gymbag/internal/tlsmanager"
@@ -30,6 +31,24 @@ type VerifyPortal struct {
 	acmeBoard      *tlsmanager.HTTP01Board
 	trustedProxies []netip.Prefix
 	solverJS       string
+
+	mu        sync.RWMutex
+	onCleared func(service, clientIP string)
+}
+
+// SetOnCleared registers a callback invoked after a client IP passes verification
+// and its clearance has been persisted.
+func (p *VerifyPortal) SetOnCleared(fn func(service, clientIP string)) {
+	p.mu.Lock()
+	p.onCleared = fn
+	p.mu.Unlock()
+}
+
+func (p *VerifyPortal) getOnCleared() func(service, clientIP string) {
+	p.mu.RLock()
+	fn := p.onCleared
+	p.mu.RUnlock()
+	return fn
 }
 
 // NewVerifyPortal constructs a VerifyPortal backed by gateStore and challenges.
@@ -237,6 +256,9 @@ func (p *VerifyPortal) handleGateVerify(w http.ResponseWriter, r *http.Request) 
 		writePortalJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "failed to save clearance"})
 		return
 	}
+	if cb := p.getOnCleared(); cb != nil {
+		cb(ticket.Service, ticket.ClientIP)
+	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	writePortalJSON(w, http.StatusOK, map[string]any{
@@ -302,7 +324,7 @@ func (p *VerifyPortal) renderVerifyHTML(token, challengeID string, difficulty in
 	reconnectHint := "You may now close this tab and reconnect via SSH."
 	if ticket.Service == "minecraft" {
 		serviceLabel = "Minecraft"
-		reconnectHint = "You may now return to Minecraft and click Reconnect."
+		reconnectHint = "You may now return to Minecraft — you will be redirected to the server automatically (or click Reconnect on older versions)."
 	}
 
 	targetLine := fmt.Sprintf("Authorizing %s access for IP %s", serviceLabel, ticket.ClientIP)

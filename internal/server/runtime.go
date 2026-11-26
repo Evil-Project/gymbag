@@ -358,6 +358,11 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		}
 		if cfg.MinecraftEnabled() {
 			mcProxy = tcpguard.NewMinecraftProxy(*cfg.Minecraft, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
+			verifyPortal.SetOnCleared(func(service, clientIP string) {
+				if service == "minecraft" && mcProxy != nil {
+					mcProxy.NotifyCleared(clientIP)
+				}
+			})
 			if cfg.Minecraft.ServerJar != "" {
 				mcOpts := mcserver.Options{
 					BaseDir:    cfg.BaseDir,
