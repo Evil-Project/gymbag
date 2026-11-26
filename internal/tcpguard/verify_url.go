@@ -87,7 +87,7 @@ func DetectServerIPs(ctx context.Context, httpClient *http.Client) (publicIP str
 		probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 		defer cancel()
 		if req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "https://api.ipify.org", nil); err == nil {
-			req.Header.Set("User-Agent", "gymbag/0.1.0")
+			req.Header.Set("User-Agent", "gymbag/0.2.0")
 			if resp, err := httpClient.Do(req); err == nil {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 128))
 				_ = resp.Body.Close()

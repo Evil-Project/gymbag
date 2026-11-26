@@ -1,6 +1,6 @@
 # Maintainer: Evil-Project <https://github.com/Evil-Project/gymbag>
 pkgname=gymbag
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Single-binary HTTPS reverse proxy & Proof-of-Work WAF in pure Go"
 arch=('x86_64' 'aarch64')

@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the build version of the gymbag binary (overridable via -ldflags).
-var Version = "0.1.0"
+var Version = "0.2.0"
 
 // Execute parses argv and runs the requested Gymbag command, returning a process exit code.
 func Execute(argv []string, stdout, stderr io.Writer) int {

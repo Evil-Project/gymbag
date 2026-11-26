@@ -210,7 +210,7 @@ func (rc *ReputationChecker) queryStopForumSpam(ctx context.Context, ipText stri
 	if err != nil {
 		return false, "", false
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := rc.client.Do(req)
 	if err != nil {
 		return false, "", false
@@ -246,7 +246,7 @@ func (rc *ReputationChecker) queryInternetDB(ctx context.Context, ipText string)
 	if err != nil {
 		return false, "", false
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := rc.client.Do(req)
 	if err != nil {
 		return false, "", false

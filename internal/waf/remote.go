@@ -650,7 +650,7 @@ func (m *RemoteRuleManager) refreshSingle(ctx context.Context, targetURL string)
 		m.recordError(targetURL, err)
 		return false
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}

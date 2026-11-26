@@ -20,8 +20,8 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           version =
-            if self ? shortRev then "0.1.0-${self.shortRev}"
-            else "0.1.0-dirty";
+            if self ? shortRev then "0.2.0-${self.shortRev}"
+            else "0.2.0-dirty";
           gymbag = pkgs.buildGoModule {
             pname = "gymbag";
             inherit version;

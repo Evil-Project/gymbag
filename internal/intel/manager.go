@@ -411,7 +411,7 @@ func (m *Manager) refreshSingleFeed(ctx context.Context, src FeedSource, categor
 		m.recordError(key, src, category, err)
 		return
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}

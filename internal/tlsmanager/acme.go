@@ -701,7 +701,7 @@ func (c *ACMEClient) loadDirectoryLocked(ctx context.Context) (map[string]string
 	if err != nil {
 		return nil, certErrorf("ACME request failed: %v", err)
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, certErrorf("ACME request failed: %v", err)
@@ -745,7 +745,7 @@ func (c *ACMEClient) provisionAutoEABLocked(ctx context.Context, email string) e
 		return certErrorf("auto-EAB request failed: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -968,7 +968,7 @@ func (c *ACMEClient) signedLocked(ctx context.Context, targetURL string, payload
 			return 0, nil, nil, certErrorf("ACME request failed: %v", err)
 		}
 		req.Header.Set("Content-Type", "application/jose+json")
-		req.Header.Set("User-Agent", "gymbag/0.1.0")
+		req.Header.Set("User-Agent", "gymbag/0.2.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -995,7 +995,7 @@ func (c *ACMEClient) refreshNonceLocked(ctx context.Context) error {
 	if err != nil {
 		return certErrorf("ACME request failed: %v", err)
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return certErrorf("ACME request failed: %v", err)

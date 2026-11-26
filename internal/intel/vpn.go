@@ -189,7 +189,7 @@ func (vc *VPNChecker) queryIPQuery(ctx context.Context, ipText string) (bool, st
 	if err != nil {
 		return false, "", false
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := vc.client.Do(req)
 	if err != nil {
 		return false, "", false
@@ -233,7 +233,7 @@ func (vc *VPNChecker) queryIPAPIIs(ctx context.Context, ipText string) (bool, st
 	if err != nil {
 		return false, "", false
 	}
-	req.Header.Set("User-Agent", "gymbag/0.1.0")
+	req.Header.Set("User-Agent", "gymbag/0.2.0")
 	resp, err := vc.client.Do(req)
 	if err != nil {
 		return false, "", false
