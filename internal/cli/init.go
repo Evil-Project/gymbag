@@ -80,6 +80,12 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		rulesWatchInterval string
 		noProtect          bool
 		sslProvider        string
+		noAutoSSL          bool
+		acmeShPath         string
+		certFile           string
+		keyFile            string
+		directHTTP         bool
+		httpOnly           bool
 		email              string
 		eabKID             string
 		eabHMACKey         string
@@ -160,6 +166,14 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&rulesWatchInterval, "rules-watch-interval", "", "Polling interval for dynamic local rule files/folders (default 2s)")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification (protect off)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
+	fs.BoolVar(&noAutoSSL, "no-auto-ssl", false, "Disable automatic SSL provisioning (ACME, local CA, self-signed)")
+	fs.StringVar(&acmeShPath, "acme-sh-path", "", "Use certificates managed by acme.sh (home dir or domain cert dir)")
+	fs.StringVar(&acmeShPath, "acme-sh", "", "Alias for --acme-sh-path")
+	fs.StringVar(&certFile, "cert-file", "", "Custom TLS certificate PEM file path")
+	fs.StringVar(&keyFile, "key-file", "", "Custom TLS private key PEM file path")
+	fs.BoolVar(&directHTTP, "direct-http", false, "Serve websites directly over HTTP without redirecting to HTTPS")
+	fs.BoolVar(&directHTTP, "allow-http", false, "Alias for --direct-http")
+	fs.BoolVar(&httpOnly, "http-only", false, "Disable HTTPS/Auto-SSL and serve websites directly over HTTP")
 	fs.StringVar(&email, "email", "", "ACME contact email")
 	fs.StringVar(&eabKID, "eab-kid", "", "ACME External Account Binding Key ID")
 	fs.StringVar(&eabHMACKey, "eab-hmac-key", "", "ACME External Account Binding HMAC key")
@@ -295,6 +309,11 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f := false
 		autoHostsOpt = &f
 	}
+	var autoSSLOpt *bool
+	if noAutoSSL {
+		f := false
+		autoSSLOpt = &f
+	}
 
 	if (autheliaURI != "" || autheliaPortal != "") && strings.TrimSpace(autheliaURL) == "" {
 		_, _ = fmt.Fprintln(stderr, "ERROR gymbag init: --authelia-uri and --authelia-portal require --authelia <url>")
@@ -328,6 +347,12 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		RulesWatchInterval: rulesWatchInterval,
 		DefaultRules:       defaultRulesOpt,
 		SSLProvider:        sslProvider,
+		AutoSSL:            autoSSLOpt,
+		AcmeShPath:         acmeShPath,
+		CertFile:           certFile,
+		KeyFile:            keyFile,
+		DirectHTTP:         directHTTP,
+		HTTPOnly:           httpOnly,
 		Email:              email,
 		EABKID:             eabKID,
 		EABHMACKey:         eabHMACKey,
@@ -360,7 +385,8 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	hasConfigFlags := len(templateFlags) > 0 || preset != "" || domain != "" || upstream != "" || len(parsedSites) > 0 ||
 		useSSH || useMC || verifyURL != "" || verifyPort != 0 || autheliaURL != "" ||
 		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || len(initRuleSources) > 0 ||
-		rulesWatchInterval != "" || noProtect || sslProvider != "" || email != "" ||
+		rulesWatchInterval != "" || noProtect || sslProvider != "" || noAutoSSL || acmeShPath != "" ||
+		certFile != "" || keyFile != "" || directHTTP || httpOnly || email != "" ||
 		httpPort != 0 || httpsPort != 0 || adminAddr != ""
 	runWizard := interactive || (!yes && !hasConfigFlags && len(args) == 0)
 	if !interactive && !yes && !hasConfigFlags && len(args) > 0 {
@@ -569,7 +595,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		userScope := resolveUserScope(mgr, serviceUserScope, serviceSysScope)
-		portsPriv := (cfg.HTTPEnabled() && (cfg.HTTPPort < 1024 || cfg.HTTPSPort < 1024)) ||
+		portsPriv := (cfg.HTTPEnabled() && (cfg.HTTPPort < 1024 || (cfg.HTTPSEnabled() && cfg.HTTPSPort < 1024))) ||
 			(cfg.SSHEnabled() && cfg.SSH.Port < 1024) ||
 			(cfg.MinecraftEnabled() && cfg.Minecraft.Port < 1024) ||
 			(cfg.NeedsVerifyServer() && cfg.Verify.EffectivePort() < 1024)
@@ -803,33 +829,49 @@ func runInitWizard(
 		}
 	}
 	if len(candidateDomains) > 0 && !localpki.AllLocalDomains(candidateDomains) {
-		if opts.SSLProvider == "" {
-			ans, err := promptLine(r, out, "SSL provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local)", "letsencrypt")
+		if opts.SSLProvider == "" && !opts.HTTPOnly && opts.AcmeShPath == "" {
+			ans, err := promptLine(r, out, "SSL provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, acme.sh, off)", "letsencrypt")
 			if err != nil {
 				return "", err
 			}
 			opts.SSLProvider = ans
 		}
 		provLower := strings.ToLower(strings.TrimSpace(opts.SSLProvider))
-		if provLower != "local" && opts.Email == "" {
-			ans, err := promptLine(r, out, "ACME contact email (optional; enables ZeroSSL auto-EAB)", "")
-			if err != nil {
-				return "", err
-			}
-			opts.Email = ans
-		}
-		if (provLower == "google" || provLower == "gts" || provLower == "ssl.com" || provLower == "sslcom" || provLower == "ssl.com-rsa") && opts.EABKID == "" {
-			kid, err := promptLine(r, out, "EAB Key ID (optional, leave blank to configure later)", "")
-			if err != nil {
-				return "", err
-			}
-			opts.EABKID = kid
-			if kid != "" && opts.EABHMACKey == "" {
-				hmacKey, err := promptLine(r, out, "EAB HMAC Key", "")
+		if provLower == "acme.sh" || provLower == "acme_sh" || provLower == "acmesh" {
+			opts.SSLProvider = ""
+			f := false
+			opts.AutoSSL = &f
+			if opts.AcmeShPath == "" {
+				ans, err := promptLine(r, out, "Path to acme.sh directory", "~/.acme.sh")
 				if err != nil {
 					return "", err
 				}
-				opts.EABHMACKey = hmacKey
+				opts.AcmeShPath = ans
+			}
+		} else if provLower == "off" || provLower == "none" || provLower == "disabled" {
+			opts.SSLProvider = ""
+			opts.HTTPOnly = true
+		} else if !opts.HTTPOnly && opts.AcmeShPath == "" {
+			if provLower != "local" && opts.Email == "" {
+				ans, err := promptLine(r, out, "ACME contact email (optional; enables ZeroSSL auto-EAB)", "")
+				if err != nil {
+					return "", err
+				}
+				opts.Email = ans
+			}
+			if (provLower == "google" || provLower == "gts" || provLower == "ssl.com" || provLower == "sslcom" || provLower == "ssl.com-rsa") && opts.EABKID == "" {
+				kid, err := promptLine(r, out, "EAB Key ID (optional, leave blank to configure later)", "")
+				if err != nil {
+					return "", err
+				}
+				opts.EABKID = kid
+				if kid != "" && opts.EABHMACKey == "" {
+					hmacKey, err := promptLine(r, out, "EAB HMAC Key", "")
+					if err != nil {
+						return "", err
+					}
+					opts.EABHMACKey = hmacKey
+				}
 			}
 		}
 	}
@@ -1011,6 +1053,12 @@ Flags:
       --rules-watch-interval <d>   Polling interval for dynamic local rule files/folders (default 2s)
       --no-protect                 Disable WAF verification (protect off)
       --ssl-provider <name>    SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, URL)
+      --no-auto-ssl            Disable automatic SSL provisioning (ACME, local CA, self-signed)
+      --acme-sh-path <path>    Use certificates managed by acme.sh (home dir or domain cert dir)
+      --cert-file <path>       Custom TLS certificate PEM file path
+      --key-file <path>        Custom TLS private key PEM file path
+      --direct-http            Serve websites directly over HTTP without redirecting to HTTPS
+      --http-only              Disable HTTPS/Auto-SSL and serve websites directly over HTTP
       --email <addr>           ACME contact email
       --eab-kid <id>           ACME EAB Key ID
       --eab-hmac-key <key>     ACME EAB HMAC key

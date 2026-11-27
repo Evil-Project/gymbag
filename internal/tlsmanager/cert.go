@@ -611,7 +611,7 @@ func HSTSEnabled(explicit *bool, source string) bool {
 	if explicit != nil {
 		return *explicit
 	}
-	return source == "acme"
+	return source == "acme" || source == "acme.sh"
 }
 
 // IsCertificateError reports whether err is or wraps a *CertificateError.

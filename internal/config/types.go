@@ -327,6 +327,7 @@ var ValidTLSModes = map[string]struct{}{
 	"local":      {},
 	"selfsigned": {},
 	"file":       {},
+	"off":        {},
 }
 
 // NormalizeSSLProvider normalizes an SSL/ACME CA provider name or custom ACME directory URL.
@@ -537,8 +538,9 @@ type SiteConfig struct {
 	Auth      *ForwardAuthConfig `json:"auth,omitempty"`    // optional forward authentication (Authelia / Caddy forward_auth)
 	Protect   bool               `json:"protect"`
 	WAF       SiteWAFConfig      `json:"waf"`
-	CertFile  string             `json:"cert_file,omitempty"`
-	KeyFile   string             `json:"key_file,omitempty"`
+	CertFile   string             `json:"cert_file,omitempty"`
+	KeyFile    string             `json:"key_file,omitempty"`
+	AcmeShPath string             `json:"acme_sh_path,omitempty"`
 }
 
 // UnmarshalJSON initializes sensible defaults when decoding a new SiteConfig from concise JSON.
@@ -629,6 +631,7 @@ func (s *SiteConfig) Validate() error {
 	if s.WAF.RateWindow == 0 {
 		s.WAF.RateWindow = 60
 	}
+	s.AcmeShPath = strings.TrimSpace(s.AcmeShPath)
 	if (s.CertFile == "") != (s.KeyFile == "") {
 		return fmt.Errorf("site %s must specify both cert_file and key_file or neither", s.Domain)
 	}
@@ -638,9 +641,11 @@ func (s *SiteConfig) Validate() error {
 // TLSConfig holds server-wide TLS & ACME certificate configuration.
 type TLSConfig struct {
 	Mode            string `json:"mode"`
+	AutoSSL         *bool  `json:"auto_ssl,omitempty"`
 	Provider        string `json:"provider,omitempty"`
 	CertFile        string `json:"cert_file"`
 	KeyFile         string `json:"key_file"`
+	AcmeShPath      string `json:"acme_sh_path,omitempty"`
 	KeyPassword     string `json:"key_password,omitempty"`
 	AccountKeyFile  string `json:"account_key_file,omitempty"`
 	EABKID          string `json:"eab_kid,omitempty"`
@@ -652,6 +657,11 @@ type TLSConfig struct {
 	RenewInterval   int    `json:"renew_interval"`
 	RenewWithinDays int    `json:"renew_within_days"`
 	HSTS            *bool  `json:"hsts,omitempty"`
+}
+
+// AutoSSLEnabled reports whether automatic certificate provisioning (ACME, local CA, self-signed) is enabled.
+func (t TLSConfig) AutoSSLEnabled() bool {
+	return t.AutoSSL == nil || *t.AutoSSL
 }
 
 // AutoHostsEnabled reports whether automatic /etc/hosts setup & cleanup for local domains is active (true when nil or true).
@@ -688,6 +698,7 @@ type Config struct {
 	BindHost           string             `json:"bind_host"`
 	HTTPPort           int                `json:"http_port"`
 	HTTPSPort          int                `json:"https_port"`
+	DirectHTTP         bool               `json:"direct_http,omitempty"`
 	AdminAddr          string             `json:"admin_addr,omitempty"`
 	TLS                TLSConfig          `json:"tls"`
 	Intel              IntelConfig        `json:"intel"`
@@ -703,6 +714,47 @@ type Config struct {
 // HTTPEnabled reports whether at least one HTTP/HTTPS reverse proxy site is configured.
 func (c Config) HTTPEnabled() bool {
 	return len(c.Sites) > 0
+}
+
+// HasExternalTLSCerts reports whether user-managed certificates (file paths, cert/key, or acme.sh path) are configured.
+func (c Config) HasExternalTLSCerts() bool {
+	if strings.TrimSpace(c.TLS.AcmeShPath) != "" {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(c.TLS.Mode), "file") {
+		return true
+	}
+	if cert := strings.TrimSpace(c.TLS.CertFile); cert != "" && cert != "cert.pem" {
+		return true
+	}
+	if key := strings.TrimSpace(c.TLS.KeyFile); key != "" && key != "key.pem" {
+		return true
+	}
+	for _, s := range c.Sites {
+		if (strings.TrimSpace(s.CertFile) != "" && strings.TrimSpace(s.KeyFile) != "") ||
+			strings.TrimSpace(s.AcmeShPath) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// TLSDisabled reports whether HTTPS is disabled for HTTP/HTTP-proxy sites.
+func (c Config) TLSDisabled() bool {
+	if strings.EqualFold(strings.TrimSpace(c.TLS.Mode), "off") {
+		return true
+	}
+	return !c.TLS.AutoSSLEnabled() && !c.HasExternalTLSCerts()
+}
+
+// HTTPSEnabled reports whether the HTTPS gateway listener should run for configured sites.
+func (c Config) HTTPSEnabled() bool {
+	return c.HTTPEnabled() && !c.TLSDisabled()
+}
+
+// DirectHTTPEnabled reports whether sites are served directly on HTTP without redirecting to HTTPS.
+func (c Config) DirectHTTPEnabled() bool {
+	return c.DirectHTTP || c.TLSDisabled()
 }
 
 // SSHEnabled reports whether SSH protection is enabled.
@@ -890,13 +942,18 @@ func (c *Config) Validate() error {
 	if c.HTTPSPort < 1 || c.HTTPSPort > 65535 {
 		return fmt.Errorf("https_port must be between 1 and 65535")
 	}
-	if err := checkPortConflict(c); err != nil {
-		return err
+	c.TLS.AcmeShPath = strings.TrimSpace(c.TLS.AcmeShPath)
+	c.TLS.Mode = strings.ToLower(strings.TrimSpace(c.TLS.Mode))
+	switch c.TLS.Mode {
+	case "none", "disabled", "disable", "false":
+		c.TLS.Mode = "off"
 	}
-	if rawProv := strings.TrimSpace(c.TLS.Provider); rawProv != "" {
+	if c.TLS.Mode == "off" {
+		c.TLS.Provider = ""
+	} else if rawProv := strings.TrimSpace(c.TLS.Provider); rawProv != "" {
 		if strings.EqualFold(rawProv, "custom") {
 			c.TLS.Provider = "custom"
-			if c.TLS.Mode == "" || strings.EqualFold(c.TLS.Mode, "auto") {
+			if c.TLS.Mode == "" || c.TLS.Mode == "auto" {
 				c.TLS.Mode = "acme"
 			}
 		} else {
@@ -905,7 +962,7 @@ func (c *Config) Validate() error {
 				return err
 			}
 			c.TLS.Provider = prov
-			if c.TLS.Mode == "" || strings.EqualFold(strings.TrimSpace(c.TLS.Mode), "auto") {
+			if c.TLS.Mode == "" || c.TLS.Mode == "auto" {
 				c.TLS.Mode = mode
 			}
 			if customURL != "" {
@@ -916,9 +973,16 @@ func (c *Config) Validate() error {
 	if c.TLS.Mode == "" {
 		c.TLS.Mode = "auto"
 	}
-	c.TLS.Mode = strings.ToLower(strings.TrimSpace(c.TLS.Mode))
 	if _, ok := ValidTLSModes[c.TLS.Mode]; !ok {
-		return fmt.Errorf("tls mode must be auto, acme, local, selfsigned, or file")
+		return fmt.Errorf("tls mode must be auto, acme, local, selfsigned, file, or off")
+	}
+	if !c.TLS.AutoSSLEnabled() {
+		if c.TLS.Mode == "acme" || c.TLS.Mode == "local" || c.TLS.Mode == "selfsigned" {
+			return fmt.Errorf("tls.auto_ssl=false cannot be combined with tls.mode=%q (use \"off\" or \"file\")", c.TLS.Mode)
+		}
+	}
+	if err := checkPortConflict(c); err != nil {
+		return err
 	}
 	if c.TLS.CertFile == "" {
 		c.TLS.CertFile = "cert.pem"

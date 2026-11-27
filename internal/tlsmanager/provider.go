@@ -136,7 +136,11 @@ func (p *FileProvider) loadWithWindow(withinDays int) *Material {
 	if leaf.NotBefore.Add(-5 * time.Minute).After(now) {
 		return nil
 	}
-	if CertificateNeedsRenewal(leaf, withinDays) {
+	if p.Required {
+		if !leaf.NotAfter.After(now) {
+			return nil
+		}
+	} else if CertificateNeedsRenewal(leaf, withinDays) {
 		return nil
 	}
 	if !CertificateCovers(leaf, p.Domains) {
@@ -480,14 +484,49 @@ func BuildProviders(cfg config.Config, board *HTTP01Board, client *ACMEClient) [
 
 // BuildProvidersWithLocal builds the ordered Provider chain including an optional Local PKI CA Provider.
 func BuildProvidersWithLocal(cfg config.Config, board *HTTP01Board, client *ACMEClient, localProvider Provider) []Provider {
+	if cfg.TLSDisabled() {
+		return nil
+	}
+
 	domains := cfg.Domains()
+	explicitFile := (strings.TrimSpace(cfg.TLS.CertFile) != "" && cfg.TLS.CertFile != "cert.pem") ||
+		(strings.TrimSpace(cfg.TLS.KeyFile) != "" && cfg.TLS.KeyFile != "key.pem")
+
 	fileProv := &FileProvider{
 		CertFile:        cfg.TLS.CertFile,
 		KeyFile:         cfg.TLS.KeyFile,
 		KeyPassword:     cfg.TLS.KeyPassword,
 		Domains:         domains,
 		RenewWithinDays: cfg.TLS.RenewWithinDays,
-		Required:        cfg.TLS.Mode == "file",
+		Required:        cfg.TLS.Mode == "file" || explicitFile,
+	}
+
+	var acmeShProv *AcmeShProvider
+	if strings.TrimSpace(cfg.TLS.AcmeShPath) != "" {
+		acmeShProv = &AcmeShProvider{
+			Path:        cfg.TLS.AcmeShPath,
+			BaseDir:     cfg.BaseDir,
+			Domains:     domains,
+			KeyPassword: cfg.TLS.KeyPassword,
+			Required:    true,
+		}
+	}
+
+	if !cfg.TLS.AutoSSLEnabled() {
+		var providers []Provider
+		if acmeShProv != nil {
+			if explicitFile {
+				acmeShProv.Required = false
+			}
+			providers = append(providers, acmeShProv)
+		}
+		if cfg.TLS.Mode == "file" || explicitFile {
+			if acmeShProv == nil {
+				fileProv.Required = true
+			}
+			providers = append(providers, fileProv)
+		}
+		return providers
 	}
 
 	provName := strings.TrimSpace(cfg.TLS.Provider)
@@ -520,7 +559,16 @@ func BuildProvidersWithLocal(cfg config.Config, board *HTTP01Board, client *ACME
 	}
 
 	switch cfg.TLS.Mode {
+	case "off":
+		return nil
 	case "file":
+		if acmeShProv != nil {
+			if explicitFile {
+				acmeShProv.Required = false
+				return []Provider{acmeShProv, fileProv}
+			}
+			return []Provider{acmeShProv}
+		}
 		return []Provider{fileProv}
 	case "acme":
 		return []Provider{acmeProv}
@@ -529,15 +577,21 @@ func BuildProvidersWithLocal(cfg config.Config, board *HTTP01Board, client *ACME
 	case "selfsigned":
 		return []Provider{selfProv}
 	default:
+		if acmeShProv != nil {
+			return []Provider{acmeShProv}
+		}
 		return []Provider{fileProv, acmeProv, localProvider, selfProv}
 	}
 }
 
 // BuildVerifyProviders builds the TLS Provider chain for the SSH/Minecraft verification HTTPS portal,
-// supporting custom Verify.CertFile/KeyFile, RFC 8738 ACME IP/domain certs, Local CA certs, and SelfSigned fallback.
+// supporting custom Verify.CertFile/KeyFile, acme.sh paths, RFC 8738 ACME IP/domain certs, Local CA certs, and SelfSigned fallback.
 func BuildVerifyProviders(cfg config.Config, targets []string, board *HTTP01Board, client *ACMEClient) []Provider {
 	if len(targets) == 0 {
 		targets = []string{"127.0.0.1", "::1"}
+	}
+	if cfg.TLSDisabled() && (cfg.Verify.CertFile == "" || cfg.Verify.KeyFile == "") {
+		return nil
 	}
 	certFile, keyFile := cfg.Verify.CertFile, cfg.Verify.KeyFile
 	fileRequired := certFile != "" && keyFile != ""
@@ -552,6 +606,17 @@ func BuildVerifyProviders(cfg config.Config, targets []string, board *HTTP01Boar
 		Domains:         targets,
 		RenewWithinDays: cfg.TLS.RenewWithinDays,
 		Required:        fileRequired,
+	}
+
+	var verifyAcmeSh *AcmeShProvider
+	if strings.TrimSpace(cfg.TLS.AcmeShPath) != "" {
+		verifyAcmeSh = &AcmeShProvider{
+			Path:        cfg.TLS.AcmeShPath,
+			BaseDir:     cfg.BaseDir,
+			Domains:     targets,
+			KeyPassword: cfg.TLS.KeyPassword,
+			Required:    !cfg.TLS.AutoSSLEnabled() || cfg.TLS.Mode == "file",
+		}
 	}
 
 	var acmeTargets []string
@@ -606,8 +671,30 @@ func BuildVerifyProviders(cfg config.Config, targets []string, board *HTTP01Boar
 	if cfg.Verify.CertFile != "" && cfg.Verify.KeyFile != "" {
 		return []Provider{fileProv}
 	}
+	if !cfg.TLS.AutoSSLEnabled() {
+		var out []Provider
+		if verifyAcmeSh != nil {
+			if cfg.TLS.Mode == "file" && cfg.TLS.CertFile != "cert.pem" {
+				verifyAcmeSh.Required = false
+			}
+			out = append(out, verifyAcmeSh)
+		}
+		if cfg.TLS.Mode == "file" && (verifyAcmeSh == nil || cfg.TLS.CertFile != "cert.pem") {
+			out = append(out, fileProv)
+		}
+		return out
+	}
 	switch cfg.TLS.Mode {
+	case "off":
+		return nil
 	case "file":
+		if verifyAcmeSh != nil {
+			if cfg.TLS.CertFile != "cert.pem" {
+				verifyAcmeSh.Required = false
+				return []Provider{verifyAcmeSh, fileProv}
+			}
+			return []Provider{verifyAcmeSh}
+		}
 		return []Provider{fileProv}
 	case "acme":
 		if len(acmeTargets) > 0 {
@@ -620,19 +707,39 @@ func BuildVerifyProviders(cfg config.Config, targets []string, board *HTTP01Boar
 		return []Provider{selfProv}
 	default:
 		if len(acmeTargets) > 0 && !strings.EqualFold(cfg.TLS.Provider, "local") {
+			if verifyAcmeSh != nil {
+				verifyAcmeSh.Required = false
+				return []Provider{verifyAcmeSh, acmeProv, localProv, selfProv}
+			}
 			return []Provider{acmeProv, localProv, selfProv}
+		}
+		if verifyAcmeSh != nil {
+			verifyAcmeSh.Required = false
+			return []Provider{verifyAcmeSh, localProv, selfProv}
 		}
 		return []Provider{localProv, selfProv}
 	}
 }
 
+type sniCertEntry struct {
+	domain   string
+	certPath string
+	keyPath  string
+	password string
+	source   string
+	leafDER  []byte
+	cert     tls.Certificate
+}
+
 // Manager coordinates certificate issuance, hot-reloading, and SNI per-site certificate selection.
 type Manager struct {
-	mu        sync.RWMutex
-	providers []Provider
-	current   *Material
-	active    atomic.Pointer[tls.Certificate]
-	sniCerts  atomic.Pointer[map[string]*tls.Certificate]
+	mu          sync.RWMutex
+	providers   []Provider
+	current     *Material
+	active      atomic.Pointer[tls.Certificate]
+	sniCerts    atomic.Pointer[map[string]*tls.Certificate]
+	sniEntries  map[string]sniCertEntry
+	siteDomains []string
 }
 
 // NewManager creates a certificate Manager from an ordered Provider slice.
@@ -647,23 +754,94 @@ func NewManager(providers []Provider) *Manager {
 
 // RegisterSiteCertificates loads any per-site custom certificate pairs for SNI selection.
 func (m *Manager) RegisterSiteCertificates(sites []config.SiteConfig) error {
-	return m.RegisterSiteCertificatesWithPassword(sites, os.Getenv("GYMBAG_KEY_PASSWORD"))
+	return m.RegisterSiteCertificatesWithOptions(sites, "", "", os.Getenv("GYMBAG_KEY_PASSWORD"))
 }
 
 // RegisterSiteCertificatesWithPassword loads per-site custom certificate pairs using an optional key password.
 func (m *Manager) RegisterSiteCertificatesWithPassword(sites []config.SiteConfig, password string) error {
+	return m.RegisterSiteCertificatesWithOptions(sites, "", "", password)
+}
+
+// RegisterSiteCertificatesWithOptions loads per-site cert/key pairs and acme.sh certificates for SNI selection.
+func (m *Manager) RegisterSiteCertificatesWithOptions(sites []config.SiteConfig, globalAcmeShPath, baseDir, password string) error {
+	if password == "" {
+		password = os.Getenv("GYMBAG_KEY_PASSWORD")
+	}
 	sni := make(map[string]*tls.Certificate)
+	entries := make(map[string]sniCertEntry)
+	domains := make([]string, 0, len(sites))
+	seenDomains := make(map[string]struct{}, len(sites))
+	now := time.Now().UTC()
+
 	for _, site := range sites {
-		if site.CertFile == "" || site.KeyFile == "" {
+		norm := host.Normalize(site.Domain)
+		if norm != "" {
+			if _, ok := seenDomains[norm]; !ok {
+				seenDomains[norm] = struct{}{}
+				domains = append(domains, norm)
+			}
+		}
+		if site.CertFile != "" && site.KeyFile != "" {
+			pair, leaf, err := LoadKeyPairWithPassword(site.CertFile, site.KeyFile, password)
+			if err != nil {
+				return certErrorf("failed to load TLS certificate for site %s: %v", site.Domain, err)
+			}
+			certCopy := pair
+			sni[norm] = &certCopy
+			var der []byte
+			if leaf != nil {
+				der = leaf.Raw
+			}
+			entries[norm] = sniCertEntry{
+				domain:   norm,
+				certPath: site.CertFile,
+				keyPath:  site.KeyFile,
+				password: password,
+				source:   "file",
+				leafDER:  der,
+				cert:     certCopy,
+			}
 			continue
 		}
-		pair, _, err := LoadKeyPairWithPassword(site.CertFile, site.KeyFile, password)
-		if err != nil {
-			return certErrorf("failed to load TLS certificate for site %s: %v", site.Domain, err)
+		if site.AcmeShPath != "" {
+			cp, kp, pair, leaf, ok := ResolveAcmeShPair(site.AcmeShPath, baseDir, site.Domain, password)
+			if !ok {
+				return certErrorf("no valid acme.sh certificate found for site %s in %s", site.Domain, site.AcmeShPath)
+			}
+			certCopy := pair
+			sni[norm] = &certCopy
+			entries[norm] = sniCertEntry{
+				domain:   norm,
+				certPath: cp,
+				keyPath:  kp,
+				password: password,
+				source:   "acme.sh",
+				leafDER:  leaf.Raw,
+				cert:     certCopy,
+			}
+			continue
 		}
-		certCopy := pair
-		sni[host.Normalize(site.Domain)] = &certCopy
+		if strings.TrimSpace(globalAcmeShPath) != "" {
+			cp, kp, pair, leaf, ok := ResolveAcmeShPair(globalAcmeShPath, baseDir, site.Domain, password)
+			if ok && leaf != nil && leaf.NotAfter.After(now) {
+				certCopy := pair
+				sni[norm] = &certCopy
+				entries[norm] = sniCertEntry{
+					domain:   norm,
+					certPath: cp,
+					keyPath:  kp,
+					password: password,
+					source:   "acme.sh",
+					leafDER:  leaf.Raw,
+					cert:     certCopy,
+				}
+			}
+		}
 	}
+	m.mu.Lock()
+	m.sniEntries = entries
+	m.siteDomains = domains
+	m.mu.Unlock()
 	m.sniCerts.Store(&sni)
 	return nil
 }
@@ -713,6 +891,39 @@ func (m *Manager) Obtain(ctx context.Context) (*Material, error) {
 			return mat, nil
 		}
 	}
+
+	if len(errs) == 0 {
+		m.mu.RLock()
+		domains := append([]string(nil), m.siteDomains...)
+		entries := m.sniEntries
+		m.mu.RUnlock()
+		if len(domains) > 0 && len(entries) >= len(domains) {
+			allCovered := true
+			for _, d := range domains {
+				if _, ok := entries[d]; !ok {
+					allCovered = false
+					break
+				}
+			}
+			if allCovered {
+				first := entries[domains[0]]
+				mat := &Material{
+					CertPath: first.certPath,
+					KeyPath:  first.keyPath,
+					Source:   first.source,
+					Provider: first.source,
+					Cert:     first.cert,
+				}
+				certCopy := mat.Cert
+				m.active.Store(&certCopy)
+				m.mu.Lock()
+				m.current = mat
+				m.mu.Unlock()
+				return mat, nil
+			}
+		}
+	}
+
 	detail := strings.Join(errs, "; ")
 	if detail == "" {
 		detail = "no certificate provider could issue a certificate"
@@ -749,20 +960,93 @@ func materialLeaf(mat *Material) *x509.Certificate {
 	return nil
 }
 
+func (m *Manager) reloadSNICerts(force bool) bool {
+	m.mu.RLock()
+	prevEntries := make(map[string]sniCertEntry, len(m.sniEntries))
+	for k, v := range m.sniEntries {
+		prevEntries[k] = v
+	}
+	cur := m.current
+	m.mu.RUnlock()
+
+	if len(prevEntries) == 0 {
+		return false
+	}
+
+	changed := false
+	nextEntries := make(map[string]sniCertEntry, len(prevEntries))
+	nextSNI := make(map[string]*tls.Certificate, len(prevEntries))
+	var updatedActive *tls.Certificate
+	var activeCertPath string
+	if cur != nil {
+		activeCertPath = cur.CertPath
+	}
+
+	for domain, entry := range prevEntries {
+		needReload := force
+		if !needReload && entry.certPath != "" {
+			if raw, err := os.ReadFile(entry.certPath); err == nil {
+				if diskLeaf, lErr := LoadLeafCertificate(raw); lErr == nil {
+					if len(entry.leafDER) == 0 || !bytes.Equal(entry.leafDER, diskLeaf.Raw) {
+						needReload = true
+					}
+				}
+			}
+		}
+		if needReload && entry.certPath != "" && entry.keyPath != "" {
+			if pair, leaf, err := LoadKeyPairWithPassword(entry.certPath, entry.keyPath, entry.password); err == nil {
+				if leaf != nil && (force || !bytes.Equal(entry.leafDER, leaf.Raw)) {
+					changed = true
+				}
+				entry.cert = pair
+				if leaf != nil {
+					entry.leafDER = leaf.Raw
+				}
+				if activeCertPath != "" && entry.certPath == activeCertPath {
+					c := entry.cert
+					updatedActive = &c
+				}
+			}
+		}
+		nextEntries[domain] = entry
+		c := entry.cert
+		nextSNI[domain] = &c
+	}
+
+	if changed || force {
+		m.mu.Lock()
+		m.sniEntries = nextEntries
+		if updatedActive != nil && m.current != nil && m.current.CertPath == activeCertPath {
+			matCopy := *m.current
+			matCopy.Cert = *updatedActive
+			m.current = &matCopy
+			m.active.Store(updatedActive)
+		}
+		m.mu.Unlock()
+		m.sniCerts.Store(&nextSNI)
+	}
+	return changed
+}
+
 // RenewIfNeeded checks whether the active certificate expires within withinDays (or was replaced on disk)
-// and re-obtains TLS material seamlessly across ACME, Local CA, SelfSigned, and File providers.
+// and re-obtains TLS material seamlessly across ACME, Local CA, SelfSigned, File, and acme.sh providers.
 func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material, error) {
+	sniUpdated := m.reloadSNICerts(false)
+
 	cur := m.Current()
 	if cur == nil {
 		return nil, nil
 	}
 
+	isExternal := cur.Source == "file" || cur.Source == "acme.sh"
 	prevLeaf := materialLeaf(cur)
 	var prevDER []byte
-	inMemExpiring := true
+	inMemExpiring := !isExternal
 	if prevLeaf != nil {
 		prevDER = prevLeaf.Raw
-		inMemExpiring = CertificateNeedsRenewal(prevLeaf, withinDays)
+		if !isExternal {
+			inMemExpiring = CertificateNeedsRenewal(prevLeaf, withinDays)
+		}
 	}
 
 	diskChangedOrExpiring := false
@@ -774,13 +1058,16 @@ func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material,
 		} else {
 			if len(prevDER) > 0 && !bytes.Equal(prevDER, diskLeaf.Raw) {
 				diskChangedOrExpiring = true
-			} else if CertificateNeedsRenewal(diskLeaf, withinDays) {
+			} else if !isExternal && CertificateNeedsRenewal(diskLeaf, withinDays) {
 				diskChangedOrExpiring = true
 			}
 		}
 	}
 
 	if !inMemExpiring && !diskChangedOrExpiring {
+		if sniUpdated {
+			return m.Current(), nil
+		}
 		return nil, nil
 	}
 
@@ -789,7 +1076,7 @@ func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material,
 		return nil, err
 	}
 	freshLeaf := materialLeaf(fresh)
-	if fresh.CertPath == cur.CertPath && freshLeaf != nil && len(prevDER) > 0 && bytes.Equal(prevDER, freshLeaf.Raw) {
+	if !sniUpdated && fresh.CertPath == cur.CertPath && freshLeaf != nil && len(prevDER) > 0 && bytes.Equal(prevDER, freshLeaf.Raw) {
 		return nil, nil
 	}
 	return fresh, nil
@@ -797,6 +1084,7 @@ func (m *Manager) RenewIfNeeded(ctx context.Context, withinDays int) (*Material,
 
 // ForceRenew unconditionally re-issues or reloads the active TLS certificate, bypassing cached material.
 func (m *Manager) ForceRenew(ctx context.Context) (*Material, error) {
+	m.reloadSNICerts(true)
 	return m.Obtain(WithForceRenew(ctx))
 }
 

@@ -297,6 +297,15 @@ var knownDirectiveNames = map[string]struct{}{
 	"ssl_key":              {},
 	"cert_key":             {},
 	"auto_hosts":           {},
+	"auto_ssl":             {},
+	"auto_https":           {},
+	"acme_sh":              {},
+	"acme_sh_path":         {},
+	"acmesh":               {},
+	"acmesh_path":          {},
+	"direct_http":          {},
+	"allow_http":           {},
+	"http_only":            {},
 	"key_password":         {},
 	"bind":                 {},
 	"bind_host":            {},
@@ -397,8 +406,11 @@ type parseState struct {
 	rulesWatchInterval int
 	bindHost           string
 	httpPort           int
+	httpPortSet        bool
 	httpsPort          int
 	httpsPortSet       bool
+	directHTTP         bool
+	explicitTLS        bool
 	adminAddr          string
 	redisURL           string
 	secret             string
@@ -944,6 +956,9 @@ func applyTLSDirective(
 	tlsCfg *TLSConfig,
 	siteCert *string,
 	siteKey *string,
+	siteAcmeSh *string,
+	directHTTP *bool,
+	explicitTLS *bool,
 	isGlobalScope bool,
 ) (bool, error) {
 	switch name {
@@ -971,6 +986,59 @@ func applyTLSDirective(
 		if err := applySSLProvider(args[0], tlsCfg); err != nil {
 			return true, err
 		}
+		if explicitTLS != nil {
+			*explicitTLS = true
+		}
+		return true, nil
+
+	case "auto_ssl":
+		if len(args) != 1 {
+			return true, fmt.Errorf("auto_ssl requires on/off or true/false")
+		}
+		b, err := parseBool(args[0], "auto_ssl")
+		if err != nil {
+			return true, err
+		}
+		tlsCfg.AutoSSL = &b
+		if explicitTLS != nil {
+			*explicitTLS = true
+		}
+		return true, nil
+
+	case "auto_https":
+		if len(args) != 1 {
+			return true, fmt.Errorf("auto_https requires on, off, or disable_redirects")
+		}
+		val := strings.ToLower(strings.TrimSpace(args[0]))
+		if val == "disable_redirects" || val == "disable-redirects" {
+			if directHTTP != nil {
+				*directHTTP = true
+			}
+			return true, nil
+		}
+		b, err := parseBool(val, "auto_https")
+		if err != nil {
+			return true, fmt.Errorf("auto_https requires on, off, or disable_redirects")
+		}
+		tlsCfg.AutoSSL = &b
+		if explicitTLS != nil {
+			*explicitTLS = true
+		}
+		return true, nil
+
+	case "acme_sh", "acme_sh_path", "acmesh", "acmesh_path":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return true, fmt.Errorf("%s requires a directory path", name)
+		}
+		p := strings.TrimSpace(args[0])
+		if !isGlobalScope && siteAcmeSh != nil {
+			*siteAcmeSh = p
+		} else {
+			tlsCfg.AcmeShPath = p
+		}
+		if explicitTLS != nil {
+			*explicitTLS = true
+		}
 		return true, nil
 
 	case "tls":
@@ -981,6 +1049,11 @@ func applyTLSDirective(
 			val := strings.TrimSpace(args[0])
 			lower := strings.ToLower(val)
 			switch {
+			case lower == "off" || lower == "none" || lower == "disabled" || lower == "disable" || lower == "false":
+				tlsCfg.Mode = "off"
+				f := false
+				tlsCfg.AutoSSL = &f
+				tlsCfg.Provider = ""
 			case lower == "selfsigned" || lower == "self_signed":
 				tlsCfg.Mode = "selfsigned"
 				tlsCfg.Provider = ""
@@ -995,9 +1068,27 @@ func applyTLSDirective(
 					return true, fmt.Errorf("unsupported tls option: %s", val)
 				}
 			}
+			if explicitTLS != nil {
+				*explicitTLS = true
+			}
 			return true, nil
 		}
 		if len(args) == 2 {
+			if strings.EqualFold(args[0], "acme.sh") || strings.EqualFold(args[0], "acme_sh") || strings.EqualFold(args[0], "acmesh") {
+				p := strings.TrimSpace(args[1])
+				if p == "" {
+					return true, fmt.Errorf("tls %s requires a directory path", args[0])
+				}
+				if !isGlobalScope && siteAcmeSh != nil {
+					*siteAcmeSh = p
+				} else {
+					tlsCfg.AcmeShPath = p
+				}
+				if explicitTLS != nil {
+					*explicitTLS = true
+				}
+				return true, nil
+			}
 			if !isGlobalScope && siteCert != nil && siteKey != nil {
 				*siteCert = args[0]
 				*siteKey = args[1]
@@ -1011,9 +1102,12 @@ func applyTLSDirective(
 				tlsCfg.CertFile = args[0]
 				tlsCfg.KeyFile = args[1]
 			}
+			if explicitTLS != nil {
+				*explicitTLS = true
+			}
 			return true, nil
 		}
-		return true, fmt.Errorf("tls accepts a mode, provider, email, or cert and key file paths")
+		return true, fmt.Errorf("tls accepts a mode, provider, email, acme.sh path, or cert and key file paths")
 
 	case "eab":
 		if len(args) != 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
@@ -1120,6 +1214,7 @@ func applyGlobalDirective(
 	protectExplicit *bool,
 	siteCert *string,
 	siteKey *string,
+	siteAcmeSh *string,
 	isGlobalScope bool,
 ) ([]string, error) {
 	words := item.words
@@ -1174,7 +1269,7 @@ func applyGlobalDirective(
 
 		case "tls":
 			if len(words) > 1 {
-				if _, err := applyTLSDirective("tls", words[1:], &st.tls, siteCert, siteKey, isGlobalScope); err != nil {
+				if _, err := applyTLSDirective("tls", words[1:], &st.tls, siteCert, siteKey, siteAcmeSh, &st.directHTTP, &st.explicitTLS, isGlobalScope); err != nil {
 					return nil, err
 				}
 			}
@@ -1189,7 +1284,7 @@ func applyGlobalDirective(
 				if tname == "provider" || tname == "issuer" {
 					tname = "ssl_provider"
 				}
-				handled, err := applyTLSDirective(tname, subItem.words[1:], &st.tls, siteCert, siteKey, isGlobalScope)
+				handled, err := applyTLSDirective(tname, subItem.words[1:], &st.tls, siteCert, siteKey, siteAcmeSh, &st.directHTTP, &st.explicitTLS, isGlobalScope)
 				if err != nil {
 					return nil, err
 				}
@@ -1369,7 +1464,7 @@ func applyGlobalDirective(
 		return nil, err
 	}
 
-	if handled, err := applyTLSDirective(name, args, &st.tls, siteCert, siteKey, isGlobalScope); handled {
+	if handled, err := applyTLSDirective(name, args, &st.tls, siteCert, siteKey, siteAcmeSh, &st.directHTTP, &st.explicitTLS, isGlobalScope); handled {
 		return nil, err
 	}
 
@@ -1494,6 +1589,7 @@ func applyGlobalDirective(
 			return nil, err
 		}
 		st.httpPort = p
+		st.httpPortSet = true
 		return nil, nil
 
 	case "https_port":
@@ -1506,6 +1602,42 @@ func applyGlobalDirective(
 		}
 		st.httpsPort = p
 		st.httpsPortSet = true
+		return nil, nil
+
+	case "direct_http", "allow_http":
+		if len(args) == 0 {
+			st.directHTTP = true
+			return nil, nil
+		}
+		if len(args) != 1 {
+			return nil, fmt.Errorf("%s accepts at most on/off or true/false", name)
+		}
+		b, err := parseBool(args[0], name)
+		if err != nil {
+			return nil, err
+		}
+		st.directHTTP = b
+		return nil, nil
+
+	case "http_only":
+		b := true
+		if len(args) == 1 {
+			var err error
+			b, err = parseBool(args[0], "http_only")
+			if err != nil {
+				return nil, err
+			}
+		} else if len(args) > 1 {
+			return nil, fmt.Errorf("http_only accepts at most on/off or true/false")
+		}
+		if b {
+			st.directHTTP = true
+			st.tls.Mode = "off"
+			f := false
+			st.tls.AutoSSL = &f
+			st.tls.Provider = ""
+			st.explicitTLS = true
+		}
 		return nil, nil
 
 	case "admin":
@@ -1644,6 +1776,8 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 	}
 
 	var sites []SiteConfig
+	sawExplicitHTTP := false
+	sawNonHTTP := false
 
 	if hasBraces {
 		for _, item := range items {
@@ -1653,7 +1787,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			block := item.sub
 			if len(block.header) == 0 {
 				for _, stmt := range block.body {
-					upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, nil, nil, nil, true)
+					upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, nil, nil, nil, nil, true)
 					if err != nil {
 						return Config{}, err
 					}
@@ -1685,17 +1819,29 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			var siteHosts []string
 			for _, rawAddr := range block.header {
 				for _, part := range strings.Split(rawAddr, ",") {
-					if strings.TrimSpace(part) == "" {
+					trimmedPart := strings.TrimSpace(part)
+					if trimmedPart == "" {
 						continue
 					}
-					h, port, hasPort, err := parseCaddySiteAddressToken(part)
+					isExplicitHTTP := strings.HasPrefix(strings.ToLower(trimmedPart), "http://")
+					h, port, hasPort, err := parseCaddySiteAddressToken(trimmedPart)
 					if err != nil {
 						return Config{}, err
 					}
 					siteHosts = append(siteHosts, h)
-					if hasPort && !st.httpsPortSet {
-						st.httpsPort = port
-						st.httpsPortSet = true
+					if isExplicitHTTP {
+						sawExplicitHTTP = true
+						st.directHTTP = true
+						if hasPort && !st.httpPortSet {
+							st.httpPort = port
+							st.httpPortSet = true
+						}
+					} else {
+						sawNonHTTP = true
+						if hasPort && !st.httpsPortSet {
+							st.httpsPort = port
+							st.httpsPortSet = true
+						}
 					}
 				}
 			}
@@ -1707,7 +1853,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			siteProtect := st.defaultProtect
 			protectExplicit := false
 			var siteUpstreams []string
-			var siteCert, siteKey string
+			var siteCert, siteKey, siteAcmeSh string
 			var siteAuth *ForwardAuthConfig
 			matchers := make(map[string][]string)
 			siteScope := newRouteScope(matchers)
@@ -1855,7 +2001,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					}
 				}
 
-				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, false)
+				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, &siteAcmeSh, false)
 				if err != nil {
 					return Config{}, err
 				}
@@ -1885,15 +2031,16 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					clonedRoutes[i] = r.Clone()
 				}
 				sites = append(sites, SiteConfig{
-					Domain:    h,
-					Upstreams: append([]string(nil), siteUpstreams...),
-					Routes:    clonedRoutes,
-					Headers:   cloneHeaderMap(siteHeaders),
-					Auth:      siteAuth.Clone(),
-					Protect:   effectiveProtect,
-					WAF:       cloneSiteWAF(siteWAF),
-					CertFile:  siteCert,
-					KeyFile:   siteKey,
+					Domain:     h,
+					Upstreams:  append([]string(nil), siteUpstreams...),
+					Routes:     clonedRoutes,
+					Headers:    cloneHeaderMap(siteHeaders),
+					Auth:       siteAuth.Clone(),
+					Protect:    effectiveProtect,
+					WAF:        cloneSiteWAF(siteWAF),
+					CertFile:   siteCert,
+					KeyFile:    siteKey,
+					AcmeShPath: siteAcmeSh,
 				})
 			}
 		}
@@ -1910,23 +2057,35 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			if idx == 0 && !known && !isArrow && !isBareUpstream {
 				for _, tok := range words {
 					for _, part := range strings.Split(tok, ",") {
-						if strings.TrimSpace(part) == "" {
+						trimmedPart := strings.TrimSpace(part)
+						if trimmedPart == "" {
 							continue
 						}
-						h, port, hasPort, err := parseCaddySiteAddressToken(part)
+						isExplicitHTTP := strings.HasPrefix(strings.ToLower(trimmedPart), "http://")
+						h, port, hasPort, err := parseCaddySiteAddressToken(trimmedPart)
 						if err != nil {
 							return Config{}, err
 						}
 						st.flatDomains = append(st.flatDomains, h)
-						if hasPort && !st.httpsPortSet {
-							st.httpsPort = port
-							st.httpsPortSet = true
+						if isExplicitHTTP {
+							sawExplicitHTTP = true
+							st.directHTTP = true
+							if hasPort && !st.httpPortSet {
+								st.httpPort = port
+								st.httpPortSet = true
+							}
+						} else {
+							sawNonHTTP = true
+							if hasPort && !st.httpsPortSet {
+								st.httpsPort = port
+								st.httpsPortSet = true
+							}
 						}
 					}
 				}
 				continue
 			}
-			upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, &protectExplicit, nil, nil, true)
+			upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, &protectExplicit, nil, nil, nil, true)
 			if err != nil {
 				return Config{}, err
 			}
@@ -1957,6 +2116,13 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		return Config{}, fmt.Errorf("config file must define at least one site, ssh, or minecraft service")
 	}
 
+	if sawExplicitHTTP && !sawNonHTTP && !st.explicitTLS &&
+		st.tls.Mode == "auto" && st.tls.Provider == "" && st.tls.ACMEEmail == "" && st.tls.AcmeShPath == "" {
+		st.tls.Mode = "off"
+		f := false
+		st.tls.AutoSSL = &f
+	}
+
 	cfg := Config{
 		Sites:              sites,
 		SSH:                st.ssh,
@@ -1966,6 +2132,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		BindHost:           st.bindHost,
 		HTTPPort:           st.httpPort,
 		HTTPSPort:          st.httpsPort,
+		DirectHTTP:         st.directHTTP,
 		AdminAddr:          st.adminAddr,
 		TLS:                st.tls,
 		Intel:              st.intel,
@@ -2443,6 +2610,15 @@ func FormatConfig(cfg Config) string {
 	if cfg.TLS.RenewWithinDays != defTLS.RenewWithinDays {
 		globalLines = append(globalLines, fmt.Sprintf("    renew_within_days %d", cfg.TLS.RenewWithinDays))
 	}
+	if cfg.TLS.AutoSSL != nil && !*cfg.TLS.AutoSSL && cfg.TLS.Mode != "off" {
+		globalLines = append(globalLines, "    auto_ssl off")
+	}
+	if cfg.TLS.AcmeShPath != "" {
+		globalLines = append(globalLines, fmt.Sprintf("    acme_sh_path %s", quoteIfNeeded(cfg.TLS.AcmeShPath)))
+	}
+	if cfg.DirectHTTP {
+		globalLines = append(globalLines, "    direct_http on")
+	}
 	if cfg.HTTPPort != 80 {
 		globalLines = append(globalLines, fmt.Sprintf("    http_port %d", cfg.HTTPPort))
 	}
@@ -2583,6 +2759,9 @@ func FormatConfig(cfg Config) string {
 		}
 		if site.CertFile != "" && site.KeyFile != "" {
 			b.WriteString(fmt.Sprintf("    tls %s %s\n", site.CertFile, site.KeyFile))
+		}
+		if site.AcmeShPath != "" {
+			b.WriteString(fmt.Sprintf("    acme_sh_path %s\n", quoteIfNeeded(site.AcmeShPath)))
 		}
 		b.WriteString("}\n")
 	}

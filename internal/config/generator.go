@@ -65,6 +65,12 @@ type GenerateOptions struct {
 	RulesWatchInterval string
 	DefaultRules       *bool
 	SSLProvider        string
+	AutoSSL            *bool
+	AcmeShPath         string
+	CertFile           string
+	KeyFile            string
+	DirectHTTP         bool
+	HTTPOnly           bool
 	Email              string
 	EABKID             string
 	EABHMACKey         string
@@ -506,6 +512,32 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 		if err := applySSLProvider(opts.SSLProvider, &cfg.TLS); err != nil {
 			return Config{}, err
 		}
+	}
+	if opts.HTTPOnly {
+		cfg.DirectHTTP = true
+		cfg.TLS.Mode = "off"
+		f := false
+		cfg.TLS.AutoSSL = &f
+		cfg.TLS.Provider = ""
+	}
+	if opts.AutoSSL != nil {
+		b := *opts.AutoSSL
+		cfg.TLS.AutoSSL = &b
+	}
+	if p := strings.TrimSpace(opts.AcmeShPath); p != "" {
+		cfg.TLS.AcmeShPath = p
+	}
+	if cf := strings.TrimSpace(opts.CertFile); cf != "" {
+		cfg.TLS.CertFile = cf
+	}
+	if kf := strings.TrimSpace(opts.KeyFile); kf != "" {
+		cfg.TLS.KeyFile = kf
+	}
+	if strings.TrimSpace(opts.CertFile) != "" && strings.TrimSpace(opts.KeyFile) != "" && cfg.TLS.Mode == "auto" {
+		cfg.TLS.Mode = "file"
+	}
+	if opts.DirectHTTP {
+		cfg.DirectHTTP = true
 	}
 	if email := strings.TrimSpace(opts.Email); email != "" {
 		cfg.TLS.ACMEEmail = email

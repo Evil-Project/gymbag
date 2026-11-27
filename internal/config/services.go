@@ -534,15 +534,16 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 	}
 
 	type conciseSite struct {
-		Domain    string             `json:"domain"`
-		Upstreams []string           `json:"upstreams,omitempty"`
-		Routes    []RouteConfig      `json:"routes,omitempty"`
-		Headers   map[string]string  `json:"headers,omitempty"`
-		Auth      *ForwardAuthConfig `json:"auth,omitempty"`
-		Protect   *bool              `json:"protect,omitempty"`
-		WAF       *conciseWAF        `json:"waf,omitempty"`
-		CertFile  string             `json:"cert_file,omitempty"`
-		KeyFile   string             `json:"key_file,omitempty"`
+		Domain     string             `json:"domain"`
+		Upstreams  []string           `json:"upstreams,omitempty"`
+		Routes     []RouteConfig      `json:"routes,omitempty"`
+		Headers    map[string]string  `json:"headers,omitempty"`
+		Auth       *ForwardAuthConfig `json:"auth,omitempty"`
+		Protect    *bool              `json:"protect,omitempty"`
+		WAF        *conciseWAF        `json:"waf,omitempty"`
+		CertFile   string             `json:"cert_file,omitempty"`
+		KeyFile    string             `json:"key_file,omitempty"`
+		AcmeShPath string             `json:"acme_sh_path,omitempty"`
 	}
 
 	type conciseTCP struct {
@@ -584,6 +585,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		BindHost           string             `json:"bind_host,omitempty"`
 		HTTPPort           int                `json:"http_port,omitempty"`
 		HTTPSPort          int                `json:"https_port,omitempty"`
+		DirectHTTP         bool               `json:"direct_http,omitempty"`
 		AdminAddr          string             `json:"admin_addr,omitempty"`
 		TLS                map[string]any     `json:"tls,omitempty"`
 		Intel              map[string]any     `json:"intel,omitempty"`
@@ -597,6 +599,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 
 	out := conciseConfig{
 		Authelia:       c.Authelia,
+		DirectHTTP:     c.DirectHTTP,
 		AdminAddr:      c.AdminAddr,
 		RedisURL:       c.RedisURL,
 		Secret:         c.Secret,
@@ -621,13 +624,14 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 
 	for _, s := range c.Sites {
 		cs := conciseSite{
-			Domain:    s.Domain,
-			Upstreams: s.Upstreams,
-			Routes:    s.Routes,
-			Headers:   s.Headers,
-			Auth:      s.Auth,
-			CertFile:  s.CertFile,
-			KeyFile:   s.KeyFile,
+			Domain:     s.Domain,
+			Upstreams:  s.Upstreams,
+			Routes:     s.Routes,
+			Headers:    s.Headers,
+			Auth:       s.Auth,
+			CertFile:   s.CertFile,
+			KeyFile:    s.KeyFile,
+			AcmeShPath: s.AcmeShPath,
 		}
 		if !s.Protect {
 			f := false
@@ -740,6 +744,9 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 	} else if c.TLS.Provider != "" {
 		impliedMode = "acme"
 	}
+	if c.TLS.AutoSSL != nil {
+		tlsMap["auto_ssl"] = *c.TLS.AutoSSL
+	}
 	if c.TLS.Mode != "" && c.TLS.Mode != defTLS.Mode && c.TLS.Mode != impliedMode {
 		tlsMap["mode"] = c.TLS.Mode
 	}
@@ -748,6 +755,9 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 	}
 	if c.TLS.KeyFile != "" && c.TLS.KeyFile != defTLS.KeyFile {
 		tlsMap["key_file"] = c.TLS.KeyFile
+	}
+	if c.TLS.AcmeShPath != "" {
+		tlsMap["acme_sh_path"] = c.TLS.AcmeShPath
 	}
 	if c.TLS.KeyPassword != "" {
 		tlsMap["key_password"] = c.TLS.KeyPassword
@@ -842,7 +852,10 @@ func checkPortConflict(c *Config) error {
 	}
 	var ports []portEntry
 	if c.HTTPEnabled() {
-		ports = append(ports, portEntry{"http_port", c.HTTPPort}, portEntry{"https_port", c.HTTPSPort})
+		ports = append(ports, portEntry{"http_port", c.HTTPPort})
+		if c.HTTPSEnabled() {
+			ports = append(ports, portEntry{"https_port", c.HTTPSPort})
+		}
 	}
 	if c.SSHEnabled() {
 		ports = append(ports, portEntry{"ssh.port", c.SSH.Port})
@@ -852,7 +865,7 @@ func checkPortConflict(c *Config) error {
 	}
 	if c.NeedsVerifyServer() {
 		vPort := c.Verify.EffectivePort()
-		if !(c.HTTPEnabled() && vPort == c.HTTPSPort) {
+		if !(c.HTTPSEnabled() && vPort == c.HTTPSPort) {
 			ports = append(ports, portEntry{"verify.port", vPort})
 		}
 	}

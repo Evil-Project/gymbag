@@ -34,6 +34,8 @@ type TLSStatus struct {
 	SerialNumber       string                      `json:"serial_number,omitempty"`
 	NotBefore          *time.Time                  `json:"not_before,omitempty"`
 	NotAfter           *time.Time                  `json:"not_after,omitempty"`
+	AutoSSL            bool                        `json:"auto_ssl"`
+	DirectHTTP         bool                        `json:"direct_http"`
 	HSTS               bool                        `json:"hsts"`
 	Providers          []tlsmanager.CAProviderInfo `json:"providers"`
 }

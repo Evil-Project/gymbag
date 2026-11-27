@@ -25,6 +25,12 @@ type LoadOptions struct {
 	AdminAddr          string
 	HTTPPort           int
 	HTTPSPort          int
+	AutoSSL            *bool
+	AcmeShPath         string
+	CertFile           string
+	KeyFile            string
+	DirectHTTP         *bool
+	HTTPOnly           bool
 	MCConsole          *bool
 }
 
@@ -264,6 +270,32 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 	if opts.HTTPSPort > 0 {
 		cfg.HTTPSPort = opts.HTTPSPort
 	}
+	if opts.HTTPOnly {
+		cfg.DirectHTTP = true
+		cfg.TLS.Mode = "off"
+		f := false
+		cfg.TLS.AutoSSL = &f
+		cfg.TLS.Provider = ""
+	}
+	if opts.AutoSSL != nil {
+		b := *opts.AutoSSL
+		cfg.TLS.AutoSSL = &b
+	}
+	if strings.TrimSpace(opts.AcmeShPath) != "" {
+		cfg.TLS.AcmeShPath = strings.TrimSpace(opts.AcmeShPath)
+	}
+	if strings.TrimSpace(opts.CertFile) != "" {
+		cfg.TLS.CertFile = strings.TrimSpace(opts.CertFile)
+	}
+	if strings.TrimSpace(opts.KeyFile) != "" {
+		cfg.TLS.KeyFile = strings.TrimSpace(opts.KeyFile)
+	}
+	if strings.TrimSpace(opts.CertFile) != "" && strings.TrimSpace(opts.KeyFile) != "" && cfg.TLS.Mode == "auto" {
+		cfg.TLS.Mode = "file"
+	}
+	if opts.DirectHTTP != nil {
+		cfg.DirectHTTP = *opts.DirectHTTP
+	}
 	if opts.MCConsole != nil && cfg.Minecraft != nil {
 		cfg.Minecraft.Console = *opts.MCConsole
 	}
@@ -415,10 +447,53 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 
 	if rawMode := strings.TrimSpace(getenv("GYMBAG_TLS_MODE")); rawMode != "" {
 		m := strings.ToLower(rawMode)
+		switch m {
+		case "none", "disabled", "disable", "false":
+			m = "off"
+		}
 		if _, ok := ValidTLSModes[m]; !ok {
-			return Config{}, fmt.Errorf("GYMBAG_TLS_MODE must be auto, acme, local, selfsigned, or file")
+			return Config{}, fmt.Errorf("GYMBAG_TLS_MODE must be auto, acme, local, selfsigned, file, or off")
 		}
 		cfg.TLS.Mode = m
+		if m == "off" {
+			f := false
+			cfg.TLS.AutoSSL = &f
+			cfg.TLS.Provider = ""
+		}
+	}
+
+	if rawAutoSSL := strings.TrimSpace(getenv("GYMBAG_AUTO_SSL")); rawAutoSSL != "" {
+		b, err := parseBool(rawAutoSSL, "GYMBAG_AUTO_SSL")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TLS.AutoSSL = &b
+	}
+
+	if rawAcmeSh := firstNonEmpty(getenv("GYMBAG_ACME_SH_PATH"), getenv("GYMBAG_ACME_SH")); rawAcmeSh != "" {
+		cfg.TLS.AcmeShPath = rawAcmeSh
+	}
+
+	if rawDirectHTTP := firstNonEmpty(getenv("GYMBAG_DIRECT_HTTP"), getenv("GYMBAG_ALLOW_HTTP")); rawDirectHTTP != "" {
+		b, err := parseBool(rawDirectHTTP, "GYMBAG_DIRECT_HTTP")
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.DirectHTTP = b
+	}
+
+	if rawHTTPOnly := strings.TrimSpace(getenv("GYMBAG_HTTP_ONLY")); rawHTTPOnly != "" {
+		b, err := parseBool(rawHTTPOnly, "GYMBAG_HTTP_ONLY")
+		if err != nil {
+			return Config{}, err
+		}
+		if b {
+			cfg.DirectHTTP = true
+			cfg.TLS.Mode = "off"
+			f := false
+			cfg.TLS.AutoSSL = &f
+			cfg.TLS.Provider = ""
+		}
 	}
 
 	// WAF env overrides

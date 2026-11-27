@@ -439,7 +439,7 @@ func (g *GatewayHandler) handleVerify(w http.ResponseWriter, r *http.Request, ro
 		Path:     "/",
 		MaxAge:   wafCfg.ClearanceTTL,
 		HttpOnly: true,
-		Secure:   wafCfg.CookieSecure,
+		Secure:   wafCfg.CookieSecure && RequestScheme(r) == "https",
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.Header().Set("Cache-Control", "no-store")
@@ -522,7 +522,7 @@ func (g *GatewayHandler) handleSession(w http.ResponseWriter, r *http.Request, r
 			Path:     "/",
 			MaxAge:   -1,
 			HttpOnly: true,
-			Secure:   wafCfg.CookieSecure,
+			Secure:   wafCfg.CookieSecure && RequestScheme(r) == "https",
 			SameSite: http.SameSiteLaxMode,
 		})
 		w.Header().Set("Cache-Control", "no-store")

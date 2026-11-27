@@ -76,6 +76,12 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		remoteRules        multiStringFlag
 		remoteRulesRefresh string
 		sslProvider        string
+		noAutoSSL          bool
+		acmeShPath         string
+		certFile           string
+		keyFile            string
+		directHTTP         bool
+		httpOnly           bool
 		noProtect          bool
 		adminAddr          string
 		httpPort           int
@@ -100,6 +106,14 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
 	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
+	fs.BoolVar(&noAutoSSL, "no-auto-ssl", false, "Disable automatic SSL provisioning (ACME, local CA, self-signed)")
+	fs.StringVar(&acmeShPath, "acme-sh-path", "", "Path to acme.sh certificate directory or home (e.g. ~/.acme.sh)")
+	fs.StringVar(&acmeShPath, "acme-sh", "", "Alias for --acme-sh-path")
+	fs.StringVar(&certFile, "cert-file", "", "Path to TLS certificate PEM file")
+	fs.StringVar(&keyFile, "key-file", "", "Path to TLS private key PEM file")
+	fs.BoolVar(&directHTTP, "direct-http", false, "Serve websites directly over HTTP without redirecting to HTTPS")
+	fs.BoolVar(&directHTTP, "allow-http", false, "Alias for --direct-http")
+	fs.BoolVar(&httpOnly, "http-only", false, "Disable HTTPS/Auto-SSL and serve websites directly over HTTP")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification for CLI-configured sites")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address (e.g. 127.0.0.1:2019 or off)")
 	fs.IntVar(&httpPort, "http-port", 0, "HTTP redirect/ACME port (default 80)")
@@ -133,6 +147,16 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		t := true
 		mcConsoleOpt = &t
 	}
+	var autoSSLOpt *bool
+	if noAutoSSL {
+		f := false
+		autoSSLOpt = &f
+	}
+	var directHTTPOpt *bool
+	if directHTTP {
+		t := true
+		directHTTPOpt = &t
+	}
 
 	loadOpts := config.LoadOptions{
 		ConfigPath:         cfgFile,
@@ -146,6 +170,12 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		AdminAddr:          adminAddr,
 		HTTPPort:           httpPort,
 		HTTPSPort:          httpsPort,
+		AutoSSL:            autoSSLOpt,
+		AcmeShPath:         acmeShPath,
+		CertFile:           certFile,
+		KeyFile:            keyFile,
+		DirectHTTP:         directHTTPOpt,
+		HTTPOnly:           httpOnly,
 		MCConsole:          mcConsoleOpt,
 	}
 
@@ -170,6 +200,12 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		remoteRules        multiStringFlag
 		remoteRulesRefresh string
 		sslProvider        string
+		noAutoSSL          bool
+		acmeShPath         string
+		certFile           string
+		keyFile            string
+		directHTTP         bool
+		httpOnly           bool
 		noProtect          bool
 		adminAddr          string
 		httpPort           int
@@ -186,6 +222,14 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&remoteRules, "remote-rules", "Remote firewall rules URL (http/https, repeatable or comma-separated)")
 	fs.StringVar(&remoteRulesRefresh, "remote-rules-refresh", "", "Refresh interval for remote rules (seconds or duration like 5m, 1h)")
 	fs.StringVar(&sslProvider, "ssl-provider", "", "SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)")
+	fs.BoolVar(&noAutoSSL, "no-auto-ssl", false, "Disable automatic SSL provisioning (ACME, local CA, self-signed)")
+	fs.StringVar(&acmeShPath, "acme-sh-path", "", "Path to acme.sh certificate directory or home (e.g. ~/.acme.sh)")
+	fs.StringVar(&acmeShPath, "acme-sh", "", "Alias for --acme-sh-path")
+	fs.StringVar(&certFile, "cert-file", "", "Path to TLS certificate PEM file")
+	fs.StringVar(&keyFile, "key-file", "", "Path to TLS private key PEM file")
+	fs.BoolVar(&directHTTP, "direct-http", false, "Serve websites directly over HTTP without redirecting to HTTPS")
+	fs.BoolVar(&directHTTP, "allow-http", false, "Alias for --direct-http")
+	fs.BoolVar(&httpOnly, "http-only", false, "Disable HTTPS/Auto-SSL and serve websites directly over HTTP")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address")
 	fs.IntVar(&httpPort, "http-port", 0, "HTTP port (default 80)")
@@ -207,6 +251,16 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		f := false
 		protectOpt = &f
 	}
+	var autoSSLOpt *bool
+	if noAutoSSL {
+		f := false
+		autoSSLOpt = &f
+	}
+	var directHTTPOpt *bool
+	if directHTTP {
+		t := true
+		directHTTPOpt = &t
+	}
 	loadOpts := config.LoadOptions{
 		Domain:             from,
 		Upstream:           to,
@@ -218,6 +272,12 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		AdminAddr:          adminAddr,
 		HTTPPort:           httpPort,
 		HTTPSPort:          httpsPort,
+		AutoSSL:            autoSSLOpt,
+		AcmeShPath:         acmeShPath,
+		CertFile:           certFile,
+		KeyFile:            keyFile,
+		DirectHTTP:         directHTTPOpt,
+		HTTPOnly:           httpOnly,
 	}
 	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
 	if err != nil {
@@ -261,8 +321,14 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if !cfg.Defaults.DefaultRulesEnabled() {
 		globalDefRules = "off"
 	}
-	_, _ = fmt.Fprintf(stdout, "Valid configuration (%d site(s), SSH: %t, Minecraft: %t, bind %s, HTTP :%d -> HTTPS :%d, TLS %s, SSL provider: %s, default_rules: %s, IP security: %t [%s], VPN detection: %t, AI IP list: %t)\n",
-		len(cfg.Sites), cfg.SSHEnabled(), cfg.MinecraftEnabled(), cfg.BindHost, cfg.HTTPPort, cfg.HTTPSPort, cfg.TLS.Mode,
+	portSummary := fmt.Sprintf("HTTP :%d -> HTTPS :%d", cfg.HTTPPort, cfg.HTTPSPort)
+	if !cfg.HTTPSEnabled() {
+		portSummary = fmt.Sprintf("HTTP :%d (direct), HTTPS off", cfg.HTTPPort)
+	} else if cfg.DirectHTTPEnabled() {
+		portSummary = fmt.Sprintf("HTTP :%d (direct) + HTTPS :%d", cfg.HTTPPort, cfg.HTTPSPort)
+	}
+	_, _ = fmt.Fprintf(stdout, "Valid configuration (%d site(s), SSH: %t, Minecraft: %t, bind %s, %s, TLS %s, SSL provider: %s, default_rules: %s, IP security: %t [%s], VPN detection: %t, AI IP list: %t)\n",
+		len(cfg.Sites), cfg.SSHEnabled(), cfg.MinecraftEnabled(), cfg.BindHost, portSummary, cfg.TLS.Mode,
 		effectiveSSLProviderLabel(cfg), globalDefRules,
 		cfg.Intel.IPSecurity, cfg.Intel.IPSecurityAction, cfg.Intel.VPNDetection, cfg.Intel.AIIPList)
 	for _, s := range cfg.Sites {
@@ -358,6 +424,12 @@ func loadConfigWithCLIFlags(opts config.LoadOptions, sslProvider string) (config
 }
 
 func effectiveSSLProviderLabel(cfg config.Config) string {
+	if cfg.TLSDisabled() {
+		return "off"
+	}
+	if cfg.TLS.AcmeShPath != "" {
+		return "acme.sh"
+	}
 	if prov := strings.TrimSpace(cfg.TLS.Provider); prov != "" {
 		return prov
 	}
@@ -574,6 +646,12 @@ Flags:
       --remote-rules <url>        Remote firewall rules URL (repeatable or comma-separated)
       --remote-rules-refresh <d>  Refresh interval for remote rules (default 5m)
       --ssl-provider <name>       SSL/ACME provider (letsencrypt, zerossl, google, ssl.com, litessl, buypass, local, or URL)
+      --no-auto-ssl               Disable automatic SSL provisioning (ACME, local CA, self-signed)
+      --acme-sh-path <path>       Use certificates managed by acme.sh (home dir or domain cert dir)
+      --cert-file <path>          Custom TLS certificate PEM file path
+      --key-file <path>           Custom TLS private key PEM file path
+      --direct-http               Serve websites directly over HTTP without HTTPS redirects
+      --http-only                 Disable HTTPS/Auto-SSL and serve websites directly over HTTP
       --no-protect           Disable WAF verification for CLI-configured websites
       --admin <addr>         Enable local REST Admin API (e.g. 127.0.0.1:2019)
       --http-port <port>     HTTP redirect & ACME HTTP-01 port (default 80)

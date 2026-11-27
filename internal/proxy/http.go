@@ -20,8 +20,14 @@ var copyBufPool = sync.Pool{
 // HTTPProxy streams HTTP requests to per-site upstreams and rewrites response headers.
 type HTTPProxy struct {
 	transport http.RoundTripper
+	httpPort  int
 	httpsPort int
 	logger    *slog.Logger
+}
+
+// SetHTTPPort configures the downstream plain HTTP port used for Location rewriting on http:// requests.
+func (p *HTTPProxy) SetHTTPPort(port int) {
+	p.httpPort = port
 }
 
 // NewHTTPProxy constructs an HTTPProxy using transport (or a high-throughput tuned http.Transport if nil).
@@ -113,7 +119,7 @@ func (p *HTTPProxy) ForwardUpstream(
 	}
 	defer resp.Body.Close()
 
-	copyResponseHeadersParsed(w.Header(), resp.Header, up, r.Host, p.httpsPort)
+	copyResponseHeadersParsed(w.Header(), resp.Header, up, r.Host, scheme, p.httpPort, p.httpsPort)
 	for _, hs := range headerSets {
 		ApplyResponseHeaders(w.Header(), hs)
 	}

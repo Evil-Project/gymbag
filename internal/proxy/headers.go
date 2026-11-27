@@ -96,6 +96,19 @@ func PublicOrigin(hostHeader string, httpsPort int) string {
 	return fmt.Sprintf("https://%s:%d", h, httpsPort)
 }
 
+// PublicOriginForScheme returns the downstream public origin for Location header rewriting
+// using scheme ("http" or "https") and the corresponding listener port.
+func PublicOriginForScheme(scheme, hostHeader string, httpPort, httpsPort int) string {
+	if strings.EqualFold(scheme, "http") {
+		h := host.FormatForURL(host.FromHeader(hostHeader))
+		if httpPort == 80 || httpPort == 0 {
+			return "http://" + h
+		}
+		return fmt.Sprintf("http://%s:%d", h, httpPort)
+	}
+	return PublicOrigin(hostHeader, httpsPort)
+}
+
 func effectivePort(u *url.URL) string {
 	if p := u.Port(); p != "" {
 		return p
@@ -145,10 +158,10 @@ func rewriteLocationParsed(location, baseHost, basePort, origin string) string {
 // CopyResponseHeaders copies upstream response headers to dst, stripping hop-by-hop/HSTS/Alt-Svc
 // headers, preserving multi-value headers (Set-Cookie), and rewriting Location headers.
 func CopyResponseHeaders(dst, src http.Header, upstream, hostHeader string, httpsPort int) {
-	copyResponseHeadersParsed(dst, src, parseUpstream(upstream), hostHeader, httpsPort)
+	copyResponseHeadersParsed(dst, src, parseUpstream(upstream), hostHeader, "https", 80, httpsPort)
 }
 
-func copyResponseHeadersParsed(dst, src http.Header, up ParsedUpstream, hostHeader string, httpsPort int) {
+func copyResponseHeadersParsed(dst, src http.Header, up ParsedUpstream, hostHeader, scheme string, httpPort, httpsPort int) {
 	connOpts := connectionOptions(src)
 	var origin string
 	originReady := false
@@ -169,7 +182,7 @@ func copyResponseHeadersParsed(dst, src http.Header, up ParsedUpstream, hostHead
 		if k == "Location" {
 			if !originReady {
 				if hostHeader != "" {
-					origin = PublicOrigin(hostHeader, httpsPort)
+					origin = PublicOriginForScheme(scheme, hostHeader, httpPort, httpsPort)
 				}
 				originReady = true
 			}
