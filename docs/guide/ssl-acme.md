@@ -79,10 +79,13 @@ You can also assign a dedicated certificate pair to the verification portal:
 - **ACME account key**: `account_key /etc/gymbag/account.pem` (ECDSA P-256/P-384 or RSA)
 - **CSR private key**: `ssl_key /etc/gymbag/domain.key`
 - **PEM cert & key (global or per-site SNI)**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **`acme.sh` certificate directory**: `acme_sh_path ~/.acme.sh` (or per-site `acme_sh_path /etc/ssl/acme/corp` / `tls acme.sh <path>`) — automatically resolves `<domain>_ecc/` (ECC preferred), `<domain>/` (RSA), wildcard parent directories, `fullchain.cer`, and direct single-domain directories, and hot-reloads on renewal
 - **Encrypted private key passphrase**: `key_password super-secret-passphrase` (or `GYMBAG_KEY_PASSWORD`)
 
 ```caddyfile
 {
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
     key_password super-secret-passphrase
 }
 
@@ -90,6 +93,33 @@ corp.example.com {
     reverse_proxy http://localhost:8080
     tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
     verify 1
+}
+```
+
+## Disabling Auto SSL & Direct HTTP Access
+
+- **Disable automatic SSL (`auto_ssl off` / `tls off`)**: Stops Gymbag from provisioning ACME, Local CA, or self-signed certificates. Pair `auto_ssl off` with `acme_sh_path` or `tls <cert> <key>` to serve HTTPS using only externally managed certs, or use `tls off` (`http_only` / `--http-only`) with no certs to disable the HTTPS listener completely and serve plain HTTP directly.
+- **Direct HTTP access (`direct_http on` / `http://domain`)**: Serves sites directly on `http_port` (full WAF, PoW verification without requiring `Secure` cookies over HTTP, reverse proxy, and `http://` `Location` rewrites) instead of issuing a `308` redirect to HTTPS. When HTTPS is also enabled, `/.well-known/acme-challenge/*` continues to work on `http_port` and `Strict-Transport-Security` is only sent on HTTPS responses.
+
+```caddyfile
+# Serve plain HTTP only (HTTPS and auto SSL off)
+http://app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+}
+```
+
+```caddyfile
+# Serve both direct HTTP and HTTPS using acme.sh certs (no built-in auto SSL)
+{
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
+    direct_http on
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
 }
 ```
 

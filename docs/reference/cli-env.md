@@ -57,6 +57,11 @@ gymbag version
 | `--remote-rules-refresh <dur>` | Refresh interval for remote rules (default `5m` / `300s`) |
 | `--no-protect` | Disable PoW verification for CLI-configured sites |
 | `--ssl-provider <name>` | Override ACME / SSL provider |
+| `--no-auto-ssl` | Disable automatic SSL provisioning (ACME, local CA, self-signed) |
+| `--acme-sh-path <path>` | Use certificates managed by `acme.sh` (`--acme-sh` alias) |
+| `--cert-file <path>` / `--key-file <path>` | Custom TLS certificate and private key PEM file paths |
+| `--direct-http` | Serve websites directly over HTTP without redirecting to HTTPS (`--allow-http` alias) |
+| `--http-only` | Disable HTTPS and Auto-SSL and serve websites directly over HTTP |
 | `--admin <addr>` | Enable local REST Admin API (`127.0.0.1:2019` or `off`) |
 | `--http-port <port>` | HTTP redirect & ACME HTTP-01 port (default `80`) |
 | `--https-port <port>` | HTTPS gateway port (default `443`) |
@@ -129,7 +134,9 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Challenge expiry (`300`s / `5m`) and clearance lifetime (`86400`s / `24h`; aliases: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Clearance cookie name (`waf_clearance`) and `Secure` flag (`true`) |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | Per-IP request limit (`240`) and window (`60`s / `1m`) |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS mode (`auto`, `acme`, `local`, `selfsigned`, `file`) and CA provider or URL |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS mode (`auto`, `acme`, `local`, `selfsigned`, `file`, `off`) and CA provider or URL |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | Toggle automatic SSL provisioning (`on`/`off`) and set `acme.sh` directory (`GYMBAG_ACME_SH` alias) |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | Serve direct HTTP alongside HTTPS (`on`/`off`, alias `GYMBAG_ALLOW_HTTP`), or disable HTTPS completely (`on`/`off`) |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME contact email (and ZeroSSL auto-EAB) and explicit ACME directory URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | External Account Binding Key ID and HMAC key |
 | `GYMBAG_ACCOUNT_KEY_FILE` | Path to ECDSA or RSA ACME account key PEM |

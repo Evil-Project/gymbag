@@ -301,10 +301,13 @@ Public domains default to `tls auto`, which uses Let's Encrypt over ACME HTTP-01
 
 For **ZeroSSL**, setting `email` automatically fetches EAB credentials unless you pass `eab` yourself. For **Google Trust Services** and **SSL.com**, pass `eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY` (both padded base64 and unpadded base64url work, and `eab_hmac_key` is redacted in Admin API output). ACME certs are cached per provider (`certs/acme-zerossl-fullchain.pem`, `certs/acme-fullchain.pem` for Let's Encrypt), so changing `ssl_provider` requests from the new CA right away.
 
-You can also bring your own PEM files:
+You can also bring your own PEM files, use `acme.sh`, disable auto-SSL, or serve HTTP directly:
 - `account_key /etc/gymbag/account.pem`: existing ECDSA (P-256/P-384) or RSA ACME account key.
 - `ssl_key /etc/gymbag/domain.key`: existing ECDSA or RSA key for ACME CSR signing.
 - `tls <cert> <key>`: externally managed certificates globally or per site (SNI), with `key_password` (`GYMBAG_KEY_PASSWORD`) if the private key is encrypted.
+- `acme_sh_path ~/.acme.sh` (`--acme-sh-path` / `GYMBAG_ACME_SH_PATH`): load certs directly from an `acme.sh` home (`<domain>_ecc/` preferred, `<domain>/`, or wildcard dirs) or single-domain directory, globally or per site (`tls acme.sh <path>`), with automatic hot-reload on renewal.
+- `auto_ssl off` / `tls off` (`--no-auto-ssl` / `--http-only`): stop automatic ACME, Local CA, or self-signed cert provisioning. Pair `auto_ssl off` with `acme_sh_path` or `tls <cert> <key>` to serve only user-managed certs, or use `tls off` to disable the HTTPS listener completely.
+- `direct_http on` (`--direct-http` / `http://example.com` / `GYMBAG_DIRECT_HTTP=on`): serve protected sites directly over plain HTTP on `http_port` (full WAF, PoW cookies, proxying, and `http://` redirect rewriting, without forcing a `308` redirect or emitting HSTS on HTTP).
 
 A background task checks certificates every `renew_interval` seconds (`43200` / 12h by default) and renews or reloads anything within `renew_within_days` (`30` days), swapping the `tls.Certificate` atomically without dropping active HTTP streams or WebSockets.
 
@@ -468,7 +471,9 @@ Precedence order is **config file -> `.env` / `GYMBAG_*` environment variables -
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Challenge expiry (`300`s / `5m`) and clearance lifetime (`86400`s / `24h`; aliases: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Clearance cookie name (`waf_clearance`) and `Secure` flag (`true`) |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | Per-IP request limit (`240`) and window (`60`s) |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS mode (`auto`, `acme`, `local`, `selfsigned`, `file`) and CA (`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or URL) |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS mode (`auto`, `acme`, `local`, `selfsigned`, `file`, `off`) and CA (`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, or URL) |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | Toggle automatic SSL (`on`/`off`) and set `acme.sh` certificate directory (`GYMBAG_ACME_SH` alias) |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | Serve sites directly on HTTP (`on`/`off`, alias `GYMBAG_ALLOW_HTTP`), or disable HTTPS completely (`on`/`off`) |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME contact email (enables ZeroSSL auto-EAB) and explicit ACME directory URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | External Account Binding Key ID and base64/base64url HMAC key |
 | `GYMBAG_ACCOUNT_KEY_FILE` | Path to ECDSA/RSA ACME account key PEM |
