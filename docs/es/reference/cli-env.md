@@ -54,6 +54,12 @@ gymbag version
 | `--remote-rules-refresh <dur>` | Intervalo de refresco para reglas remotas (por defecto `5m` / `300s`) |
 | `--no-protect` | Desactivar verificación PoW en sitios configurados por CLI |
 | `--ssl-provider <name>` | Sobrescribir proveedor ACME / SSL |
+| `--no-auto-ssl` | Desactivar el aprovisionamiento automático de SSL (ACME, CA local, autofirmado) |
+| `--acme-sh-path <path>` | Usar certificados gestionados por `acme.sh` (alias `--acme-sh`) |
+| `--cert-file <path>` / `--key-file <path>` | Rutas personalizadas a archivos PEM de certificado TLS y clave privada |
+| `--direct-http` | Servir sitios web directamente por HTTP sin redirigir a HTTPS (alias `--allow-http`) |
+| `--http-only` | Desactivar HTTPS y Auto-SSL y servir sitios web directamente por HTTP |
+| `--mascot <path-or-url>` | Archivo de imagen, directorio o URL `http(s)://` de mascota personalizada (`--mascot-pensive`, `--mascot-happy`, `--mascot-reject` para sobrescribir por estado) |
 | `--admin <addr>` | Habilitar Admin REST API local (`127.0.0.1:2019` u `off`) |
 | `--http-port <port>` | Puerto de redirección HTTP y ACME HTTP-01 (por defecto `80`) |
 | `--https-port <port>` | Puerto de pasarela HTTPS (por defecto `443`) |
@@ -125,7 +131,9 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Caducidad del desafío (`300`s / `5m`) y duración de la autorización (`86400`s / `24h`; alias: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Nombre de cookie de autorización (`waf_clearance`) y flag `Secure` (`true`) |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | Límite de peticiones por IP (`240`) y ventana (`60`s / `1m`) |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | Modo TLS (`auto`, `acme`, `local`, `selfsigned`, `file`) y proveedor CA o URL |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | Modo TLS (`auto`, `acme`, `local`, `selfsigned`, `file`, `off`) y proveedor CA o URL |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | Activa/desactiva el aprovisionamiento automático de SSL (`on`/`off`) y fija el directorio de `acme.sh` (alias `GYMBAG_ACME_SH`) |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | Sirve HTTP directo junto con HTTPS (`on`/`off`, alias `GYMBAG_ALLOW_HTTP`), o desactiva HTTPS por completo (`on`/`off`) |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | Correo de contacto ACME (y auto-EAB de ZeroSSL) y URL explícita del directorio ACME |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | Key ID de External Account Binding y clave HMAC |
 | `GYMBAG_ACCOUNT_KEY_FILE` | Ruta al archivo PEM de clave de cuenta ACME ECDSA o RSA |
@@ -145,4 +153,5 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Flags JVM separados por espacios, directorio de trabajo de Minecraft y reinicio automático ante caídas (`true`/`false`, por defecto `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Nivel de verificación Minecraft (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
 | `GYMBAG_REDIS_URL` | URL de Redis (`redis://` o `rediss://`) |
+| `GYMBAG_MASCOT` | Ruta de imagen, directorio o URL `http(s)://` de mascota global (`GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT` para sobrescribir por estado) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Secreto HMAC de autorización y dirección de escucha de la Admin REST API (`127.0.0.1:2019` u `off`) |

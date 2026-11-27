@@ -152,6 +152,83 @@ const zhTheme: DefaultTheme.Config = {
   }
 }
 
+const zhTWTheme: DefaultTheme.Config = {
+  nav: [
+    { text: '快速開始', link: '/zh-TW/guide/getting-started' },
+    { text: 'SSH 與 Minecraft', link: '/zh-TW/guide/ssh-minecraft' },
+    { text: 'Docker', link: '/zh-TW/guide/docker' },
+    { text: '防護策略', link: '/zh-TW/guide/verify-levels' },
+    { text: 'TLS 與本地 PKI', link: '/zh-TW/guide/ssl-acme' },
+    { text: '效能基準', link: '/zh-TW/guide/benchmarks' },
+    {
+      text: '參考文件',
+      items: [
+        { text: 'Gymbagfile 與 JSON', link: '/zh-TW/reference/gymbagfile' },
+        { text: 'CLI 與環境變數', link: '/zh-TW/reference/cli-env' },
+        { text: 'REST API 與 Redis', link: '/zh-TW/reference/api' }
+      ]
+    }
+  ],
+  sidebar: [
+    {
+      text: '快速上手',
+      collapsed: false,
+      items: [
+        { text: '兩行指令快速開始', link: '/zh-TW/guide/getting-started' },
+        { text: 'Docker 與 Compose 部署', link: '/zh-TW/guide/docker' },
+        { text: '系統服務安裝與管理', link: '/zh-TW/guide/system-service' },
+        { text: '本地開發與 PKI (.internal)', link: '/zh-TW/guide/local-dev' },
+        { text: '路由與設定檔匯入', link: '/zh-TW/guide/routes-and-imports' }
+      ]
+    },
+    {
+      text: 'WAF 與流量防禦',
+      collapsed: false,
+      items: [
+        { text: '驗證等級與逾時設定', link: '/zh-TW/guide/verify-levels' },
+        { text: 'SSH 與 Minecraft 防護', link: '/zh-TW/guide/ssh-minecraft' },
+        { text: '防火牆、遠端規則與威脅情資', link: '/zh-TW/guide/firewall-rules' }
+      ]
+    },
+    {
+      text: '憑證與 TLS',
+      collapsed: false,
+      items: [{ text: '多 CA ACME 與自訂憑證', link: '/zh-TW/guide/ssl-acme' }]
+    },
+    {
+      text: '效能測試',
+      collapsed: false,
+      items: [{ text: '與 Caddy / Nginx 基準對比', link: '/zh-TW/guide/benchmarks' }]
+    },
+    {
+      text: '參考手冊',
+      collapsed: false,
+      items: [
+        { text: 'Gymbagfile 與 JSON 結構', link: '/zh-TW/reference/gymbagfile' },
+        { text: 'CLI 與 GYMBAG_* 環境變數', link: '/zh-TW/reference/cli-env' },
+        { text: 'REST API 與 Redis', link: '/zh-TW/reference/api' }
+      ]
+    }
+  ],
+  outline: { label: '本頁目錄' },
+  docFooter: { prev: '上一頁', next: '下一頁' },
+  lastUpdated: { text: '最後更新於' },
+  darkModeSwitchLabel: '外觀主題',
+  lightModeSwitchTitle: '切換到淺色模式',
+  darkModeSwitchTitle: '切換到深色模式',
+  sidebarMenuLabel: '選單',
+  returnToTopLabel: '回到頂部',
+  langMenuLabel: '切換語言',
+  editLink: {
+    pattern: 'https://github.com/Evil-Project/gymbag/edit/main/docs/:path',
+    text: '在 GitHub 上編輯此頁'
+  },
+  footer: {
+    message: '純 Go 標準函式庫實作 · 零外部 Go 依賴',
+    copyright: 'Gymbag — HTTP/HTTPS、SSH 與 Minecraft 工作量證明防護閘道'
+  }
+}
+
 const jaTheme: DefaultTheme.Config = {
   nav: [
     { text: 'クイックスタート', link: '/ja/guide/getting-started' },
@@ -425,6 +502,14 @@ export default defineConfig({
       description: '纯 Go 单二进制 HTTP/HTTPS、SSH 与 Minecraft 工作量证明防护网关',
       themeConfig: zhTheme
     },
+    'zh-TW': {
+      label: '繁體中文',
+      lang: 'zh-TW',
+      link: '/zh-TW/',
+      title: 'Gymbag',
+      description: '純 Go 單一執行檔 HTTP/HTTPS、SSH 與 Minecraft 工作量證明防護閘道',
+      themeConfig: zhTWTheme
+    },
     ja: {
       label: '日本語',
       lang: 'ja-JP',
@@ -468,6 +553,16 @@ export default defineConfig({
                 noResultsText: '无法找到相关结果',
                 resetButtonTitle: '清除查询条件',
                 footer: { selectText: '选择', navigateText: '切换', closeText: '关闭' }
+              }
+            }
+          },
+          'zh-TW': {
+            translations: {
+              button: { buttonText: '搜尋文件', buttonAriaLabel: '搜尋文件' },
+              modal: {
+                noResultsText: '找不到相關結果',
+                resetButtonTitle: '清除搜尋條件',
+                footer: { selectText: '選擇', navigateText: '切換', closeText: '關閉' }
               }
             }
           },

@@ -54,6 +54,12 @@ gymbag version
 | `--remote-rules-refresh <dur>` | 원격 규칙 새로고침 주기 (기본 `5m` / `300s`) |
 | `--no-protect` | CLI로 설정한 사이트의 PoW 검증 비활성화 |
 | `--ssl-provider <name>` | ACME / SSL 공급자 재정의 |
+| `--no-auto-ssl` | 자동 SSL 발급 비활성화 (ACME, 로컬 CA, 자체 서명) |
+| `--acme-sh-path <path>` | `acme.sh`가 관리하는 인증서 사용 (별칭 `--acme-sh`) |
+| `--cert-file <path>` / `--key-file <path>` | 사용자 지정 TLS 인증서 및 개인 키 PEM 파일 경로 |
+| `--direct-http` | HTTPS로 리다이렉트하지 않고 HTTP로 웹사이트 직접 제공 (별칭 `--allow-http`) |
+| `--http-only` | HTTPS와 자동 SSL을 비활성화하고 HTTP로만 웹사이트 직접 제공 |
+| `--mascot <path-or-url>` | 사용자 지정 마스코트 이미지 파일, 디렉터리 또는 `http(s)://` URL (상태별 재정의는 `--mascot-pensive`, `--mascot-happy`, `--mascot-reject`) |
 | `--admin <addr>` | 로컬 REST Admin API 활성화 (`127.0.0.1:2019` 또는 `off`) |
 | `--http-port <port>` | HTTP 리다이렉트 & ACME HTTP-01 포트 (기본 `80`) |
 | `--https-port <port>` | HTTPS 게이트웨이 포트 (기본 `443`) |
@@ -125,7 +131,9 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 챌린지 만료 (`300`s / `5m`) 및 클리어런스 유지 시간 (`86400`s / `24h`; 별칭: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | 클리어런스 쿠키 이름 (`waf_clearance`) 및 `Secure` 플래그 (`true`) |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | IP당 요청 제한 (`240`) 및 윈도우 (`60`s / `1m`) |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS 모드 (`auto`, `acme`, `local`, `selfsigned`, `file`) 및 CA 공급자 또는 URL |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS 모드 (`auto`, `acme`, `local`, `selfsigned`, `file`, `off`) 및 CA 공급자 또는 URL |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | 자동 SSL 발급 토글 (`on`/`off`) 및 `acme.sh` 디렉터리 지정 (별칭 `GYMBAG_ACME_SH`) |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | HTTPS와 함께 직접 HTTP 제공 (`on`/`off`, 별칭 `GYMBAG_ALLOW_HTTP`) 또는 HTTPS 완전 비활성화 (`on`/`off`) |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 연락처 이메일 (및 ZeroSSL 자동 EAB)과 명시적 ACME 디렉터리 URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | External Account Binding Key ID 및 HMAC 키 |
 | `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA 또는 RSA ACME 계정 키 PEM 경로 |
@@ -145,4 +153,5 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 공백으로 구분된 JVM 플래그, Minecraft 작업 디렉터리, 비정상 종료 시 자동 재시작 토글 (`true`/`false`, 기본 `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 검증 레벨 (`0`–`3` 또는 `off`) 및 보호 토글 (`on`/`off`) |
 | `GYMBAG_REDIS_URL` | Redis URL (`redis://` 또는 `rediss://`) |
+| `GYMBAG_MASCOT` | 전역 마스코트 이미지 경로, 디렉터리 또는 `http(s)://` URL (상태별 재정의는 `GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT`) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC 클리어런스 시크릿 및 Admin REST API 수신 주소 (`127.0.0.1:2019` 또는 `off`) |

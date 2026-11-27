@@ -59,7 +59,10 @@
 | `eab <kid> <hmac>` | External Account Binding 資格情報（`eab_kid` / `eab_hmac_key` も可） | — |
 | `account_key` | 既存の ECDSA または RSA ACME アカウント PEM パス | `<cert_dir>/acme-account.pem` |
 | `ssl_key` | ACME CSR 用の既存秘密鍵パス | 自動生成 |
-| `tls` | `auto`、`acme`、`local`、`selfsigned`、または `<cert.pem> <key.pem>` | `auto` |
+| `tls` | `auto`、`acme`、`local`、`selfsigned`、`file`、`off`、`acme.sh <path>`、または `<cert.pem> <key.pem>` | `auto` |
+| `auto_ssl` | 自動 SSL 発行の有効/無効（`on`/`off`；`auto_https on\|off\|disable_redirects` も可） | `on` |
+| `acme_sh_path` | `acme.sh` ホーム（`~/.acme.sh`）またはドメイン証明書ディレクトリへのパス（別名 `acme_sh`） | — |
+| `direct_http` | HTTPS リダイレクトなしで `http_port` 上に直接サイトを提供（`allow_http` / `http_only` も可） | `off`（TLS オフ時は `on`） |
 | `key_password` | 暗号化 PEM 秘密鍵のパスフレーズ | — |
 | `cert_dir` | 証明書・ローカル CA・シークレット・インテルキャッシュ・ルールキャッシュの保存ディレクトリ | `certs` |
 | `renew_interval` | 証明書更新チェック間隔（秒または `12h` 等の期間表記） | `43200` (`12h`) |
@@ -75,6 +78,7 @@
 | `redis` / `redis_url` | Redis 接続 URL（`redis://` または `rediss://`） | インメモリストア |
 | `secret` | `waf_clearance` Cookie 用 HMAC シークレット | `<cert_dir>/secret` |
 | `trusted_proxies` | `X-Forwarded-For` を信頼する下流プロキシの IP/CIDR | — |
+| `mascot` | カスタムマスコットファイル、ディレクトリ、`http(s)://` URL、または `mascot { default / pensive / happy / reject }` ブロック（`mascot_pensive`、`mascot_happy`、`mascot_reject` も可） | 埋め込みデフォルト |
 | `ip_security` | 脅威インテル CIDR フィードを有効化 (`on`/`off`) | `on` |
 | `ip_security_action` | 脅威インテル一致時のアクション (`verify` または `block`) | `verify` |
 | `ip_reputation` | Shodan InternetDB & StopForumSpam のライブ照会（`vpn_detection` 有効時はライブ VPN API 照会も含む） | `on` |
@@ -132,7 +136,9 @@ app.example.com, www.example.com {
 | `ai_bots <patterns...>` | AI クローラーとみなす追加の User-Agent 部分文字列 |
 | `suspicious_uas <patterns...>` | 不審とみなす追加の User-Agent 部分文字列 |
 | `suspicious_paths <prefixes...>` | 不審プローブとみなす追加のパスプレフィックス |
-| `tls <cert> <key>` | サイトごとの SNI 証明書および秘密鍵のパス |
+| `tls <cert> <key>` | サイトごとの SNI 証明書および秘密鍵のパス（または `tls acme.sh <path>`） |
+| `acme_sh_path <path>` | サイトごとの `acme.sh` ホームまたはドメイン証明書ディレクトリ（別名 `acme_sh`） |
+| `mascot <path-or-url>` | サイトごとのカスタムマスコットファイル、ディレクトリ、URL、または `mascot { ... }` ブロック（`mascot_pensive`、`mascot_happy`、`mascot_reject`） |
 | `allow \| verify \| block ...` | 短縮カスタムファイアウォールルール |
 | `rule "name" { ... }` | 複数条件カスタムファイアウォールルールブロック |
 
@@ -206,12 +212,12 @@ minecraft {
 ```
 
 トップレベル JSON キー（`DisallowUnknownFields` が適用されます）:
-- `sites`: `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` の配列。`waf` には `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}` を含みます。
+- `sites`: `{domain, upstreams, routes, headers, protect, mascot, waf, cert_file, key_file, acme_sh_path}` の配列。`mascot` はパス/URL 文字列または `{default, pensive, happy, reject}`、`waf` には `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}` を含みます。
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`
 - `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`
 - `verify`: `{url, port, cert_file, key_file}`
-- `bind_host`、`http_port`、`https_port`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`
-- `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`
+- `bind_host`、`http_port`、`https_port`、`direct_http`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`、`mascot`
+- `tls`: `{mode, auto_ssl, provider, cert_file, key_file, acme_sh_path, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`
 - `intel`: `{ip_security, ip_security_action, live_reputation, ai_ip_list, vpn_detection, refresh_interval, threat_feeds, ai_ip_feeds, vpn_feeds}`
 - `defaults`: 共有ベースとなる `waf` オブジェクト
 

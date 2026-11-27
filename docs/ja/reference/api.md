@@ -46,7 +46,7 @@ Admin API には認証トークンがなく、Gymbag を再起動せずに稼働
 | `POST` | `/api/v1/sites` | 実行時に Web サイトを追加（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 単一 Web サイトの設定を取得 |
 | `PUT` | `/api/v1/sites/{domain}` | 単一 Web サイトの設定を置換 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`rule_sources` をライブパッチ |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`mascot`、`clear_mascot`、`rule_sources` をライブパッチ |
 | `DELETE` | `/api/v1/sites/{domain}` | Web サイトを削除（`204 No Content`；SSH も Minecraft も有効でない状態で最後の 1 サイトを消そうとすると `409 Conflict`） |
 | `GET` | `/api/v1/sites/{domain}/rules` | Web サイト上のローカルカスタムルールを一覧取得 |
 | `POST` | `/api/v1/sites/{domain}/rules` | カスタムルールを末尾に追加（`201 Created`） |

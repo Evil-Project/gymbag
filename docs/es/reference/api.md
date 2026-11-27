@@ -46,7 +46,7 @@ La Admin API no solicita token de autenticación y modifica el enrutamiento en v
 | `POST` | `/api/v1/sites` | Añade un sitio web en tiempo de ejecución (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | Inspecciona la configuración de un sitio web |
 | `PUT` | `/api/v1/sites/{domain}` | Reemplaza la configuración de un sitio web |
-| `PATCH` | `/api/v1/sites/{domain}` | Parchea en vivo `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers` o `rule_sources` |
+| `PATCH` | `/api/v1/sites/{domain}` | Parchea en vivo `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `mascot`, `clear_mascot` o `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | Elimina un sitio web (`204 No Content`; devuelve `409 Conflict` en el último sitio restante cuando ni SSH ni Minecraft están activos) |
 | `GET` | `/api/v1/sites/{domain}/rules` | Lista reglas personalizadas locales de un sitio web |
 | `POST` | `/api/v1/sites/{domain}/rules` | Añade una regla personalizada (`201 Created`) |

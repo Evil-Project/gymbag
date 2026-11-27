@@ -1,7 +1,7 @@
 # Gymbag
 
 <p align="center">
-  <img src="docs/public/mascot-happy.png" alt="Mascota de Gymbag" width="140" />
+  <img src="../docs/public/mascot-happy.png" alt="Mascota de Gymbag" width="140" />
 </p>
 
 <p align="center">
@@ -11,20 +11,21 @@
 <p align="center">
   <a href="https://github.com/Evil-Project/gymbag/releases"><img src="https://img.shields.io/github/v/release/Evil-Project/gymbag?include_prereleases&label=Release" alt="Release" /></a>
   <a href="https://github.com/Evil-Project/gymbag/pkgs/container/gymbag"><img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker" alt="Docker GHCR" /></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go" alt="Go 1.27+" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="Apache-2.0 License" /></a>
+  <a href="../go.mod"><img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go" alt="Go 1.27+" /></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="Apache-2.0 License" /></a>
   <a href="https://evil-project.github.io/gymbag/es/"><img src="https://img.shields.io/badge/Docs-VitePress-b81d33" alt="Docs" /></a>
 </p>
 
 <p align="center">
   <strong>README:</strong>
-  <a href="README.md">English</a> ·
+  <a href="../README.md">English</a> ·
   <a href="README.zh.md">简体中文</a> ·
+  <a href="README.zh-TW.md">繁體中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a> ·
   <a href="README.es.md">Español</a>
   <br />
-  <sub>Documentación en línea: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
+  <sub>Documentación en línea: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/zh-TW/">ZH-TW</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
 Gymbag es un proxy inverso HTTPS y WAF con Proof-of-Work en un único binario (en la línea de Anubis) que también protege servidores SSH y Minecraft. Solo usa la biblioteca estándar de Go, sin dependencias de módulos externos; las páginas HTML, el resolvedor SHA-256 en el navegador y las imágenes de la mascota van compiladas en el binario mediante `go:embed`.
@@ -146,7 +147,7 @@ minecraft {
 }
 ```
 
-Consulta la [guía de protección de SSH y Minecraft](docs/es/guide/ssh-minecraft.md) para ver todos los detalles y ejemplos en `gymbag.json`.
+Consulta la [guía de protección de SSH y Minecraft](../docs/es/guide/ssh-minecraft.md) para ver todos los detalles y ejemplos en `gymbag.json`.
 
 ## Desarrollo local (`localhost` y `*.internal`)
 
@@ -301,10 +302,13 @@ Los dominios públicos usan `tls auto` por defecto, que obtiene certificados de 
 
 Para **ZeroSSL**, definir `email` solicita las credenciales EAB automáticamente salvo que pases `eab` de forma explícita. Para **Google Trust Services** y **SSL.com**, pasa `eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY` (funcionan tanto base64 con relleno como base64url sin relleno, y `eab_hmac_key` se oculta en la salida de la Admin API). Los certificados ACME se cachean por proveedor (`certs/acme-zerossl-fullchain.pem`, `certs/acme-fullchain.pem` para Let's Encrypt), así que cambiar `ssl_provider` pide el certificado a la nueva CA de inmediato.
 
-También puedes usar tus propios archivos PEM:
+También puedes usar tus propios archivos PEM, utilizar `acme.sh`, desactivar auto-SSL o servir HTTP directamente:
 - `account_key /etc/gymbag/account.pem`: clave de cuenta ACME ECDSA (P-256/P-384) o RSA existente.
 - `ssl_key /etc/gymbag/domain.key`: clave ECDSA o RSA existente para firmar los CSR de ACME.
 - `tls <cert> <key>`: certificados gestionados externamente a nivel global o por sitio (SNI), con `key_password` (`GYMBAG_KEY_PASSWORD`) si la clave privada está cifrada.
+- `acme_sh_path ~/.acme.sh` (`--acme-sh-path` / `GYMBAG_ACME_SH_PATH`): carga certificados directamente desde un directorio raíz de `acme.sh` (preferencia por `<domain>_ecc/`, `<domain>/` o directorios wildcard) o un directorio de un solo dominio, a nivel global o por sitio (`tls acme.sh <path>`), con recarga en caliente automática al renovar.
+- `auto_ssl off` / `tls off` (`--no-auto-ssl` / `--http-only`): detiene la emisión automática de certificados ACME, CA local o autofirmados. Combina `auto_ssl off` con `acme_sh_path` o `tls <cert> <key>` para servir únicamente certificados gestionados por el usuario, o usa `tls off` para desactivar por completo el listener HTTPS.
+- `direct_http on` (`--direct-http` / `http://example.com` / `GYMBAG_DIRECT_HTTP=on`): sirve sitios protegidos directamente por HTTP plano en `http_port` (WAF completo, cookies PoW, proxy y reescritura de redirecciones `http://`, sin forzar redirección `308` ni emitir HSTS sobre HTTP).
 
 Una tarea en segundo plano revisa los certificados cada `renew_interval` segundos (`43200` / 12h por defecto) y renueva o recarga los que estén dentro de `renew_within_days` (`30` días), sustituyendo el `tls.Certificate` atómicamente sin cortar flujos HTTP ni WebSockets activos.
 
@@ -444,7 +448,7 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-`compose.yaml` empareja Gymbag con `redis:8-alpine` usando el cliente Redis RESP2 en Go puro para compartir los nonces PoW, los límites de tasa de ventana fija y los tickets de verificación y autorizaciones IP de SSH/Minecraft entre reinicios o réplicas (`docker compose up -d --build`). Al proteger SSH o Minecraft desde Docker, publica también `-p 22:22` / `-p 25565:25565` y `-p 8443:8443`. Consulta la [Guía de Docker y Docker Compose](docs/es/guide/docker.md) para ver permisos en montajes bind (`chown 10001:10001`), `--watch` y configuraciones solo por variables de entorno.
+`compose.yaml` empareja Gymbag con `redis:8-alpine` usando el cliente Redis RESP2 en Go puro para compartir los nonces PoW, los límites de tasa de ventana fija y los tickets de verificación y autorizaciones IP de SSH/Minecraft entre reinicios o réplicas (`docker compose up -d --build`). Al proteger SSH o Minecraft desde Docker, publica también `-p 22:22` / `-p 25565:25565` y `-p 8443:8443`. Consulta la [Guía de Docker y Docker Compose](../docs/es/guide/docker.md) para ver permisos en montajes bind (`chown 10001:10001`), `--watch` y configuraciones solo por variables de entorno.
 
 ### Variables de entorno (`GYMBAG_*`)
 
@@ -467,7 +471,9 @@ El orden de precedencia es **archivo de configuración -> `.env` / variables de 
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | Caducidad del desafío (`300`s / `5m`) y duración de la autorización (`86400`s / `24h`; alias: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`) |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | Nombre de la cookie de autorización (`waf_clearance`) y flag `Secure` (`true`) |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | Límite de peticiones por IP (`240`) y ventana (`60`s) |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | Modo TLS (`auto`, `acme`, `local`, `selfsigned`, `file`) y CA (`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local` o URL) |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | Modo TLS (`auto`, `acme`, `local`, `selfsigned`, `file`, `off`) y CA (`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local` o URL) |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | Activa/desactiva SSL automático (`on`/`off`) y define el directorio de certificados de `acme.sh` (alias `GYMBAG_ACME_SH`) |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | Sirve sitios directamente por HTTP (`on`/`off`, alias `GYMBAG_ALLOW_HTTP`) o desactiva HTTPS por completo (`on`/`off`) |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | Correo de contacto ACME (activa auto-EAB de ZeroSSL) y URL explícita del directorio ACME |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | Key ID de External Account Binding y clave HMAC en base64/base64url |
 | `GYMBAG_ACCOUNT_KEY_FILE` | Ruta al archivo PEM de la clave de cuenta ACME ECDSA/RSA |
@@ -486,6 +492,7 @@ El orden de precedencia es **archivo de configuración -> `.env` / variables de 
 | `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Ruta a `server.jar` de Minecraft (arranca el servidor con Java autoseleccionado) y binario Java opcional |
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | Flags JVM separados por espacios, directorio de trabajo de Minecraft y reinicio automático ante caídas (`true`/`false`, por defecto `true`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Nivel de verificación Minecraft (`0`–`3` u `off`) e interruptor de protección (`on`/`off`) |
+| `GYMBAG_MASCOT` | Archivo, directorio o URL `http(s)://` de mascota personalizada (anulaciones por estado: `GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT`) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | URL de Redis (`redis://` o `rediss://`), secreto HMAC y dirección de escucha de la Admin API (p. ej. `127.0.0.1:2019` u `off`) |
 
 ### APIs REST
@@ -514,7 +521,7 @@ Mantén la Admin API enlazada a loopback (`127.0.0.1:2019`) o a una interfaz pri
 | `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | Conteos de reglas remotas y errores de descarga; fuerza refresco y recarga del WAF |
 | `GET` / `PUT` | `/api/v1/config` | Vuelca la configuración con secretos ocultos; valida y reemplaza la configuración activa |
 | `GET` / `POST` | `/api/v1/sites` | Lista sitios o añade un sitio en tiempo de ejecución |
-| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspecciona, reemplaza, parchea en vivo (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `rules`, `remote_rules`, `rule_sources`) o elimina un sitio |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspecciona, reemplaza, parchea en vivo (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `mascot`, `clear_mascot`, `rules`, `remote_rules`, `rule_sources`) o elimina un sitio |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` y `.../{index_or_name}` | Lista, añade, reemplaza o elimina reglas personalizadas de un sitio |
 
 ## Benchmarks frente a Caddy y Nginx
@@ -531,7 +538,7 @@ Medido en Apple M4 (10 núcleos, macOS, Go `1.27.0`), TLS 1.3 con el mismo certi
 
 Nginx en C sigue siendo más rápido en caudal bruto, aunque Gymbag mantiene menor latencia p99 (`3.14 ms` frente a `6.20 ms`) en HTTP/1.1 con el WAF ejecutándose en línea, y supera a Caddy (`+32%` en HTTP/1.1, `+63%` a `+69%` en HTTP/2) con alrededor de un 30% menos de memoria y un binario 3.8 veces más pequeño. Sondeos de exploits conocidos como `/.env` se descartan en el borde sobre TLS a **140,680 req/s** (`0.35 ms` p50) sin llegar al upstream.
 
-La metodología, los microbenchmarks `go test -bench` y las configuraciones exactas están en [Benchmarks y rendimiento](docs/es/guide/benchmarks.md).
+La metodología, los microbenchmarks `go test -bench` y las configuraciones exactas están en [Benchmarks y rendimiento](../docs/es/guide/benchmarks.md).
 
 ## Estructura del proyecto
 

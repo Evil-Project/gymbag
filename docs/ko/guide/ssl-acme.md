@@ -79,10 +79,13 @@ ACME 인증서는 `<cert_dir>` 아래에 공급자별로 구분해 저장되므�
 - **ACME 계정 키**: `account_key /etc/gymbag/account.pem` (ECDSA P-256/P-384 또는 RSA)
 - **CSR 개인 키**: `ssl_key /etc/gymbag/domain.key`
 - **PEM 인증서 및 키 (전역 또는 사이트별 SNI)**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **`acme.sh` 인증서 디렉터리**: `acme_sh_path ~/.acme.sh` (또는 사이트별 `acme_sh_path /etc/ssl/acme/corp` / `tls acme.sh <path>`) — `<domain>_ecc/`(ECC 우선), `<domain>/`(RSA), 와일드카드 상위 디렉터리, `fullchain.cer`, 단일 도메인 직접 디렉터리를 자동으로 해석하며 갱신 시 핫 리로드됩니다
 - **암호화된 개인 키 암호**: `key_password super-secret-passphrase` (또는 `GYMBAG_KEY_PASSWORD`)
 
 ```caddyfile
 {
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
     key_password super-secret-passphrase
 }
 
@@ -90,6 +93,33 @@ corp.example.com {
     reverse_proxy http://localhost:8080
     tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
     verify 1
+}
+```
+
+## 자동 SSL 비활성화 및 직접 HTTP 접속
+
+- **자동 SSL 비활성화 (`auto_ssl off` / `tls off`)**: Gymbag이 ACME, 로컬 CA, 또는 자체 서명 인증서를 자동으로 발급하지 않도록 합니다. `auto_ssl off`를 `acme_sh_path` 또는 `tls <cert> <key>`와 함께 사용하면 외부에서 관리하는 인증서만으로 HTTPS를 제공할 수 있으며, 인증서 없이 `tls off`(`http_only` / `--http-only`)를 사용하면 HTTPS 리스너를 완전히 끄고 일반 HTTP를 직접 제공합니다.
+- **직접 HTTP 접속 (`direct_http on` / `http://domain`)**: HTTPS로 `308` 리다이렉트하는 대신 `http_port`에서 사이트를 직접 제공합니다(전체 WAF, HTTP에서 `Secure` 쿠키 없이 동작하는 PoW 검증, 리버스 프록시, `http://` `Location` 재작성 포함). HTTPS도 함께 활성화된 경우 `http_port`의 `/.well-known/acme-challenge/*`는 계속 동작하며 `Strict-Transport-Security`는 HTTPS 응답에서만 전송됩니다.
+
+```caddyfile
+# 일반 HTTP만 제공 (HTTPS 및 자동 SSL 비활성화)
+http://app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+}
+```
+
+```caddyfile
+# acme.sh 인증서를 사용해 직접 HTTP와 HTTPS를 함께 제공 (내장 자동 SSL 비활성화)
+{
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
+    direct_http on
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
 }
 ```
 

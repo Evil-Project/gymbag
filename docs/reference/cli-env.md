@@ -62,6 +62,7 @@ gymbag version
 | `--cert-file <path>` / `--key-file <path>` | Custom TLS certificate and private key PEM file paths |
 | `--direct-http` | Serve websites directly over HTTP without redirecting to HTTPS (`--allow-http` alias) |
 | `--http-only` | Disable HTTPS and Auto-SSL and serve websites directly over HTTP |
+| `--mascot <path-or-url>` | Custom mascot image file, directory, or `http(s)://` URL (`--mascot-pensive`, `--mascot-happy`, `--mascot-reject` for per-state overrides) |
 | `--admin <addr>` | Enable local REST Admin API (`127.0.0.1:2019` or `off`) |
 | `--http-port <port>` | HTTP redirect & ACME HTTP-01 port (default `80`) |
 | `--https-port <port>` | HTTPS gateway port (default `443`) |
@@ -158,4 +159,5 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_AUTHELIA_URL` / `GYMBAG_AUTHELIA_PORTAL_URL` | Global Authelia forward-auth URL and login portal redirect URL (`GYMBAG_AUTHELIA_URI`, `GYMBAG_AUTHELIA_COPY_HEADERS`, `GYMBAG_AUTHELIA_TIMEOUT`, `GYMBAG_AUTHELIA_INSECURE_TLS`, `GYMBAG_AUTHELIA_DOMAINS`, `GYMBAG_FORWARD_AUTH_URL`) |
 | `GYMBAG_REDIS_URL` | Redis URL (`redis://` or `rediss://`) |
+| `GYMBAG_MASCOT` | Global mascot image path, directory, or `http(s)://` URL (`GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT` for per-state overrides) |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC clearance secret and Admin REST API listen address (`127.0.0.1:2019` or `off`) |

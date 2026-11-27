@@ -46,7 +46,7 @@ Admin API는 인증 토큰이 없으며 Gymbag 재시작 없이 실시간 라우
 | `POST` | `/api/v1/sites` | 런타임에 웹사이트 추가 (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | 단일 웹사이트 설정 조회 |
 | `PUT` | `/api/v1/sites/{domain}` | 웹사이트 설정 교체 |
-| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `rule_sources` 실시간 패치 |
+| `PATCH` | `/api/v1/sites/{domain}` | `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `mascot`, `clear_mascot`, `rule_sources` 실시간 패치 |
 | `DELETE` | `/api/v1/sites/{domain}` | 웹사이트 삭제 (`204 No Content`; SSH와 Minecraft가 모두 꺼진 상태에서 마지막 남은 사이트를 삭제하려 하면 `409 Conflict` 반환) |
 | `GET` | `/api/v1/sites/{domain}/rules` | 웹사이트의 로컬 사용자 지정 규칙 나열 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 사용자 지정 규칙 추가 (`201 Created`) |

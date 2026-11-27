@@ -54,6 +54,12 @@ gymbag version
 | `--remote-rules-refresh <dur>` | リモートルールの更新間隔（デフォルト `5m` / `300s`） |
 | `--no-protect` | CLI で指定したサイトの PoW 検証を無効化 |
 | `--ssl-provider <name>` | ACME / SSL プロバイダを上書き |
+| `--no-auto-ssl` | 自動 SSL 発行を無効化（ACME、ローカル CA、自己署名） |
+| `--acme-sh-path <path>` | `acme.sh` が管理する証明書を使用（別名 `--acme-sh`） |
+| `--cert-file <path>` / `--key-file <path>` | カスタム TLS 証明書および秘密鍵 PEM ファイルのパス |
+| `--direct-http` | HTTPS へリダイレクトせず HTTP で直接 Web サイトを提供（別名 `--allow-http`） |
+| `--http-only` | HTTPS と自動 SSL を無効化し HTTP のみで Web サイトを提供 |
+| `--mascot <path-or-url>` | カスタムマスコット画像ファイル、ディレクトリ、または `http(s)://` URL（状態別の上書きには `--mascot-pensive`、`--mascot-happy`、`--mascot-reject`） |
 | `--admin <addr>` | ローカル REST Admin API を有効化（`127.0.0.1:2019` または `off`） |
 | `--http-port <port>` | HTTP リダイレクト＆ACME HTTP-01 ポート（デフォルト `80`） |
 | `--https-port <port>` | HTTPS ゲートウェイポート（デフォルト `443`） |
@@ -125,7 +131,9 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | チャレンジ有効期限（`300`s / `5m`）とクリアランス有効期間（`86400`s / `24h`；別名: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | クリアランス Cookie 名（`waf_clearance`）と `Secure` フラグ（`true`） |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | IP あたりのリクエスト上限（`240`）とウィンドウ（`60`s / `1m`） |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS モード（`auto`, `acme`, `local`, `selfsigned`, `file`）と CA プロバイダまたは URL |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS モード（`auto`, `acme`, `local`, `selfsigned`, `file`, `off`）と CA プロバイダまたは URL |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | 自動 SSL 発行の有効/無効（`on`/`off`）および `acme.sh` ディレクトリ設定（別名 `GYMBAG_ACME_SH`） |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | HTTPS と並行して直接 HTTP を提供（`on`/`off`、別名 `GYMBAG_ALLOW_HTTP`）、または HTTPS を完全に無効化（`on`/`off`） |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 連絡先メール（ZeroSSL 自動 EAB 兼用）と明示的な ACME ディレクトリ URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | External Account Binding Key ID と HMAC 鍵 |
 | `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA または RSA ACME アカウント鍵 PEM のパス |
@@ -145,4 +153,5 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | スペース区切りの JVM フラグ、Minecraft 作業ディレクトリ、クラッシュ時自動再起動の切替（`true`/`false`、デフォルト `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 検証レベル（`0`–`3` または `off`）と保護の切替（`on`/`off`） |
 | `GYMBAG_REDIS_URL` | Redis URL（`redis://` または `rediss://`） |
+| `GYMBAG_MASCOT` | グローバルマスコット画像のパス、ディレクトリ、または `http(s)://` URL（状態別の上書きには `GYMBAG_MASCOT_PENSIVE`、`GYMBAG_MASCOT_HAPPY`、`GYMBAG_MASCOT_REJECT`） |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC クリアランスシークレットと Admin REST API 待受アドレス（`127.0.0.1:2019` または `off`） |

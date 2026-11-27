@@ -1,7 +1,7 @@
 # Gymbag
 
 <p align="center">
-  <img src="docs/public/mascot-happy.png" alt="Gymbag mascot" width="140" />
+  <img src="../docs/public/mascot-happy.png" alt="Gymbag mascot" width="140" />
 </p>
 
 <p align="center">
@@ -11,20 +11,21 @@
 <p align="center">
   <a href="https://github.com/Evil-Project/gymbag/releases"><img src="https://img.shields.io/github/v/release/Evil-Project/gymbag?include_prereleases&label=Release" alt="Release" /></a>
   <a href="https://github.com/Evil-Project/gymbag/pkgs/container/gymbag"><img src="https://img.shields.io/badge/Docker-GHCR-blue?logo=docker" alt="Docker GHCR" /></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go" alt="Go 1.27+" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="Apache-2.0 License" /></a>
+  <a href="../go.mod"><img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go" alt="Go 1.27+" /></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="Apache-2.0 License" /></a>
   <a href="https://evil-project.github.io/gymbag/ja/"><img src="https://img.shields.io/badge/Docs-VitePress-b81d33" alt="Docs" /></a>
 </p>
 
 <p align="center">
   <strong>README:</strong>
-  <a href="README.md">English</a> ·
+  <a href="../README.md">English</a> ·
   <a href="README.zh.md">简体中文</a> ·
+  <a href="README.zh-TW.md">繁體中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a> ·
   <a href="README.es.md">Español</a>
   <br />
-  <sub>オンラインドキュメント: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
+  <sub>オンラインドキュメント: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/zh-TW/">ZH-TW</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
 Gymbag は、Anubis の発想を取り入れた Proof-of-Work (PoW) WAF を備え、SSH と Minecraft サーバーも保護できる単一バイナリの HTTPS リバースプロキシです。Go 標準ライブラリのみで実装しており、外部 Go モジュールへの依存はありません。HTML ページ、ブラウザ用 SHA-256 ソルバー、マスコット画像も `go:embed` でバイナリに組み込まれています。
@@ -146,7 +147,7 @@ minecraft {
 }
 ```
 
-設定例（`gymbag.json` を含む）と動作仕様の詳細は [SSH・Minecraft 保護ガイド](docs/ja/guide/ssh-minecraft.md) を参照してください。
+設定例（`gymbag.json` を含む）と動作仕様の詳細は [SSH・Minecraft 保護ガイド](../docs/ja/guide/ssh-minecraft.md) を参照してください。
 
 ## ローカル開発（`localhost` と `*.internal`）
 
@@ -301,10 +302,13 @@ app.example.com {
 
 **ZeroSSL** では `eab` を明示しない限り、`email` を設定するだけで EAB 資格情報を自動取得します。**Google Trust Services** と **SSL.com** では `eab YOUR_EAB_KEY_ID YOUR_EAB_HMAC_KEY` を渡してください（パディング付き Base64 とパディングなし Base64URL の両方に対応し、`eab_hmac_key` は Admin API の出力でマスクされます）。ACME 証明書はプロバイダごとに保存されるため（ZeroSSL なら `certs/acme-zerossl-fullchain.pem`、Let's Encrypt なら `certs/acme-fullchain.pem`）、`ssl_provider` を切り替えると即座に新しい CA から取得し直します。
 
-既存の PEM ファイルも持ち込めます。
+既存の PEM ファイルの持ち込み、`acme.sh` の利用、自動 SSL の無効化、HTTP 直接配信も可能です。
 - `account_key /etc/gymbag/account.pem`: 既存の ECDSA（P-256/P-384）または RSA ACME アカウント鍵。
 - `ssl_key /etc/gymbag/domain.key`: ACME CSR 署名用の既存 ECDSA/RSA 秘密鍵。
 - `tls <cert> <key>`: 外部管理の証明書をグローバルまたはサイト単位（SNI）で指定。暗号化秘密鍵には `key_password`（`GYMBAG_KEY_PASSWORD`）を使います。
+- `acme_sh_path ~/.acme.sh`（`--acme-sh-path` / `GYMBAG_ACME_SH_PATH`）: `acme.sh` のホームディレクトリ（`<domain>_ecc/` 優先、`<domain>/`、ワイルドカードディレクトリ対応）または単一ドメインディレクトリから証明書を直接読み込み、グローバルまたはサイト単位（`tls acme.sh <path>`）で適用し、更新時に自動でホットリロードします。
+- `auto_ssl off` / `tls off`（`--no-auto-ssl` / `--http-only`）: ACME・ローカル CA・自己署名証明書の自動発行を停止します。`auto_ssl off` を `acme_sh_path` や `tls <cert> <key>` と組み合わせるとユーザー管理の証明書のみを使用し、`tls off` を指定すると HTTPS リスナーを完全に無効化します。
+- `direct_http on`（`--direct-http` / `http://example.com` / `GYMBAG_DIRECT_HTTP=on`）: 保護対象サイトを `http_port` 上の平文 HTTP で直接配信します（`308` リダイレクトの強制や HTTP 上での HSTS 送出を行わずに、フル WAF・PoW Cookie・プロキシ・`http://` リダイレクト書き換えが動作します）。
 
 バックグラウンドタスクが `renew_interval` 秒（デフォルト `43200` = 12 時間）ごとに証明書を監視し、有効期限まで `renew_within_days` 日（デフォルト `30` 日）を切ると更新または再読み込みを行い、稼働中の HTTP ストリームや WebSocket を切らずに `tls.Certificate` をアトミックに差し替えます。
 
@@ -444,7 +448,7 @@ docker run -d \
   ghcr.io/evil-project/gymbag:latest
 ```
 
-`compose.yaml` は Gymbag と `redis:8-alpine` を組み合わせて起動し、純 Go 製 RESP2 Redis クライアント経由で PoW ナンス、固定ウィンドウのレート制限、SSH/Minecraft 検証チケット、IP クリアランスをコンテナ再起動や複数レプリカ間で共有します（`docker compose up -d --build`）。Docker から SSH や Minecraft を保護する場合は `-p 22:22` / `-p 25565:25565` と `-p 8443:8443` も公開してください。バインドマウントの権限設定（`chown 10001:10001`）、`--watch`、環境変数のみの構成については [Docker & Docker Compose ガイド](docs/ja/guide/docker.md) を参照してください。
+`compose.yaml` は Gymbag と `redis:8-alpine` を組み合わせて起動し、純 Go 製 RESP2 Redis クライアント経由で PoW ナンス、固定ウィンドウのレート制限、SSH/Minecraft 検証チケット、IP クリアランスをコンテナ再起動や複数レプリカ間で共有します（`docker compose up -d --build`）。Docker から SSH や Minecraft を保護する場合は `-p 22:22` / `-p 25565:25565` と `-p 8443:8443` も公開してください。バインドマウントの権限設定（`chown 10001:10001`）、`--watch`、環境変数のみの構成については [Docker & Docker Compose ガイド](../docs/ja/guide/docker.md) を参照してください。
 
 ### 環境変数（`GYMBAG_*`）
 
@@ -467,7 +471,9 @@ docker run -d \
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | チャレンジ有効期限（`300`s / `5m`）とクリアランス有効期限（`86400`s / `24h`；別名: `GYMBAG_VERIFY_TIMEOUT`, `GYMBAG_VERIFIED_TIMEOUT`） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | クリアランス Cookie 名（`waf_clearance`）と `Secure` フラグ（`true`） |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | IP あたりのリクエスト上限（`240`）とウィンドウ（`60`s） |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS モード（`auto`, `acme`, `local`, `selfsigned`, `file`）と CA（`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, または URL） |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS モード（`auto`, `acme`, `local`, `selfsigned`, `file`, `off`）と CA（`letsencrypt`, `letsencrypt_staging`, `zerossl`, `google`, `ssl.com`, `litessl`, `buypass`, `local`, または URL） |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | 自動 SSL の有効/無効（`on`/`off`）と `acme.sh` 証明書ディレクトリの指定（別名: `GYMBAG_ACME_SH`） |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | HTTP での直接配信（`on`/`off`、別名 `GYMBAG_ALLOW_HTTP`）、または HTTPS の完全無効化（`on`/`off`） |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 連絡先メール（ZeroSSL 自動 EAB 兼用）と明示的 ACME ディレクトリ URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | EAB Key ID と Base64/Base64URL HMAC 鍵 |
 | `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA/RSA ACME アカウント鍵 PEM のパス |
@@ -486,6 +492,7 @@ docker run -d \
 | `GYMBAG_MC_SERVER_JAR` / `GYMBAG_MC_JAVA` | Minecraft `server.jar` のパス（自動選択した Java でサーバーを自動起動）と任意の Java バイナリ上書き |
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | スペース区切りの JVM フラグ、Minecraft 作業ディレクトリ、クラッシュ時自動再起動の有効/無効（`true`/`false`、デフォルト `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 検証レベル（`0`–`3` または `off`）と保護の有効/無効（`on`/`off`） |
+| `GYMBAG_MASCOT` | カスタムマスコットのファイル、ディレクトリ、または `http(s)://` URL（状態別の個別上書き: `GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT`） |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL（`redis://` または `rediss://`）、HMAC シークレット、Admin API 待受アドレス（`127.0.0.1:2019` や `off`） |
 
 ### REST API
@@ -514,7 +521,7 @@ Admin API は認証トークンなしで稼働中のルーティングやファ�
 | `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | リモートルール件数と取得エラー／即時更新と WAF リロード |
 | `GET` / `PUT` | `/api/v1/config` | マスク済み設定の出力／検証して稼働中ランタイム設定を置換 |
 | `GET` / `POST` | `/api/v1/sites` | サイト一覧／実行時サイト追加 |
-| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | 取得・置換・ライブパッチ（`verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`routes`、`headers`、`rules`、`remote_rules`、`rule_sources`）・削除 |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | 取得・置換・ライブパッチ（`verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`routes`、`headers`、`mascot`、`clear_mascot`、`rules`、`remote_rules`、`rule_sources`）・削除 |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` & `.../{index_or_name}` | サイトのカスタムルール一覧・末尾追加・置換・削除 |
 
 ## Caddy・Nginx とのベンチマーク比較
@@ -531,7 +538,7 @@ Apple M4（10 コア、macOS、Go `1.27.0`）環境、同一 ECDSA P-256 証明�
 
 生のスループットでは C 製の Nginx が上回りますが、Gymbag は WAF をインラインで動かしながら HTTP/1.1 の p99 レイテンシで Nginx を下回り（`3.14 ms` vs `6.20 ms`）、Caddy に対しては HTTP/1.1 で `+32%`、HTTP/2 で `+63%`〜`+69%` 高速、メモリは約 30% 少なく、バイナリサイズは 3.8 倍小さくなっています。`/.env` のような既知の攻撃プローブは TLS 終端エッジで **140,680 req/s**（p50 `0.35 ms`）で落とすため、アップストリームへ届きません。
 
-計測手法、`go test -bench` マイクロベンチマーク、検証に使用した設定ファイルは [ベンチマークとパフォーマンス](docs/ja/guide/benchmarks.md) にまとめています。
+計測手法、`go test -bench` マイクロベンチマーク、検証に使用した設定ファイルは [ベンチマークとパフォーマンス](../docs/ja/guide/benchmarks.md) にまとめています。
 
 ## プロジェクト構成
 

@@ -19,12 +19,13 @@
 <p align="center">
   <strong>README:</strong>
   <a href="README.md">English</a> ·
-  <a href="README.zh.md">简体中文</a> ·
-  <a href="README.ja.md">日本語</a> ·
-  <a href="README.ko.md">한국어</a> ·
-  <a href="README.es.md">Español</a>
+  <a href="readme/README.zh.md">简体中文</a> ·
+  <a href="readme/README.zh-TW.md">繁體中文</a> ·
+  <a href="readme/README.ja.md">日本語</a> ·
+  <a href="readme/README.ko.md">한국어</a> ·
+  <a href="readme/README.es.md">Español</a>
   <br />
-  <sub>Online Docs: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
+  <sub>Online Docs: <a href="https://evil-project.github.io/gymbag/">EN</a> · <a href="https://evil-project.github.io/gymbag/zh/">ZH</a> · <a href="https://evil-project.github.io/gymbag/zh-TW/">ZH-TW</a> · <a href="https://evil-project.github.io/gymbag/ja/">JA</a> · <a href="https://evil-project.github.io/gymbag/ko/">KO</a> · <a href="https://evil-project.github.io/gymbag/es/">ES</a></sub>
 </p>
 
 Gymbag is a single-binary HTTPS reverse proxy and proof-of-work WAF (in the spirit of Anubis) that also guards SSH and Minecraft servers. It uses only the Go standard library with zero third-party Go modules; HTML pages, the SHA-256 browser solver, and the mascot images are compiled into the binary via `go:embed`.
@@ -494,6 +495,7 @@ Precedence order is **config file -> `.env` / `GYMBAG_*` environment variables -
 | `GYMBAG_MC_CONSOLE` | Bring managed Minecraft server console into Gymbag foreground & Admin API (`on`/`off`, alias `GYMBAG_MINECRAFT_CONSOLE`) |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft verify level (`0`–`3` or `off`) and protection toggle (`on`/`off`) |
 | `GYMBAG_AUTHELIA_URL` / `GYMBAG_AUTHELIA_PORTAL_URL` | Enable global Authelia forward auth (`http://127.0.0.1:9091`) and optional browser login redirect URL (`GYMBAG_AUTHELIA_URI`, `GYMBAG_AUTHELIA_COPY_HEADERS`, `GYMBAG_AUTHELIA_TIMEOUT`, `GYMBAG_AUTHELIA_INSECURE_TLS`, `GYMBAG_AUTHELIA_DOMAINS`, `GYMBAG_FORWARD_AUTH_URL`) |
+| `GYMBAG_MASCOT` | Custom mascot file, directory, or `http(s)://` URL (`GYMBAG_MASCOT_PENSIVE`, `GYMBAG_MASCOT_HAPPY`, `GYMBAG_MASCOT_REJECT` for per-state overrides) |
 | `GYMBAG_REDIS_URL` / `GYMBAG_SECRET` / `GYMBAG_ADMIN` | Redis URL (`redis://` or `rediss://`), HMAC secret, and Admin API listen address (e.g. `127.0.0.1:2019` or `off`) |
 
 ### REST APIs
@@ -522,7 +524,7 @@ Keep the Admin API bound to loopback (`127.0.0.1:2019`) or a private interface �
 | `GET` / `POST` | `/api/v1/rules/remote` / `/api/v1/rules/remote/refresh` | Remote rule counts and fetch errors; force refresh and WAF reload |
 | `GET` / `PUT` | `/api/v1/config` | Dump redacted config; validate and replace active runtime config |
 | `GET` / `POST` | `/api/v1/sites` | List sites or add a site at runtime |
-| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspect, replace, live-patch (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `auth`, `clear_auth`, `rules`, `remote_rules`, `rule_sources`), or delete a site |
+| `GET` / `PUT` / `PATCH` / `DELETE` | `/api/v1/sites/{domain}` | Inspect, replace, live-patch (`verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `routes`, `headers`, `auth`, `clear_auth`, `mascot`, `clear_mascot`, `rules`, `remote_rules`, `rule_sources`), or delete a site |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/sites/{domain}/rules` & `.../{index_or_name}` | List, append, replace, or remove custom rules on a site |
 | `GET` / `POST` | `/api/v1/minecraft/console` | Snapshot (`lines`) or stream (`?stream=1` SSE) console output and send commands (`{"command":"..."}`) when `minecraft.console` is enabled |
 

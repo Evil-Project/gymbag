@@ -59,7 +59,10 @@
 | `eab <kid> <hmac>` | 外部账户绑定凭据（也支持 `eab_kid` / `eab_hmac_key`） | — |
 | `account_key` | 既有的 ECDSA 或 RSA ACME 账户 PEM 路径 | `<cert_dir>/acme-account.pem` |
 | `ssl_key` | 用于签发 ACME CSR 的既有私钥路径 | 自动生成 |
-| `tls` | `auto`、`acme`、`local`、`selfsigned` 或 `<cert.pem> <key.pem>` | `auto` |
+| `tls` | `auto`、`acme`、`local`、`selfsigned`、`file`、`off`、`acme.sh <path>` 或 `<cert.pem> <key.pem>` | `auto` |
+| `auto_ssl` | 启用或关闭自动 SSL 签发（`on`/`off`；也接受 `auto_https on\|off\|disable_redirects`） | `on` |
+| `acme_sh_path` | `acme.sh` 主目录（`~/.acme.sh`）或域名证书目录路径（别名 `acme_sh`） | — |
+| `direct_http` | 直接在 `http_port` 上提供站点服务而不跳转到 HTTPS（也接受 `allow_http` / `http_only`） | `off`（关闭 TLS 时为 `on`） |
 | `key_password` | 加密 PEM 私钥的解密口令 | — |
 | `cert_dir` | 证书、本地 CA、密钥、情报缓存与规则缓存目录 | `certs` |
 | `renew_interval` | 证书续期巡检间隔（整数秒或 `12h` 等时长） | `43200`（`12h`） |
@@ -75,6 +78,7 @@
 | `redis` / `redis_url` | Redis 连接地址（`redis://` 或 `rediss://`） | 内存存储 |
 | `secret` | `waf_clearance` Cookie 的 HMAC 密钥 | `<cert_dir>/secret` |
 | `trusted_proxies` | 解析 `X-Forwarded-For` 时信任的下游代理 IP/CIDR | — |
+| `mascot` | 自定义吉祥物文件、目录、`http(s)://` URL 或 `mascot { default / pensive / happy / reject }` 块（也接受 `mascot_pensive`、`mascot_happy`、`mascot_reject`） | 内置默认 |
 | `ip_security` | 启用威胁情报 CIDR 列表（`on`/`off`） | `on` |
 | `ip_security_action` | 威胁情报命中动作（`verify` 或 `block`） | `verify` |
 | `ip_reputation` | 启用 Shodan InternetDB 与 StopForumSpam 实时查询（开启 `vpn_detection` 时同时包含实时 VPN API 查询） | `on` |
@@ -132,7 +136,9 @@ app.example.com, www.example.com {
 | `ai_bots <patterns...>` | 额外识别为 AI 爬虫的 User-Agent 子串 |
 | `suspicious_uas <patterns...>` | 额外判定为可疑客户端的 User-Agent 子串 |
 | `suspicious_paths <prefixes...>` | 额外判定为可疑探测的路径前缀 |
-| `tls <cert> <key>` | 按站点配置的 SNI 证书和私钥路径 |
+| `tls <cert> <key>` | 按站点配置的 SNI 证书和私钥路径（或 `tls acme.sh <path>`） |
+| `acme_sh_path <path>` | 按站点配置的 `acme.sh` 主目录或域名证书目录（别名 `acme_sh`） |
+| `mascot <path-or-url>` | 按站点配置的自定义吉祥物文件、目录、URL 或 `mascot { ... }` 块（`mascot_pensive`、`mascot_happy`、`mascot_reject`） |
 | `allow \| verify \| block ...` | 单行简写自定义防火墙规则 |
 | `rule "name" { ... }` | 多条件自定义防火墙规则块 |
 
@@ -206,12 +212,12 @@ minecraft {
 ```
 
 顶层 JSON 字段（解析时强制开启 `DisallowUnknownFields`）：
-- `sites`：`{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` 对象数组，其中 `waf` 包含 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`。
+- `sites`：`{domain, upstreams, routes, headers, protect, mascot, waf, cert_file, key_file, acme_sh_path}` 对象数组，其中 `mascot` 为路径/URL 字符串或 `{default, pensive, happy, reject}`，`waf` 包含 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`。
 - `ssh`：`{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`。
 - `minecraft`：`{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`。
 - `verify`：`{url, port, cert_file, key_file}`。
-- `bind_host`、`http_port`、`https_port`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`。
-- `tls`：`{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`。
+- `bind_host`、`http_port`、`https_port`、`direct_http`、`admin_addr`、`remote_rules_refresh`、`rules_watch_interval`、`redis_url`、`secret`、`trusted_proxies`、`mascot`。
+- `tls`：`{mode, auto_ssl, provider, cert_file, key_file, acme_sh_path, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`。
 - `intel`：`{ip_security, ip_security_action, live_reputation, ai_ip_list, vpn_detection, refresh_interval, threat_feeds, ai_ip_feeds, vpn_feeds}`。
 - `defaults`：全局共享的基础 `waf` 对象。
 

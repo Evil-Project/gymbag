@@ -4,7 +4,7 @@ import { useData } from 'vitepress'
 
 const { lang } = useData()
 
-type LocaleKey = 'en' | 'zh' | 'ja' | 'ko' | 'es'
+type LocaleKey = 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es'
 type LevelKey = '3' | '2' | '1' | '0' | 'off'
 
 interface LevelSpec {
@@ -21,7 +21,11 @@ interface LevelSpec {
 }
 
 const activeLocale = computed<LocaleKey>(() => {
-  const code = (lang.value || 'en').slice(0, 2).toLowerCase()
+  const raw = (lang.value || 'en').toLowerCase()
+  if (raw === 'zh-tw' || raw === 'zh-hant') {
+    return 'zh-TW'
+  }
+  const code = raw.slice(0, 2)
   if (code === 'zh' || code === 'ja' || code === 'ko' || code === 'es') {
     return code
   }
@@ -31,6 +35,7 @@ const activeLocale = computed<LocaleKey>(() => {
 const headersByLocale: Record<LocaleKey, { client: string; action: string; why: string }> = {
   en: { client: 'Client / Traffic', action: 'Action', why: 'Why' },
   zh: { client: '客户端 / 流量类型', action: '处理动作', why: '判定原因' },
+  'zh-TW': { client: '用戶端 / 流量類型', action: '處理動作', why: '判定原因' },
   ja: { client: 'クライアント / トラフィック', action: 'アクション', why: '理由' },
   ko: { client: '클라이언트 / 트래픽', action: '동작', why: '판정 이유' },
   es: { client: 'Cliente / Tráfico', action: 'Acción', why: 'Motivo' }
@@ -183,6 +188,78 @@ const levelsByLocale: Record<LocaleKey, LevelSpec[]> = {
         { visitor: 'curl / Webhook 客户端', status: 'pass', outcomeText: '直接放行', reason: 'WAF 验证已关闭' },
         { visitor: '站点自定义规则（若已配置）', status: 'block', outcomeText: '照常执行', reason: '显式 allow/block 规则仍生效' },
         { visitor: 'TLS 与 HTTP->HTTPS 跳转', status: 'pass', outcomeText: '已启用', reason: 'ACME 与本地 PKI 照常工作' }
+      ]
+    }
+  ],
+  'zh-TW': [
+    {
+      key: '3',
+      label: '3 — 可疑流量與 AI（預設）',
+      directive: 'verify 3',
+      summary: '對可疑用戶端/IP（含 VPN/代理/Tor IP）與 AI 爬蟲發起 PoW 挑戰，一般瀏覽器直接放行。',
+      outcomes: [
+        { visitor: 'Chrome / Firefox / Safari', status: 'pass', outcomeText: '直接放行', reason: '正常的瀏覽器標頭與乾淨 IP' },
+        { visitor: 'GPTBot / ClaudeBot / Applebot', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '符合官方 AI IP 網段或 AI UA' },
+        { visitor: 'VPN / 代理 / Tor 出口 IP', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '命中 X4BNet/Tor 清單或 ipquery.io / ipapi.is 即時偵測（HTTP、SSH、Minecraft 皆適用）' },
+        { visitor: 'curl / python-requests / 無頭瀏覽器', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '自動化工具、缺少標頭或可疑 SSH/MC 用戶端' },
+        { visitor: 'Spamhaus / IPsum 威脅 IP', status: 'challenge', outcomeText: 'PoW（或 403）', reason: '命中威脅情資（預設 verify，設為 block 則 403）' },
+        { visitor: 'GET /.env, /wp-admin, sqlmap', status: 'block', outcomeText: '403 攔截', reason: '內建 default_rules 基礎規則' }
+      ]
+    },
+    {
+      key: '2',
+      label: '2 — 僅 AI 爬蟲',
+      directive: 'verify 2',
+      summary: '放行一般訪客、curl 與 VPN 使用者；僅對 AI 爬蟲和 LLM Agent 要求工作量證明。',
+      outcomes: [
+        { visitor: 'Chrome / Firefox / Safari', status: 'pass', outcomeText: '直接放行', reason: '非 AI 爬蟲' },
+        { visitor: 'GPTBot / ClaudeBot / PerplexityBot', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '符合 AI 爬蟲 CIDR 或 User-Agent' },
+        { visitor: 'VPN / 代理 / Tor 出口 IP', status: 'pass', outcomeText: '直接放行', reason: '等級 2 不觸發可疑/VPN 檢查' },
+        { visitor: 'curl / 一般 API 用戶端', status: 'pass', outcomeText: '直接放行', reason: '等級 2 放行一般命令列用戶端' },
+        { visitor: 'Spamhaus / IPsum 威脅 IP', status: 'challenge', outcomeText: 'PoW（或 403）', reason: '全域威脅情資仍會生效' },
+        { visitor: 'GET /.env, /wp-admin, sqlmap', status: 'block', outcomeText: '403 攔截', reason: '內建 default_rules 基礎規則' }
+      ]
+    },
+    {
+      key: '1',
+      label: '1 — 僅可疑流量',
+      directive: 'verify 1',
+      summary: '僅對掃描器、無頭瀏覽器、偽造標頭、VPN/代理/Tor IP 與惡意 IP 發起挑戰。',
+      outcomes: [
+        { visitor: 'Chrome / Firefox / Safari', status: 'pass', outcomeText: '直接放行', reason: '正常的瀏覽器特徵與乾淨 IP' },
+        { visitor: '官方 AI 爬蟲（正常 UA）', status: 'pass', outcomeText: '直接放行', reason: '等級 1 不啟用純 AI 觸發器' },
+        { visitor: 'VPN / 代理 / Tor 出口 IP', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '命中 X4BNet/Tor 清單或 ipquery.io / ipapi.is 即時偵測（HTTP、SSH、Minecraft 皆適用）' },
+        { visitor: 'curl / Scrapy / 缺少標頭', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '自動化工具、缺少瀏覽器標頭或可疑 SSH/MC 用戶端' },
+        { visitor: 'Spamhaus / IPsum 威脅 IP', status: 'challenge', outcomeText: 'PoW（或 403）', reason: '命中威脅情資庫' },
+        { visitor: 'GET /.env, /wp-admin, sqlmap', status: 'block', outcomeText: '403 攔截', reason: '內建 default_rules 基礎規則' }
+      ]
+    },
+    {
+      key: '0',
+      label: '0 — 一律驗證',
+      directive: 'verify 0',
+      summary: '所有沒有有效放行憑證的訪客或 TCP 用戶端，都必須先通過一次 SHA-256 工作量證明。',
+      outcomes: [
+        { visitor: 'Chrome / Firefox / Safari', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '每位訪客在有效期內驗證一次' },
+        { visitor: 'GPTBot / ClaudeBot / Applebot', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '所有流量皆須驗證' },
+        { visitor: 'VPN / 代理 / Tor 出口 IP', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '所有流量皆須驗證' },
+        { visitor: 'curl / python-requests', status: 'challenge', outcomeText: 'PoW 挑戰', reason: '所有流量皆須驗證' },
+        { visitor: 'Spamhaus / IPsum 威脅 IP', status: 'challenge', outcomeText: 'PoW（或 403）', reason: '命中威脅情資庫' },
+        { visitor: 'GET /.env, /wp-admin, sqlmap', status: 'block', outcomeText: '403 攔截', reason: '內建 default_rules 基礎規則' }
+      ]
+    },
+    {
+      key: 'off',
+      label: 'protect off',
+      directive: 'protect off',
+      summary: '針對靜態資源、Webhook 或鏡像站關閉 PoW 挑戰，但保留 HTTPS 與你設定的自訂規則。',
+      outcomes: [
+        { visitor: 'Chrome / Firefox / Safari', status: 'pass', outcomeText: '直接放行', reason: '純 HTTPS 與 WebSocket 反向代理' },
+        { visitor: 'GPTBot / ClaudeBot', status: 'pass', outcomeText: '直接放行', reason: 'WAF 驗證已關閉' },
+        { visitor: 'VPN / 代理 / Tor 出口 IP', status: 'pass', outcomeText: '直接放行', reason: 'WAF 驗證已關閉' },
+        { visitor: 'curl / Webhook 用戶端', status: 'pass', outcomeText: '直接放行', reason: 'WAF 驗證已關閉' },
+        { visitor: '站台自訂規則（若有設定）', status: 'block', outcomeText: '照常執行', reason: '明確的 allow/block 規則仍會生效' },
+        { visitor: 'TLS 與 HTTP->HTTPS 跳轉', status: 'pass', outcomeText: '已啟用', reason: 'ACME 與本地 PKI 照常運作' }
       ]
     }
   ],

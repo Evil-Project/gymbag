@@ -46,7 +46,7 @@ The Admin API takes no authentication token and mutates live routing and firewal
 | `POST` | `/api/v1/sites` | Add a website at runtime (`201 Created`) |
 | `GET` | `/api/v1/sites/{domain}` | Inspect one website's configuration |
 | `PUT` | `/api/v1/sites/{domain}` | Replace a website's configuration |
-| `PATCH` | `/api/v1/sites/{domain}` | Live-patch `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `auth`, `clear_auth`, or `rule_sources` |
+| `PATCH` | `/api/v1/sites/{domain}` | Live-patch `verify_level`, `protect`, `difficulty`, `clearance_ttl`, `upstreams`, `rate_limit`, `rules`, `remote_rules`, `routes`, `headers`, `auth`, `clear_auth`, `mascot`, `clear_mascot`, or `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | Remove a website (`204 No Content`; returns `409 Conflict` on the last remaining site when neither SSH nor Minecraft is active) |
 | `GET` | `/api/v1/sites/{domain}/rules` | List local custom rules on a website |
 | `POST` | `/api/v1/sites/{domain}/rules` | Append a custom rule (`201 Created`) |

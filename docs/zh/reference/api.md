@@ -46,7 +46,7 @@ Admin API 不设鉴权令牌，可以直接在不重启进程的情况下修改�
 | `POST` | `/api/v1/sites` | 运行时新增网站（`201 Created`） |
 | `GET` | `/api/v1/sites/{domain}` | 查看单个网站配置 |
 | `PUT` | `/api/v1/sites/{domain}` | 整体替换单个网站配置 |
-| `PATCH` | `/api/v1/sites/{domain}` | 局部热更新 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers` 或 `rule_sources` |
+| `PATCH` | `/api/v1/sites/{domain}` | 局部热更新 `verify_level`、`protect`、`difficulty`、`clearance_ttl`、`upstreams`、`rate_limit`、`rules`、`remote_rules`、`routes`、`headers`、`mascot`、`clear_mascot` 或 `rule_sources` |
 | `DELETE` | `/api/v1/sites/{domain}` | 删除网站（`204 No Content`；当 SSH 与 Minecraft 均未启用时，删除最后一个剩余站点会返回 `409 Conflict`） |
 | `GET` | `/api/v1/sites/{domain}/rules` | 列出网站上的本地自定义规则 |
 | `POST` | `/api/v1/sites/{domain}/rules` | 追加一条自定义规则（`201 Created`） |

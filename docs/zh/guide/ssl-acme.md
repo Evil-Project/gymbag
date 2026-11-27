@@ -79,10 +79,13 @@ ACME 证书按提供商分别保存在 `<cert_dir>` 下（例如 `certs/acme-zer
 - ACME 账户密钥：`account_key /etc/gymbag/account.pem`（ECDSA P-256/P-384 或 RSA）
 - CSR 私钥：`ssl_key /etc/gymbag/domain.key`
 - PEM 证书与私钥（全局或按站点 SNI）：`tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **`acme.sh` 证书目录**：`acme_sh_path ~/.acme.sh`（或按站点配置 `acme_sh_path /etc/ssl/acme/corp` / `tls acme.sh <path>`）——自动识别 `<domain>_ecc/`（优先 ECC）、`<domain>/`（RSA）、通配符父目录、`fullchain.cer` 以及直接指向单域名的目录，并在证书续期后热重载
 - 加密私钥口令：`key_password super-secret-passphrase`（或 `GYMBAG_KEY_PASSWORD`）
 
 ```caddyfile
 {
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
     key_password super-secret-passphrase
 }
 
@@ -90,6 +93,33 @@ corp.example.com {
     reverse_proxy http://localhost:8080
     tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
     verify 1
+}
+```
+
+## 关闭自动 SSL 与直接 HTTP 访问
+
+- **关闭自动 SSL（`auto_ssl off` / `tls off`）**：阻止 Gymbag 自动签发 ACME、本地 CA 或自签名证书。将 `auto_ssl off` 与 `acme_sh_path` 或 `tls <cert> <key>` 搭配使用，可仅通过外部管理的证书提供 HTTPS；若不配置任何证书并使用 `tls off`（`http_only` / `--http-only`），则会完全关闭 HTTPS 监听并直接提供纯 HTTP 服务。
+- **直接 HTTP 访问（`direct_http on` / `http://domain`）**：直接在 `http_port` 上提供站点服务（完整 WAF、在 HTTP 下无需 `Secure` Cookie 即可完成 PoW 验证、反向代理以及 `http://` 的 `Location` 重写），而不再返回 `308` 跳转到 HTTPS。当同时启用了 HTTPS 时，`http_port` 上的 `/.well-known/acme-challenge/*` 仍可正常工作，且 `Strict-Transport-Security` 仅在 HTTPS 响应中下发。
+
+```caddyfile
+# 仅提供纯 HTTP 服务（关闭 HTTPS 与自动 SSL）
+http://app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+}
+```
+
+```caddyfile
+# 使用 acme.sh 证书同时提供直接 HTTP 与 HTTPS 访问（关闭内置自动 SSL）
+{
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
+    direct_http on
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
 }
 ```
 

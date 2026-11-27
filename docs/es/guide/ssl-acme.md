@@ -79,10 +79,13 @@ También puedes asignar un par de certificado dedicado al portal de verificació
 - **Clave de cuenta ACME**: `account_key /etc/gymbag/account.pem` (ECDSA P-256/P-384 o RSA)
 - **Clave privada CSR**: `ssl_key /etc/gymbag/domain.key`
 - **Certificado y clave PEM (global o SNI por sitio)**: `tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem`
+- **Directorio de certificados de `acme.sh`**: `acme_sh_path ~/.acme.sh` (o por sitio `acme_sh_path /etc/ssl/acme/corp` / `tls acme.sh <path>`) — resuelve automáticamente `<domain>_ecc/` (con preferencia por ECC), `<domain>/` (RSA), directorios padre con comodín, `fullchain.cer` y directorios directos de un solo dominio, y se recarga en caliente al renovar
 - **Frase de paso de clave privada cifrada**: `key_password super-secret-passphrase` (o `GYMBAG_KEY_PASSWORD`)
 
 ```caddyfile
 {
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
     key_password super-secret-passphrase
 }
 
@@ -90,6 +93,33 @@ corp.example.com {
     reverse_proxy http://localhost:8080
     tls /etc/ssl/corp-fullchain.pem /etc/ssl/corp-privkey.pem
     verify 1
+}
+```
+
+## Desactivar Auto SSL y acceso HTTP directo
+
+- **Desactivar SSL automático (`auto_ssl off` / `tls off`)**: Impide que Gymbag aprovisione certificados ACME, de CA local o autofirmados. Combina `auto_ssl off` con `acme_sh_path` o `tls <cert> <key>` para servir HTTPS usando únicamente certificados gestionados externamente, o usa `tls off` (`http_only` / `--http-only`) sin certificados para desactivar por completo el listener HTTPS y servir HTTP plano directamente.
+- **Acceso HTTP directo (`direct_http on` / `http://domain`)**: Sirve los sitios directamente en `http_port` (WAF completo, verificación PoW sin exigir cookies `Secure` sobre HTTP, proxy inverso y reescrituras de `Location` con `http://`) en lugar de devolver una redirección `308` hacia HTTPS. Cuando HTTPS también está habilitado, `/.well-known/acme-challenge/*` sigue funcionando en `http_port` y `Strict-Transport-Security` solo se envía en respuestas HTTPS.
+
+```caddyfile
+# Servir solo HTTP plano (HTTPS y auto SSL desactivados)
+http://app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
+}
+```
+
+```caddyfile
+# Servir tanto HTTP directo como HTTPS usando certificados de acme.sh (sin auto SSL integrado)
+{
+    auto_ssl off
+    acme_sh_path /root/.acme.sh
+    direct_http on
+}
+
+app.example.com {
+    reverse_proxy http://localhost:3000
+    verify 3
 }
 ```
 

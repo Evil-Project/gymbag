@@ -78,6 +78,7 @@ An optional top-level `{ ... }` block configures server-wide TLS, ACME, networki
 | `redis` / `redis_url` | Redis connection URL (`redis://` or `rediss://`) | in-memory store |
 | `secret` | HMAC secret for `waf_clearance` cookies | `<cert_dir>/secret` |
 | `trusted_proxies` | Trusted downstream proxy IPs/CIDRs for `X-Forwarded-For` | — |
+| `mascot` | Custom mascot file, directory, `http(s)://` URL, or `mascot { default / pensive / happy / reject }` block (`mascot_pensive`, `mascot_happy`, `mascot_reject` also accepted) | Embedded default |
 | `ip_security` | Enable threat-intel CIDR feeds (`on`/`off`) | `on` |
 | `ip_security_action` | Threat-intel match action (`verify` or `block`) | `verify` |
 | `ip_reputation` | Enable live Shodan InternetDB & StopForumSpam lookups (plus live VPN API lookups when `vpn_detection` is on) | `on` |
@@ -141,6 +142,7 @@ app.example.com, www.example.com {
 | `suspicious_paths <prefixes...>` | Extra path prefixes treated as suspicious probes |
 | `tls <cert> <key>` | Per-site SNI certificate and private key paths (or `tls acme.sh <path>`) |
 | `acme_sh_path <path>` | Per-site `acme.sh` home or domain certificate directory (`acme_sh` alias) |
+| `mascot <path-or-url>` | Per-site custom mascot file, directory, URL, or `mascot { ... }` block (`mascot_pensive`, `mascot_happy`, `mascot_reject`) |
 | `allow \| verify \| block ...` | Shorthand custom firewall rule |
 | `rule "name" { ... }` | Multi-condition custom firewall rule block |
 
@@ -215,12 +217,12 @@ Time directives (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, `rate_wind
 ```
 
 Top-level JSON keys (`DisallowUnknownFields` is enforced):
-- `sites`: array of `{domain, upstreams, routes, headers, auth, protect, waf, cert_file, key_file, acme_sh_path}`, where `waf` holds `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}` and `auth` holds `{provider, url, uri, portal_url, copy_headers, headers, paths, except_paths, timeout, insecure_skip_tls}`.
+- `sites`: array of `{domain, upstreams, routes, headers, auth, protect, mascot, waf, cert_file, key_file, acme_sh_path}`, where `mascot` is a path/URL string or `{default, pensive, happy, reject}`, `waf` holds `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`, and `auth` holds `{provider, url, uri, portal_url, copy_headers, headers, paths, except_paths, timeout, insecure_skip_tls}`.
 - `authelia`: optional global forward-auth object matching site `auth`.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, console, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
-- `bind_host`, `http_port`, `https_port`, `direct_http`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
+- `bind_host`, `http_port`, `https_port`, `direct_http`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `mascot`.
 - `tls`: `{mode, auto_ssl, provider, cert_file, key_file, acme_sh_path, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.
 - `intel`: `{ip_security, ip_security_action, live_reputation, ai_ip_list, vpn_detection, refresh_interval, threat_feeds, ai_ip_feeds, vpn_feeds}`.
 - `defaults`: shared base `waf` object.

@@ -54,6 +54,12 @@ gymbag version
 | `--remote-rules-refresh <dur>` | 远程规则刷新间隔（默认 `5m` / `300s`） |
 | `--no-protect` | 关闭 CLI 指定站点的 PoW 验证 |
 | `--ssl-provider <name>` | 覆盖 ACME / SSL 提供商 |
+| `--no-auto-ssl` | 关闭自动 SSL 签发（ACME、本地 CA、自签名） |
+| `--acme-sh-path <path>` | 使用 `acme.sh` 管理的证书（别名 `--acme-sh`） |
+| `--cert-file <path>` / `--key-file <path>` | 自定义 TLS 证书与私钥 PEM 文件路径 |
+| `--direct-http` | 直接通过 HTTP 提供网站服务，不重定向到 HTTPS（别名 `--allow-http`） |
+| `--http-only` | 关闭 HTTPS 与自动 SSL，仅通过 HTTP 提供网站服务 |
+| `--mascot <path-or-url>` | 自定义吉祥物图片文件、目录或 `http(s)://` URL（支持 `--mascot-pensive`、`--mascot-happy`、`--mascot-reject` 按状态分别覆盖） |
 | `--admin <addr>` | 启用本地 REST Admin API（`127.0.0.1:2019` 或 `off`） |
 | `--http-port <port>` | HTTP 重定向与 ACME HTTP-01 端口（默认 `80`） |
 | `--https-port <port>` | HTTPS 网关端口（默认 `443`） |
@@ -125,7 +131,9 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_CHALLENGE_TTL` / `GYMBAG_CLEARANCE_TTL` | 质询有效期（`300`s / `5m`）与放行有效期（`86400`s / `24h`；别名：`GYMBAG_VERIFY_TIMEOUT`、`GYMBAG_VERIFIED_TIMEOUT`） |
 | `GYMBAG_COOKIE_NAME` / `GYMBAG_COOKIE_SECURE` | 通行 Cookie 名称（`waf_clearance`）与 `Secure` 标志（`true`） |
 | `GYMBAG_RATE_LIMIT` / `GYMBAG_RATE_WINDOW` | 单 IP 请求上限（`240`）与窗口时长（`60`s / `1m`） |
-| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS 模式（`auto`、`acme`、`local`、`selfsigned`、`file`）与 CA 提供商或 URL |
+| `GYMBAG_TLS_MODE` / `GYMBAG_SSL_PROVIDER` | TLS 模式（`auto`、`acme`、`local`、`selfsigned`、`file`、`off`）与 CA 提供商或 URL |
+| `GYMBAG_AUTO_SSL` / `GYMBAG_ACME_SH_PATH` | 开关自动 SSL 签发（`on`/`off`）并设置 `acme.sh` 目录（别名 `GYMBAG_ACME_SH`） |
+| `GYMBAG_DIRECT_HTTP` / `GYMBAG_HTTP_ONLY` | 在保留 HTTPS 的同时提供直接 HTTP 访问（`on`/`off`，别名 `GYMBAG_ALLOW_HTTP`），或完全关闭 HTTPS（`on`/`off`） |
 | `GYMBAG_ACME_EMAIL` / `GYMBAG_ACME_DIRECTORY` | ACME 联系邮箱（含 ZeroSSL 自动 EAB）及显式 ACME 目录 URL |
 | `GYMBAG_EAB_KID` / `GYMBAG_EAB_HMAC_KEY` | 外部账户绑定 Key ID 与 HMAC 密钥 |
 | `GYMBAG_ACCOUNT_KEY_FILE` | ECDSA 或 RSA ACME 账户密钥 PEM 路径 |
@@ -145,4 +153,5 @@ gymbag ruleset rule add --file ./rules/custom.rules --action block --name bad-bo
 | `GYMBAG_MC_JVM_ARGS` / `GYMBAG_MC_WORK_DIR` / `GYMBAG_MC_AUTO_RESTART` | 空格分隔的 JVM 参数、Minecraft 工作目录以及崩溃自动重启开关（`true`/`false`，默认 `true`） |
 | `GYMBAG_MC_VERIFY_LEVEL` / `GYMBAG_MC_PROTECT` | Minecraft 验证级别（`0`–`3` 或 `off`）与防护开关（`on`/`off`） |
 | `GYMBAG_REDIS_URL` | Redis 连接地址（`redis://` 或 `rediss://`） |
+| `GYMBAG_MASCOT` | 全局吉祥物图片路径、目录或 `http(s)://` URL（支持 `GYMBAG_MASCOT_PENSIVE`、`GYMBAG_MASCOT_HAPPY`、`GYMBAG_MASCOT_REJECT` 按状态分别覆盖） |
 | `GYMBAG_SECRET` / `GYMBAG_ADMIN` | HMAC 通行签名密钥与 Admin REST API 监听地址（`127.0.0.1:2019` 或 `off`） |

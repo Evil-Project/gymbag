@@ -59,7 +59,10 @@ Gymbag은 기본적으로 작업 디렉터리에서 `./gymbag.json`, `./Gymbagfi
 | `eab <kid> <hmac>` | External Account Binding 자격 증명 (`eab_kid` / `eab_hmac_key`도 지원) | — |
 | `account_key` | 기존 ECDSA 또는 RSA ACME 계정 PEM 경로 | `<cert_dir>/acme-account.pem` |
 | `ssl_key` | ACME CSR용 기존 개인 키 경로 | 자동 생성 |
-| `tls` | `auto`, `acme`, `local`, `selfsigned`, 또는 `<cert.pem> <key.pem>` | `auto` |
+| `tls` | `auto`, `acme`, `local`, `selfsigned`, `file`, `off`, `acme.sh <path>`, 또는 `<cert.pem> <key.pem>` | `auto` |
+| `auto_ssl` | 자동 SSL 발급 활성화 또는 비활성화 (`on`/`off`; `auto_https on\|off\|disable_redirects`도 허용) | `on` |
+| `acme_sh_path` | `acme.sh` 홈(`~/.acme.sh`) 또는 도메인 인증서 디렉터리 경로 (별칭 `acme_sh`) | — |
+| `direct_http` | HTTPS 리다이렉트 없이 `http_port`에서 사이트 직접 제공 (`allow_http` / `http_only`도 허용) | `off` (TLS가 꺼져 있으면 `on`) |
 | `key_password` | 암호화된 PEM 개인 키 암호 | — |
 | `cert_dir` | 인증서, 로컬 CA, 시크릿, 인텔 캐시, 규칙 캐시 디렉터리 | `certs` |
 | `renew_interval` | 인증서 갱신 확인 주기 (초 또는 `12h` 같은 기간 문자열) | `43200` (`12h`) |
@@ -75,6 +78,7 @@ Gymbag은 기본적으로 작업 디렉터리에서 `./gymbag.json`, `./Gymbagfi
 | `redis` / `redis_url` | Redis 연결 URL (`redis://` 또는 `rediss://`) | 인메모리 스토어 |
 | `secret` | `waf_clearance` 쿠키용 HMAC 시크릿 | `<cert_dir>/secret` |
 | `trusted_proxies` | `X-Forwarded-For`를 신뢰할 다운스트림 프록시 IP/CIDR | — |
+| `mascot` | 사용자 지정 마스코트 파일, 디렉터리, `http(s)://` URL 또는 `mascot { default / pensive / happy / reject }` 블록 (`mascot_pensive`, `mascot_happy`, `mascot_reject`도 허용) | 내장 기본값 |
 | `ip_security` | 위협 인텔 CIDR 피드 활성화 (`on`/`off`) | `on` |
 | `ip_security_action` | 위협 인텔 일치 시 동작 (`verify` 또는 `block`) | `verify` |
 | `ip_reputation` | 실시간 Shodan InternetDB & StopForumSpam 조회 활성화 (`vpn_detection` 활성 시 실시간 VPN API 조회 포함) | `on` |
@@ -132,7 +136,9 @@ app.example.com, www.example.com {
 | `ai_bots <patterns...>` | AI 크롤러로 취급할 추가 User-Agent 부분 문자열 |
 | `suspicious_uas <patterns...>` | 의심 대상으로 취급할 추가 User-Agent 부분 문자열 |
 | `suspicious_paths <prefixes...>` | 의심 프로브로 취급할 추가 경로 접두사 |
-| `tls <cert> <key>` | 사이트별 SNI 인증서 및 개인 키 경로 |
+| `tls <cert> <key>` | 사이트별 SNI 인증서 및 개인 키 경로 (또는 `tls acme.sh <path>`) |
+| `acme_sh_path <path>` | 사이트별 `acme.sh` 홈 또는 도메인 인증서 디렉터리 (별칭 `acme_sh`) |
+| `mascot <path-or-url>` | 사이트별 사용자 지정 마스코트 파일, 디렉터리, URL 또는 `mascot { ... }` 블록 (`mascot_pensive`, `mascot_happy`, `mascot_reject`) |
 | `allow \| verify \| block ...` | 한 줄 단축 사용자 지정 방화벽 규칙 |
 | `rule "name" { ... }` | 다중 조건 사용자 지정 방화벽 규칙 블록 |
 
@@ -206,12 +212,12 @@ minecraft {
 ```
 
 최상위 JSON 키(`DisallowUnknownFields` 적용):
-- `sites`: `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}` 배열. 여기서 `waf`는 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`를 담습니다.
+- `sites`: `{domain, upstreams, routes, headers, protect, mascot, waf, cert_file, key_file, acme_sh_path}` 배열. 여기서 `mascot`은 경로/URL 문자열 또는 `{default, pensive, happy, reject}`이며, `waf`는 `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`를 담습니다.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
-- `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
-- `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.
+- `bind_host`, `http_port`, `https_port`, `direct_http`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `mascot`.
+- `tls`: `{mode, auto_ssl, provider, cert_file, key_file, acme_sh_path, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.
 - `intel`: `{ip_security, ip_security_action, live_reputation, ai_ip_list, vpn_detection, refresh_interval, threat_feeds, ai_ip_feeds, vpn_feeds}`.
 - `defaults`: 공용 기본 `waf` 객체.
 

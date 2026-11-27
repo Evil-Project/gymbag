@@ -4,12 +4,16 @@ import { useData } from 'vitepress'
 
 const { lang } = useData()
 
-type LocaleKey = 'en' | 'zh' | 'ja' | 'ko' | 'es'
+type LocaleKey = 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es'
 type ServiceMode = 'http' | 'ssh' | 'minecraft' | 'all'
 type ConfigFormat = 'json' | 'gymbagfile'
 
 const activeLocale = computed<LocaleKey>(() => {
-  const code = (lang.value || 'en').slice(0, 2).toLowerCase()
+  const raw = (lang.value || 'en').toLowerCase()
+  if (raw === 'zh-tw' || raw === 'zh-hant') {
+    return 'zh-TW'
+  }
+  const code = raw.slice(0, 2)
   if (code === 'zh' || code === 'ja' || code === 'ko' || code === 'es') {
     return code
   }
@@ -147,6 +151,49 @@ const copyByLocale: Record<
     step2Start: '# 2. 启动',
     generatedFileJson: '生成的 gymbag.json',
     generatedFileCaddy: '生成的 Gymbagfile'
+  },
+  'zh-TW': {
+    eyebrow: '兩行指令快速啟動',
+    title: '指令與設定預覽',
+    copyBtn: '複製兩行指令',
+    copiedBtn: '已複製',
+    services: '保護服務',
+    svcHttp: 'HTTP / HTTPS 網站',
+    svcSsh: 'SSH 伺服器',
+    svcMc: 'Minecraft 伺服器',
+    svcAll: '全合一（HTTP + SSH + MC）',
+    format: '設定檔格式',
+    fmtJson: 'gymbag.json（預設）',
+    fmtGymbagfile: 'Gymbagfile（Caddy 語法）',
+    domain: '網域名稱',
+    upstream: '上游位址',
+    sshPort: 'SSH 監聽連接埠',
+    mcProps: 'server.properties 路徑',
+    mcPort: 'Minecraft 監聽連接埠',
+    verifyUrl: '驗證頁面 URL（選填）',
+    verifyUrlPlaceholder: '留空則自動使用伺服器 IP + IP 憑證',
+    verifyPort: '驗證頁面連接埠',
+    verifyLevel: '驗證等級',
+    verify3: '3 — 可疑流量與 AI（預設）',
+    verify2: '2 — 僅 AI 爬蟲',
+    verify1: '1 — 僅可疑流量',
+    verify0: '0 — 一律驗證',
+    verifyOff: 'off — 關閉驗證',
+    service: '系統服務',
+    serviceNone: '不註冊（直接執行）',
+    serviceAuto: 'auto（自動偵測）',
+    serviceSystemd: 'systemd (Linux)',
+    serviceLaunchd: 'launchd (macOS)',
+    serviceOpenrc: 'OpenRC (Alpine / Gentoo)',
+    serviceSupervisor: 'Supervisor',
+    sslProvider: 'SSL 憑證簽發商',
+    acmeEmail: 'ACME 電子信箱',
+    runCommands: '執行這兩行指令',
+    step1Gen: '# 1. 產生設定檔',
+    step1GenSvc: '# 1. 產生設定檔並註冊服務',
+    step2Start: '# 2. 啟動',
+    generatedFileJson: '產生的 gymbag.json',
+    generatedFileCaddy: '產生的 Gymbagfile'
   },
   ja: {
     eyebrow: '2コマンド クイックスタート',

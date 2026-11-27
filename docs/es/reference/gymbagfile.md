@@ -59,7 +59,10 @@ Un bloque opcional `{ ... }` al principio configura TLS global, ACME, red, feeds
 | `eab <kid> <hmac>` | Credenciales External Account Binding (o `eab_kid` / `eab_hmac_key`) | — |
 | `account_key` | Ruta PEM a clave de cuenta ACME ECDSA o RSA existente | `<cert_dir>/acme-account.pem` |
 | `ssl_key` | Ruta a clave privada existente para CSRs ACME | Autogenerada |
-| `tls` | `auto`, `acme`, `local`, `selfsigned` o `<cert.pem> <key.pem>` | `auto` |
+| `tls` | `auto`, `acme`, `local`, `selfsigned`, `file`, `off`, `acme.sh <path>` o `<cert.pem> <key.pem>` | `auto` |
+| `auto_ssl` | Activar o desactivar el aprovisionamiento automático de SSL (`on`/`off`; también acepta `auto_https on\|off\|disable_redirects`) | `on` |
+| `acme_sh_path` | Ruta al directorio principal de `acme.sh` (`~/.acme.sh`) o al directorio de certificados del dominio (alias `acme_sh`) | — |
+| `direct_http` | Servir sitios directamente en `http_port` sin redirección a HTTPS (también acepta `allow_http` / `http_only`) | `off` (`on` cuando TLS está desactivado) |
 | `key_password` | Frase de paso para claves privadas PEM cifradas | — |
 | `cert_dir` | Directorio para certificados, CA local, secreto, caché de inteligencia y caché de reglas | `certs` |
 | `renew_interval` | Intervalo de comprobación de renovación de certificados (segundos o duración como `12h`) | `43200` (`12h`) |
@@ -75,6 +78,7 @@ Un bloque opcional `{ ... }` al principio configura TLS global, ACME, red, feeds
 | `redis` / `redis_url` | URL de conexión Redis (`redis://` o `rediss://`) | almacén en memoria |
 | `secret` | Secreto HMAC para cookies `waf_clearance` | `<cert_dir>/secret` |
 | `trusted_proxies` | IPs/CIDRs de proxies intermedios de confianza para `X-Forwarded-For` | — |
+| `mascot` | Archivo de imagen, directorio, URL `http(s)://` o bloque `mascot { default / pensive / happy / reject }` personalizado (también acepta `mascot_pensive`, `mascot_happy`, `mascot_reject`) | Predeterminada integrada |
 | `ip_security` | Activar feeds CIDR de inteligencia de amenazas (`on`/`off`) | `on` |
 | `ip_security_action` | Acción ante coincidencia de amenazas (`verify` o `block`) | `verify` |
 | `ip_reputation` | Activar consultas en vivo a Shodan InternetDB y StopForumSpam (y APIs VPN en vivo si `vpn_detection` está activo) | `on` |
@@ -132,7 +136,9 @@ app.example.com, www.example.com {
 | `ai_bots <patterns...>` | Subcadenas adicionales de User-Agent tratadas como rastreadores de IA |
 | `suspicious_uas <patterns...>` | Subcadenas adicionales de User-Agent tratadas como sospechosas |
 | `suspicious_paths <prefixes...>` | Prefijos adicionales de path tratados como sondeos sospechosos |
-| `tls <cert> <key>` | Rutas de certificado SNI y clave privada por sitio |
+| `tls <cert> <key>` | Rutas de certificado SNI y clave privada por sitio (o `tls acme.sh <path>`) |
+| `acme_sh_path <path>` | Directorio principal de `acme.sh` o directorio de certificados del dominio por sitio (alias `acme_sh`) |
+| `mascot <path-or-url>` | Archivo, directorio, URL o bloque `mascot { ... }` de mascota personalizada por sitio (`mascot_pensive`, `mascot_happy`, `mascot_reject`) |
 | `allow \| verify \| block ...` | Regla de firewall personalizada abreviada |
 | `rule "name" { ... }` | Bloque de regla de firewall multicondición |
 
@@ -206,12 +212,12 @@ Las directivas temporales (`clearance_ttl` / `verify_timeout`, `challenge_ttl`, 
 ```
 
 Claves JSON de nivel superior (se aplica `DisallowUnknownFields`):
-- `sites`: array de `{domain, upstreams, routes, headers, protect, waf, cert_file, key_file}`, donde `waf` contiene `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`.
+- `sites`: array de `{domain, upstreams, routes, headers, protect, mascot, waf, cert_file, key_file, acme_sh_path}`, donde `mascot` es una cadena de ruta/URL o `{default, pensive, happy, reject}`, y `waf` contiene `{verify_level, difficulty, challenge_ttl, clearance_ttl, cookie_name, cookie_secure, rate_limit, rate_window, default_rules, rules, remote_rules, rule_sources, custom_ai_bots, custom_suspicious_uas, custom_suspicious_paths}`.
 - `ssh`: `{enabled, port, upstream, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `minecraft`: `{enabled, port, upstream, server_properties, server_jar, java_path, jvm_args, server_args, work_dir, auto_restart, protect, verify_level, difficulty, challenge_ttl, clearance_ttl, rate_limit, rate_window, verify_url, verify_port, rules}`.
 - `verify`: `{url, port, cert_file, key_file}`.
-- `bind_host`, `http_port`, `https_port`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`.
-- `tls`: `{mode, provider, cert_file, key_file, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.
+- `bind_host`, `http_port`, `https_port`, `direct_http`, `admin_addr`, `remote_rules_refresh`, `rules_watch_interval`, `redis_url`, `secret`, `trusted_proxies`, `mascot`.
+- `tls`: `{mode, auto_ssl, provider, cert_file, key_file, acme_sh_path, key_password, account_key_file, eab_kid, eab_hmac_key, auto_hosts, cert_dir, acme_email, acme_directory, renew_interval, renew_within_days, hsts}`.
 - `intel`: `{ip_security, ip_security_action, live_reputation, ai_ip_list, vpn_detection, refresh_interval, threat_feeds, ai_ip_feeds, vpn_feeds}`.
 - `defaults`: objeto `waf` base compartido.
 
