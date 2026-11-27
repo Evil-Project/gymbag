@@ -125,12 +125,12 @@ func (g *GatewayHandler) ServeRouted(
 	if len(path) >= 2 && path[0] == '/' && path[1] == '.' {
 		// 1. ACME HTTP-01 challenge endpoint
 		if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
-			if token == "" || strings.Contains(token, "/") {
-				w.WriteHeader(http.StatusNotFound)
-				return
+			if token != "" && !strings.Contains(token, "/") && g.acmeBoard != nil {
+				if _, found := g.acmeBoard.Lookup(token); found {
+					WriteACMEChallenge(w, r, g.acmeBoard, token)
+					return
+				}
 			}
-			WriteACMEChallenge(w, r, g.acmeBoard, token)
-			return
 		}
 
 		// 2. WAF internal & RESTful endpoints (/.waf/*)
