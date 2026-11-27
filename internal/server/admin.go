@@ -76,6 +76,8 @@ type SitePatchPayload struct {
 	RuleSources  *[]config.RuleSource      `json:"rule_sources,omitempty"`
 	CertFile     *string                   `json:"cert_file,omitempty"`
 	KeyFile      *string                   `json:"key_file,omitempty"`
+	Mascot       *config.MascotConfig      `json:"mascot,omitempty"`
+	ClearMascot  bool                      `json:"clear_mascot,omitempty"`
 }
 
 // NewAdminHandler returns a Caddy-like RESTful management API handler rooted at /api/v1.
@@ -628,6 +630,11 @@ func handleAdminSiteItem(w http.ResponseWriter, r *http.Request, ctrl ConfigCont
 		}
 		if patch.KeyFile != nil {
 			target.KeyFile = *patch.KeyFile
+		}
+		if patch.ClearMascot {
+			target.Mascot = nil
+		} else if patch.Mascot != nil {
+			target.Mascot = patch.Mascot.Clone()
 		}
 		if err := target.Validate(); err != nil {
 			writeAdminError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())

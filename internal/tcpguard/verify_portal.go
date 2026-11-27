@@ -34,6 +34,41 @@ type VerifyPortal struct {
 
 	mu        sync.RWMutex
 	onCleared func(service, clientIP string)
+	mascot    waf.MascotSources
+	csp       string
+	assets    *waf.AssetStore
+}
+
+// SetMascot updates the custom mascot image URLs and asset store used by the verification portal.
+func (p *VerifyPortal) SetMascot(sources waf.MascotSources, assets *waf.AssetStore) {
+	def := waf.DefaultMascotSources()
+	if strings.TrimSpace(sources.PensiveURL) == "" {
+		sources.PensiveURL = def.PensiveURL
+	}
+	if strings.TrimSpace(sources.HappyURL) == "" {
+		sources.HappyURL = def.HappyURL
+	}
+	if strings.TrimSpace(sources.RejectURL) == "" {
+		sources.RejectURL = def.RejectURL
+	}
+	p.mu.Lock()
+	p.mascot = sources
+	p.csp = waf.BuildPageCSP(sources)
+	p.assets = assets
+	p.mu.Unlock()
+}
+
+func (p *VerifyPortal) getMascot() (waf.MascotSources, string, *waf.AssetStore) {
+	p.mu.RLock()
+	m := p.mascot
+	csp := p.csp
+	assets := p.assets
+	p.mu.RUnlock()
+	if m.PensiveURL == "" && m.HappyURL == "" && m.RejectURL == "" {
+		m = waf.DefaultMascotSources()
+		csp = waf.BuildPageCSP(m)
+	}
+	return m, csp, assets
 }
 
 // SetOnCleared registers a callback invoked after a client IP passes verification
@@ -58,12 +93,15 @@ func NewVerifyPortal(
 	acmeBoard *tlsmanager.HTTP01Board,
 	trustedProxies []netip.Prefix,
 ) *VerifyPortal {
+	def := waf.DefaultMascotSources()
 	return &VerifyPortal{
 		gateStore:      gateStore,
 		challenges:     challenges,
 		acmeBoard:      acmeBoard,
 		trustedProxies: trustedProxies,
 		solverJS:       waf.SolverJS(),
+		mascot:         def,
+		csp:            waf.BuildPageCSP(def),
 	}
 }
 
@@ -103,11 +141,11 @@ func (p *VerifyPortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if name, ok := strings.CutPrefix(path, "/.waf/assets/"); ok {
-		servePortalAsset(w, r, name)
+		p.servePortalAsset(w, r, name)
 		return
 	}
 	if name, ok := strings.CutPrefix(path, "/.waf/v1/assets/"); ok {
-		servePortalAsset(w, r, name)
+		p.servePortalAsset(w, r, name)
 		return
 	}
 
@@ -121,12 +159,13 @@ func (p *VerifyPortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mascot, csp, _ := p.getMascot()
 	if path == "/" {
-		writePortalStatusHTML(w, http.StatusOK, "Gymbag Verification Portal", "Protected by Gymbag. Connect via SSH or Minecraft to receive your verification link.", waf.HappyAsset)
+		writePortalStatusHTML(w, http.StatusOK, "Gymbag Verification Portal", "Protected by Gymbag. Connect via SSH or Minecraft to receive your verification link.", mascot.HappyURL, csp)
 		return
 	}
 
-	writePortalStatusHTML(w, http.StatusNotFound, "Not found", "Invalid verification link. Reconnect to obtain a fresh link.", waf.RejectAsset)
+	writePortalStatusHTML(w, http.StatusNotFound, "Not found", "Invalid verification link. Reconnect to obtain a fresh link.", mascot.RejectURL, csp)
 }
 
 func extractTicketToken(path string) (string, bool) {
@@ -148,8 +187,9 @@ func (p *VerifyPortal) handleVerifyPage(w http.ResponseWriter, r *http.Request, 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	mascot, csp, _ := p.getMascot()
 	if p.gateStore == nil || p.challenges == nil {
-		writePortalStatusHTML(w, http.StatusServiceUnavailable, "Service unavailable", "Verification store is not configured.", waf.RejectAsset)
+		writePortalStatusHTML(w, http.StatusServiceUnavailable, "Service unavailable", "Verification store is not configured.", mascot.RejectURL, csp)
 		return
 	}
 
@@ -164,19 +204,22 @@ func (p *VerifyPortal) handleVerifyPage(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if err != nil || ticket == nil {
-		writePortalStatusHTML(w, http.StatusGone, "Link expired or invalid", "This verification link has expired or was already used. Reconnect to obtain a new verification link.", waf.RejectAsset)
+		writePortalStatusHTML(w, http.StatusGone, "Link expired or invalid", "This verification link has expired or was already used. Reconnect to obtain a new verification link.", mascot.RejectURL, csp)
 		return
 	}
 
 	browserIP := p.resolveClientIP(r)
 	chalID, diff, err := p.challenges.Issue(r.Context(), "gate:"+ticket.Service, browserIP, ticket.Difficulty, 300)
 	if err != nil {
-		writePortalStatusHTML(w, http.StatusInternalServerError, "Unable to issue challenge", "Please reconnect and try again.", waf.RejectAsset)
+		writePortalStatusHTML(w, http.StatusInternalServerError, "Unable to issue challenge", "Please reconnect and try again.", mascot.RejectURL, csp)
 		return
 	}
 
 	for k, v := range portalSecurityHeaders {
 		w.Header().Set(k, v)
+	}
+	if csp != "" {
+		w.Header().Set("Content-Security-Policy", csp)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -184,7 +227,7 @@ func (p *VerifyPortal) handleVerifyPage(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	_, _ = io.WriteString(w, p.renderVerifyHTML(token, chalID, diff, ticket))
+	_, _ = io.WriteString(w, p.renderVerifyHTML(token, chalID, diff, ticket, mascot))
 }
 
 func (p *VerifyPortal) handleGateVerify(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +362,7 @@ func isTrustedPrefixIP(ipStr string, trusted []netip.Prefix) bool {
 	return false
 }
 
-func (p *VerifyPortal) renderVerifyHTML(token, challengeID string, difficulty int, ticket *store.GateTicket) string {
+func (p *VerifyPortal) renderVerifyHTML(token, challengeID string, difficulty int, ticket *store.GateTicket, mascot waf.MascotSources) string {
 	serviceLabel := "SSH"
 	reconnectHint := "You may now close this tab and reconnect via SSH."
 	if ticket.Service == "minecraft" {
@@ -339,8 +382,8 @@ func (p *VerifyPortal) renderVerifyHTML(token, challengeID string, difficulty in
 		"service":        serviceLabel,
 		"reconnect_hint": reconnectHint,
 		"images": map[string]string{
-			"pass": "/.waf/assets/" + waf.HappyAsset,
-			"fail": "/.waf/assets/" + waf.RejectAsset,
+			"pass": mascot.HappyURL,
+			"fail": mascot.RejectURL,
 		},
 	}
 	specRaw, _ := json.Marshal(specObj)
@@ -410,7 +453,7 @@ func (p *VerifyPortal) renderVerifyHTML(token, challengeID string, difficulty in
 <body>
   <main>
     <h1 id="title">%s Verification</h1>
-    <img id="portrait" class="mascot" alt="Gymbag verification" src="/.waf/assets/%s">
+    <img id="portrait" class="mascot" alt="Gymbag verification" src="%s">
     <section class="status-card" aria-live="polite">
       <div class="status-row">
         <span id="spinner" class="spinner" aria-hidden="true"></span>
@@ -478,7 +521,7 @@ if (typeof solveGymbag === "function") {
 </html>`,
 		html.EscapeString(serviceLabel),
 		html.EscapeString(serviceLabel),
-		waf.PensiveAsset,
+		html.EscapeString(mascot.PensiveURL),
 		html.EscapeString(targetLine),
 		difficulty,
 		escapedSpec,
@@ -486,9 +529,15 @@ if (typeof solveGymbag === "function") {
 	)
 }
 
-func writePortalStatusHTML(w http.ResponseWriter, status int, title, detail, asset string) {
+func writePortalStatusHTML(w http.ResponseWriter, status int, title, detail, imgURL, csp string) {
+	if strings.TrimSpace(imgURL) == "" {
+		imgURL = "/.waf/assets/" + waf.RejectAsset
+	}
 	for k, v := range portalSecurityHeaders {
 		w.Header().Set(k, v)
+	}
+	if csp != "" {
+		w.Header().Set("Content-Security-Policy", csp)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -503,26 +552,40 @@ img{width:min(220px,60vw);margin:1rem 0}
 .card{max-width:28rem;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.1rem 1.25rem}
 p{margin:0;color:var(--muted)}
 </style></head>
-<body><h1>%s</h1><img alt="Gymbag" src="/.waf/assets/%s"><div class="card"><p>%s</p></div></body></html>`,
+<body><h1>%s</h1><img alt="Gymbag" src="%s"><div class="card"><p>%s</p></div></body></html>`,
 		html.EscapeString(title),
 		html.EscapeString(title),
-		asset,
+		html.EscapeString(imgURL),
 		html.EscapeString(detail),
 	))
 }
 
-func servePortalAsset(w http.ResponseWriter, r *http.Request, name string) {
+func (p *VerifyPortal) servePortalAsset(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	data, etag, ok := waf.AssetData(name)
+	_, _, assets := p.getMascot()
+	var (
+		data        []byte
+		contentType string
+		etag        string
+		ok          bool
+	)
+	if assets != nil {
+		data, contentType, etag, ok = assets.Lookup(name)
+	} else {
+		data, contentType, etag, ok = waf.AssetDataWithType(name)
+	}
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/png")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("ETag", etag)
 	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {

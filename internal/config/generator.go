@@ -82,6 +82,7 @@ type GenerateOptions struct {
 	RedisURL           string
 	AutoHosts          *bool
 	IPSecurityAction   string
+	Mascot             *MascotConfig
 	Format             string // "gymbagfile" (default) or "json"
 	IncludeComments    bool
 }
@@ -569,6 +570,9 @@ func GenerateConfig(opts GenerateOptions) (Config, error) {
 	}
 	if act := strings.TrimSpace(opts.IPSecurityAction); act != "" {
 		cfg.Intel.IPSecurityAction = act
+	}
+	if !opts.Mascot.IsEmpty() {
+		cfg.Mascot = opts.Mascot.Clone()
 	}
 	if bind := strings.TrimSpace(opts.BindHost); bind != "" {
 		cfg.BindHost = bind

@@ -18,6 +18,7 @@ import (
 	"gymbag/internal/localpki"
 	"gymbag/internal/mcserver"
 	"gymbag/internal/server"
+	"gymbag/internal/waf"
 )
 
 // Version is the build version of the gymbag binary (overridable via -ldflags).
@@ -82,6 +83,10 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		keyFile            string
 		directHTTP         bool
 		httpOnly           bool
+		mascotDefault      string
+		mascotPensive      string
+		mascotHappy        string
+		mascotReject       string
 		noProtect          bool
 		adminAddr          string
 		httpPort           int
@@ -114,6 +119,10 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	fs.BoolVar(&directHTTP, "direct-http", false, "Serve websites directly over HTTP without redirecting to HTTPS")
 	fs.BoolVar(&directHTTP, "allow-http", false, "Alias for --direct-http")
 	fs.BoolVar(&httpOnly, "http-only", false, "Disable HTTPS/Auto-SSL and serve websites directly over HTTP")
+	fs.StringVar(&mascotDefault, "mascot", "", "Custom mascot image file, directory path, or http(s) URL")
+	fs.StringVar(&mascotPensive, "mascot-pensive", "", "Custom mascot image path or http(s) URL for the verifying state")
+	fs.StringVar(&mascotHappy, "mascot-happy", "", "Custom mascot image path or http(s) URL for the verified/pass state")
+	fs.StringVar(&mascotReject, "mascot-reject", "", "Custom mascot image path or http(s) URL for the blocked/429 state")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification for CLI-configured sites")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address (e.g. 127.0.0.1:2019 or off)")
 	fs.IntVar(&httpPort, "http-port", 0, "HTTP redirect/ACME port (default 80)")
@@ -176,6 +185,10 @@ func runServerCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		KeyFile:            keyFile,
 		DirectHTTP:         directHTTPOpt,
 		HTTPOnly:           httpOnly,
+		Mascot:             mascotDefault,
+		MascotPensive:      mascotPensive,
+		MascotHappy:        mascotHappy,
+		MascotReject:       mascotReject,
 		MCConsole:          mcConsoleOpt,
 	}
 
@@ -206,6 +219,10 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		keyFile            string
 		directHTTP         bool
 		httpOnly           bool
+		mascotDefault      string
+		mascotPensive      string
+		mascotHappy        string
+		mascotReject       string
 		noProtect          bool
 		adminAddr          string
 		httpPort           int
@@ -230,6 +247,10 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&directHTTP, "direct-http", false, "Serve websites directly over HTTP without redirecting to HTTPS")
 	fs.BoolVar(&directHTTP, "allow-http", false, "Alias for --direct-http")
 	fs.BoolVar(&httpOnly, "http-only", false, "Disable HTTPS/Auto-SSL and serve websites directly over HTTP")
+	fs.StringVar(&mascotDefault, "mascot", "", "Custom mascot image file, directory path, or http(s) URL")
+	fs.StringVar(&mascotPensive, "mascot-pensive", "", "Custom mascot image path or http(s) URL for the verifying state")
+	fs.StringVar(&mascotHappy, "mascot-happy", "", "Custom mascot image path or http(s) URL for the verified/pass state")
+	fs.StringVar(&mascotReject, "mascot-reject", "", "Custom mascot image path or http(s) URL for the blocked/429 state")
 	fs.BoolVar(&noProtect, "no-protect", false, "Disable WAF verification")
 	fs.StringVar(&adminAddr, "admin", "", "Local REST Admin API listen address")
 	fs.IntVar(&httpPort, "http-port", 0, "HTTP port (default 80)")
@@ -278,6 +299,10 @@ func runReverseProxyCmd(args []string, stdout, stderr io.Writer) int {
 		KeyFile:            keyFile,
 		DirectHTTP:         directHTTPOpt,
 		HTTPOnly:           httpOnly,
+		Mascot:             mascotDefault,
+		MascotPensive:      mascotPensive,
+		MascotHappy:        mascotHappy,
+		MascotReject:       mascotReject,
 	}
 	cfg, err := loadConfigWithCLIFlags(loadOpts, sslProvider)
 	if err != nil {
@@ -315,6 +340,20 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		if _, _, _, _, err := config.LoadRuleSourceFromDisk(src.Source, cfg.BaseDir); err != nil {
 			_, _ = fmt.Fprintf(stderr, "invalid rule source %q: %v\n", src.Source, err)
 			return 1
+		}
+	}
+	if !cfg.Mascot.IsEmpty() {
+		if _, _, err := waf.ResolveMascot(cfg.Mascot, nil, cfg.BaseDir); err != nil {
+			_, _ = fmt.Fprintf(stderr, "invalid global mascot: %v\n", err)
+			return 1
+		}
+	}
+	for _, s := range cfg.Sites {
+		if !s.Mascot.IsEmpty() {
+			if _, _, err := waf.ResolveMascot(s.Mascot, cfg.Mascot, cfg.BaseDir); err != nil {
+				_, _ = fmt.Fprintf(stderr, "invalid mascot for site %s: %v\n", s.Domain, err)
+				return 1
+			}
 		}
 	}
 	globalDefRules := "on"
@@ -652,6 +691,10 @@ Flags:
       --key-file <path>           Custom TLS private key PEM file path
       --direct-http               Serve websites directly over HTTP without HTTPS redirects
       --http-only                 Disable HTTPS/Auto-SSL and serve websites directly over HTTP
+      --mascot <path|url>         Custom mascot image file, directory, or http(s) URL
+      --mascot-pensive <path|url> Custom mascot image for checking/verifying state
+      --mascot-happy <path|url>   Custom mascot image for pass/verified state
+      --mascot-reject <path|url>  Custom mascot image for blocked/429 state
       --no-protect           Disable WAF verification for CLI-configured websites
       --admin <addr>         Enable local REST Admin API (e.g. 127.0.0.1:2019)
       --http-port <port>     HTTP redirect & ACME HTTP-01 port (default 80)

@@ -529,18 +529,145 @@ func (w *SiteWAFConfig) Validate() error {
 	return nil
 }
 
+// MascotConfig customizes mascot images shown on WAF challenge, block, rate-limit, and verification pages.
+// Each field accepts either a local file/directory path or an http(s):// image URL.
+type MascotConfig struct {
+	Default string `json:"default,omitempty"`
+	Pensive string `json:"pensive,omitempty"`
+	Happy   string `json:"happy,omitempty"`
+	Reject  string `json:"reject,omitempty"`
+}
+
+// IsEmpty reports whether m is nil or has no configured mascot paths or URLs.
+func (m *MascotConfig) IsEmpty() bool {
+	return m == nil || (strings.TrimSpace(m.Default) == "" &&
+		strings.TrimSpace(m.Pensive) == "" &&
+		strings.TrimSpace(m.Happy) == "" &&
+		strings.TrimSpace(m.Reject) == "")
+}
+
+// Clone returns a deep copy of MascotConfig, or nil when m is nil.
+func (m *MascotConfig) Clone() *MascotConfig {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	return &cp
+}
+
+// UnmarshalJSON decodes a MascotConfig from either a single path/URL string or a structured object.
+func (m *MascotConfig) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var single string
+		if err := json.Unmarshal(trimmed, &single); err != nil {
+			return err
+		}
+		m.Default = strings.TrimSpace(single)
+		return nil
+	}
+	type mascotAlias struct {
+		Default  string `json:"default,omitempty"`
+		Image    string `json:"image,omitempty"`
+		URL      string `json:"url,omitempty"`
+		Pensive  string `json:"pensive,omitempty"`
+		Checking string `json:"checking,omitempty"`
+		Happy    string `json:"happy,omitempty"`
+		Pass     string `json:"pass,omitempty"`
+		Reject   string `json:"reject,omitempty"`
+		Fail     string `json:"fail,omitempty"`
+	}
+	var a mascotAlias
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return err
+	}
+	pick := func(vals ...string) string {
+		for _, v := range vals {
+			if t := strings.TrimSpace(v); t != "" {
+				return t
+			}
+		}
+		return ""
+	}
+	m.Default = pick(a.Default, a.Image, a.URL)
+	m.Pensive = pick(a.Pensive, a.Checking)
+	m.Happy = pick(a.Happy, a.Pass)
+	m.Reject = pick(a.Reject, a.Fail)
+	return nil
+}
+
+// MarshalJSON encodes a single-default MascotConfig concisely as a string, or as an object when per-state overrides exist.
+func (m MascotConfig) MarshalJSON() ([]byte, error) {
+	if m.Default != "" && m.Pensive == "" && m.Happy == "" && m.Reject == "" {
+		return json.Marshal(m.Default)
+	}
+	type rawMascot struct {
+		Default string `json:"default,omitempty"`
+		Pensive string `json:"pensive,omitempty"`
+		Happy   string `json:"happy,omitempty"`
+		Reject  string `json:"reject,omitempty"`
+	}
+	return json.Marshal(rawMascot{
+		Default: m.Default,
+		Pensive: m.Pensive,
+		Happy:   m.Happy,
+		Reject:  m.Reject,
+	})
+}
+
+// Validate trims and validates mascot image paths and remote URLs, rejecting unsafe schemes.
+func (m *MascotConfig) Validate() error {
+	if m == nil {
+		return nil
+	}
+	fields := []struct {
+		name string
+		ptr  *string
+	}{
+		{"mascot.default", &m.Default},
+		{"mascot.pensive", &m.Pensive},
+		{"mascot.happy", &m.Happy},
+		{"mascot.reject", &m.Reject},
+	}
+	for _, f := range fields {
+		v := strings.TrimSpace(*f.ptr)
+		*f.ptr = v
+		if v == "" {
+			continue
+		}
+		lower := strings.ToLower(v)
+		for _, bad := range []string{"javascript:", "data:", "vbscript:", "file:"} {
+			if strings.HasPrefix(lower, bad) {
+				return fmt.Errorf("%s uses unsupported scheme %q (use a local path or http:// / https:// URL)", f.name, strings.TrimSuffix(bad, ":"))
+			}
+		}
+		if strings.Contains(v, "://") {
+			if err := RequireHTTPURL(v, f.name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // SiteConfig describes a single downstream website hosted and optionally protected by Gymbag.
 type SiteConfig struct {
-	Domain    string             `json:"domain"`
-	Upstreams []string           `json:"upstreams,omitempty"`
-	Routes    []RouteConfig      `json:"routes,omitempty"`  // path-matched handlers evaluated before Upstreams
-	Headers   map[string]string  `json:"headers,omitempty"` // response header mutations applied to every response ("-Name" deletes)
-	Auth      *ForwardAuthConfig `json:"auth,omitempty"`    // optional forward authentication (Authelia / Caddy forward_auth)
-	Protect   bool               `json:"protect"`
-	WAF       SiteWAFConfig      `json:"waf"`
+	Domain     string             `json:"domain"`
+	Upstreams  []string           `json:"upstreams,omitempty"`
+	Routes     []RouteConfig      `json:"routes,omitempty"`  // path-matched handlers evaluated before Upstreams
+	Headers    map[string]string  `json:"headers,omitempty"` // response header mutations applied to every response ("-Name" deletes)
+	Auth       *ForwardAuthConfig `json:"auth,omitempty"`    // optional forward authentication (Authelia / Caddy forward_auth)
+	Protect    bool               `json:"protect"`
+	WAF        SiteWAFConfig      `json:"waf"`
 	CertFile   string             `json:"cert_file,omitempty"`
 	KeyFile    string             `json:"key_file,omitempty"`
 	AcmeShPath string             `json:"acme_sh_path,omitempty"`
+	Mascot     *MascotConfig      `json:"mascot,omitempty"`
 }
 
 // UnmarshalJSON initializes sensible defaults when decoding a new SiteConfig from concise JSON.
@@ -571,6 +698,7 @@ func (s SiteConfig) Clone() SiteConfig {
 	out.Headers = cloneHeaderMap(s.Headers)
 	out.Auth = s.Auth.Clone()
 	out.WAF = cloneSiteWAF(s.WAF)
+	out.Mascot = s.Mascot.Clone()
 	return out
 }
 
@@ -634,6 +762,14 @@ func (s *SiteConfig) Validate() error {
 	s.AcmeShPath = strings.TrimSpace(s.AcmeShPath)
 	if (s.CertFile == "") != (s.KeyFile == "") {
 		return fmt.Errorf("site %s must specify both cert_file and key_file or neither", s.Domain)
+	}
+	if s.Mascot != nil {
+		if err := s.Mascot.Validate(); err != nil {
+			return fmt.Errorf("site %s: %w", s.Domain, err)
+		}
+		if s.Mascot.IsEmpty() {
+			s.Mascot = nil
+		}
 	}
 	return s.WAF.Validate()
 }
@@ -707,6 +843,7 @@ type Config struct {
 	RedisURL           string             `json:"redis_url,omitempty"`
 	Secret             string             `json:"secret,omitempty"`
 	TrustedProxies     []string           `json:"trusted_proxies,omitempty"`
+	Mascot             *MascotConfig      `json:"mascot,omitempty"`
 	Defaults           SiteWAFConfig      `json:"defaults"`
 	BaseDir            string             `json:"-"`
 }
@@ -1007,6 +1144,14 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Intel.Validate(); err != nil {
 		return err
+	}
+	if c.Mascot != nil {
+		if err := c.Mascot.Validate(); err != nil {
+			return err
+		}
+		if c.Mascot.IsEmpty() {
+			c.Mascot = nil
+		}
 	}
 	if c.RemoteRulesRefresh <= 0 {
 		c.RemoteRulesRefresh = DefaultRemoteRulesRefresh

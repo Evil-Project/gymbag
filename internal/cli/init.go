@@ -96,6 +96,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		certDir            string
 		redisURL           string
 		ipSecurityAction   string
+		mascotDefault      string
+		mascotPensive      string
+		mascotHappy        string
+		mascotReject       string
 		noDefaultRules     bool
 		noAutoHosts        bool
 		force              bool
@@ -184,6 +188,10 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&certDir, "cert-dir", "", "Directory for certs, local CA, and intel cache (default certs)")
 	fs.StringVar(&redisURL, "redis", "", "Optional Redis URL for shared challenge/rate-limit state")
 	fs.StringVar(&ipSecurityAction, "ip-security-action", "", "Action for threat-intel IP hits: verify or block")
+	fs.StringVar(&mascotDefault, "mascot", "", "Custom mascot image file, directory path, or http(s) URL")
+	fs.StringVar(&mascotPensive, "mascot-pensive", "", "Custom mascot image path or http(s) URL for checking state")
+	fs.StringVar(&mascotHappy, "mascot-happy", "", "Custom mascot image path or http(s) URL for pass state")
+	fs.StringVar(&mascotReject, "mascot-reject", "", "Custom mascot image path or http(s) URL for blocked/429 state")
 	fs.BoolVar(&noDefaultRules, "no-default-rules", false, "Disable built-in baseline firewall rules (default_rules off)")
 	fs.BoolVar(&noAutoHosts, "no-auto-hosts", false, "Disable automatic /etc/hosts management for local domains")
 	fs.BoolVar(&force, "f", false, "Overwrite existing config file")
@@ -314,6 +322,15 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		f := false
 		autoSSLOpt = &f
 	}
+	var mascotOpt *config.MascotConfig
+	if mascotDefault != "" || mascotPensive != "" || mascotHappy != "" || mascotReject != "" {
+		mascotOpt = &config.MascotConfig{
+			Default: mascotDefault,
+			Pensive: mascotPensive,
+			Happy:   mascotHappy,
+			Reject:  mascotReject,
+		}
+	}
 
 	if (autheliaURI != "" || autheliaPortal != "") && strings.TrimSpace(autheliaURL) == "" {
 		_, _ = fmt.Fprintln(stderr, "ERROR gymbag init: --authelia-uri and --authelia-portal require --authelia <url>")
@@ -364,6 +381,7 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		RedisURL:           redisURL,
 		AutoHosts:          autoHostsOpt,
 		IPSecurityAction:   ipSecurityAction,
+		Mascot:             mascotOpt,
 		Format:             normFmt,
 		IncludeComments:    true,
 	}
@@ -387,7 +405,8 @@ func runInitCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		verifyLevel != "" || verifyTimeout != "" || len(remoteRules) > 0 || len(initRuleSources) > 0 ||
 		rulesWatchInterval != "" || noProtect || sslProvider != "" || noAutoSSL || acmeShPath != "" ||
 		certFile != "" || keyFile != "" || directHTTP || httpOnly || email != "" ||
-		httpPort != 0 || httpsPort != 0 || adminAddr != ""
+		httpPort != 0 || httpsPort != 0 || adminAddr != "" ||
+		mascotDefault != "" || mascotPensive != "" || mascotHappy != "" || mascotReject != ""
 	runWizard := interactive || (!yes && !hasConfigFlags && len(args) == 0)
 	if !interactive && !yes && !hasConfigFlags && len(args) > 0 {
 		// e.g. `gymbag init -o custom.Gymbagfile` without -y still prompts unless -y is given
@@ -1069,6 +1088,10 @@ Flags:
       --cert-dir <dir>         Certificate & intel cache directory (default certs)
       --redis <url>            Optional Redis URL
       --ip-security-action <a> Action for threat-intel IP hits: verify or block
+      --mascot <path|url>      Custom mascot image file, directory, or http(s) URL
+      --mascot-pensive <p|u>   Custom mascot image for checking/verifying state
+      --mascot-happy <p|u>     Custom mascot image for pass/verified state
+      --mascot-reject <p|u>    Custom mascot image for blocked/429 state
       --no-default-rules       Disable built-in baseline firewall rules
       --no-auto-hosts          Disable automatic /etc/hosts entries for local domains
   -f, --force                  Overwrite existing config file

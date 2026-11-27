@@ -544,6 +544,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		CertFile   string             `json:"cert_file,omitempty"`
 		KeyFile    string             `json:"key_file,omitempty"`
 		AcmeShPath string             `json:"acme_sh_path,omitempty"`
+		Mascot     *MascotConfig      `json:"mascot,omitempty"`
 	}
 
 	type conciseTCP struct {
@@ -594,6 +595,7 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		RedisURL           string             `json:"redis_url,omitempty"`
 		Secret             string             `json:"secret,omitempty"`
 		TrustedProxies     []string           `json:"trusted_proxies,omitempty"`
+		Mascot             *MascotConfig      `json:"mascot,omitempty"`
 		Defaults           *conciseWAF        `json:"defaults,omitempty"`
 	}
 
@@ -604,6 +606,9 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 		RedisURL:       c.RedisURL,
 		Secret:         c.Secret,
 		TrustedProxies: c.TrustedProxies,
+	}
+	if !c.Mascot.IsEmpty() {
+		out.Mascot = c.Mascot.Clone()
 	}
 
 	if c.BindHost != "" && c.BindHost != DefaultBindHostForConfig(c) {
@@ -632,6 +637,9 @@ func MarshalConciseJSONConfig(c Config) ([]byte, error) {
 			CertFile:   s.CertFile,
 			KeyFile:    s.KeyFile,
 			AcmeShPath: s.AcmeShPath,
+		}
+		if !s.Mascot.IsEmpty() {
+			cs.Mascot = s.Mascot.Clone()
 		}
 		if !s.Protect {
 			f := false

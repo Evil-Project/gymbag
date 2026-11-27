@@ -71,6 +71,7 @@ type GatewayHandler struct {
 	acmeBoard      ACMEChallengeLookup
 	trustedProxies []netip.Prefix
 	auth           *ForwardAuthenticator
+	assets         *waf.AssetStore
 }
 
 // NewGatewayHandler constructs the core HTTPS GatewayHandler.
@@ -95,6 +96,11 @@ func NewGatewayHandler(
 // SetAuthenticator configures the optional forward-authentication verifier used by ServeRouted.
 func (g *GatewayHandler) SetAuthenticator(auth *ForwardAuthenticator) {
 	g.auth = auth
+}
+
+// SetAssets configures the custom mascot asset store served on /.waf/assets/*.
+func (g *GatewayHandler) SetAssets(assets *waf.AssetStore) {
+	g.assets = assets
 }
 
 func (g *GatewayHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -348,11 +354,11 @@ func serveStaticRoute(w http.ResponseWriter, r *http.Request, rc config.RouteCon
 func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request, route *proxy.SiteRoute, path, hostName, clientIP string) {
 	// Static mascot assets
 	if name, ok := strings.CutPrefix(path, "/.waf/assets/"); ok {
-		serveAsset(w, r, name)
+		g.serveAsset(w, r, name)
 		return
 	}
 	if name, ok := strings.CutPrefix(path, "/.waf/v1/assets/"); ok {
-		serveAsset(w, r, name)
+		g.serveAsset(w, r, name)
 		return
 	}
 
@@ -368,18 +374,31 @@ func (g *GatewayHandler) serveWAFEndpoint(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func serveAsset(w http.ResponseWriter, r *http.Request, name string) {
+func (g *GatewayHandler) serveAsset(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	data, etag, ok := waf.AssetData(name)
+	var (
+		data        []byte
+		contentType string
+		etag        string
+		ok          bool
+	)
+	if g.assets != nil {
+		data, contentType, etag, ok = g.assets.Lookup(name)
+	} else {
+		data, contentType, etag, ok = waf.AssetDataWithType(name)
+	}
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/png")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("ETag", etag)
 	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {

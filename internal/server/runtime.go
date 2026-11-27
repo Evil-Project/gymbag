@@ -76,6 +76,9 @@ type Runtime struct {
 	Clearance         *waf.ClearanceTokens
 	Challenges        *waf.ChallengeService
 	Pages             *waf.Renderer
+	Assets            *waf.AssetStore
+	defaultRenderer   atomic.Pointer[waf.Renderer]
+	siteRenderers     atomic.Pointer[map[string]*waf.Renderer]
 	Router            *proxy.SiteRouter
 	HTTPProxy         *proxy.HTTPProxy
 	WSProxy           *proxy.WebSocketProxy
@@ -214,6 +217,45 @@ func ResolveSecret(cfg config.Config, logger *slog.Logger) ([]byte, error) {
 	return []byte(generated), nil
 }
 
+func buildMascotState(cfg config.Config) (defaultR *waf.Renderer, siteR map[string]*waf.Renderer, customAssets map[string]waf.AssetEntry, globalSources waf.MascotSources, err error) {
+	customAssets = make(map[string]waf.AssetEntry)
+	globalSources, globalEntries, err := waf.ResolveMascot(cfg.Mascot, nil, cfg.BaseDir)
+	if err != nil {
+		return nil, nil, nil, waf.MascotSources{}, err
+	}
+	for k, v := range globalEntries {
+		customAssets[k] = v
+	}
+	defaultR = waf.NewRendererWithMascot("", globalSources)
+	siteR = make(map[string]*waf.Renderer)
+	for _, s := range cfg.Sites {
+		if s.Mascot.IsEmpty() {
+			continue
+		}
+		siteSources, siteEntries, sErr := waf.ResolveMascot(s.Mascot, cfg.Mascot, cfg.BaseDir)
+		if sErr != nil {
+			return nil, nil, nil, waf.MascotSources{}, sErr
+		}
+		for k, v := range siteEntries {
+			customAssets[k] = v
+		}
+		siteR[s.Domain] = waf.NewRendererWithMascot("", siteSources)
+	}
+	return defaultR, siteR, customAssets, globalSources, nil
+}
+
+func (rt *Runtime) rendererForSite(domain string) *waf.Renderer {
+	if srMap := rt.siteRenderers.Load(); srMap != nil && domain != "" {
+		if r := (*srMap)[domain]; r != nil {
+			return r
+		}
+	}
+	if def := rt.defaultRenderer.Load(); def != nil {
+		return def
+	}
+	return rt.Pages
+}
+
 // BuildRuntime wires all application components from cfg and optional test overrides.
 func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (*Runtime, error) {
 	if err := cfg.Validate(); err != nil {
@@ -281,7 +323,13 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 
 	clearance := waf.NewClearanceTokens(secret, cfg.Defaults.ClearanceTTL)
 	challenges := waf.NewChallengeService(st, cfg.Defaults.Difficulty, cfg.Defaults.ChallengeTTL)
-	pages := waf.NewRenderer("")
+	pages, siteRMap, customAssets, globalMascot, err := buildMascotState(cfg)
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	assetStore := waf.NewAssetStore()
+	assetStore.Replace(customAssets)
 	router := proxy.NewSiteRouterWithProviders(cfg.Sites, st, clearance, intelMgr, cfg.Intel.IPSecurityAction, remoteMgr)
 	httpProxy := proxy.NewHTTPProxy(cfg.HTTPSPort, opts.HTTPTransport, logger)
 	httpProxy.SetHTTPPort(cfg.HTTPPort)
@@ -362,6 +410,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		verifyProviderChain = newDynamicProviderChain(tlsmanager.BuildVerifyProviders(cfg, verifyTargets, board, acmeClient))
 		verifyCertMgr = tlsmanager.NewManager([]tlsmanager.Provider{verifyProviderChain})
 		verifyPortal = tcpguard.NewVerifyPortal(gateStore, challenges, board, trustedNets)
+		verifyPortal.SetMascot(globalMascot, assetStore)
 
 		if cfg.SSHEnabled() {
 			sshProxy = tcpguard.NewSSHProxy(*cfg.SSH, cfg.Verify, cfg.Defaults.Rules, cfg.Intel.IPSecurityAction, st, gateStore, intelMgr, detectedPublicIP, logger)
@@ -419,6 +468,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		Clearance:           clearance,
 		Challenges:          challenges,
 		Pages:               pages,
+		Assets:              assetStore,
 		Router:              router,
 		HTTPProxy:           httpProxy,
 		WSProxy:             wsProxy,
@@ -432,6 +482,8 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 		MinecraftServer:     mcServer,
 		Hosts:               hostsMgr,
 	}
+	rt.defaultRenderer.Store(pages)
+	rt.siteRenderers.Store(&siteRMap)
 	if cfg.HTTPSEnabled() && cfg.TLS.HSTS != nil {
 		rt.HSTS.Store(*cfg.TLS.HSTS)
 	}
@@ -439,6 +491,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 	remoteMgr.SetOnUpdate(rt.reloadRouter)
 
 	gateway := NewGatewayHandler(challenges, clearance, httpProxy, wsProxy, board, trustedNets)
+	gateway.SetAssets(assetStore)
 	authClient := opts.AuthHTTPClient
 	if authClient == nil && opts.HTTPTransport != nil {
 		authClient = &http.Client{Transport: opts.HTTPTransport}
@@ -457,6 +510,11 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 
 		route, hostName, ok := router.ResolveWithHost(r.Host)
 		if !ok {
+			if rt.VerifyPortal != nil && rt.verifySharesHTTPS() &&
+				(strings.HasPrefix(r.URL.Path, "/.waf/assets/") || strings.HasPrefix(r.URL.Path, "/.waf/v1/assets/")) {
+				rt.VerifyPortal.ServeHTTP(w, r)
+				return
+			}
 			hdr.Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write(invalidHostBytes)
@@ -492,9 +550,10 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 			return
 		}
 
+		renderer := rt.rendererForSite(route.Config.Domain)
 		switch decision.Action {
 		case waf.ActionDeny:
-			pages.WriteReject(w, decision.Reason, decision.StatusCode)
+			renderer.WriteReject(w, decision.Reason, decision.StatusCode)
 			return
 		case waf.ActionChallenge:
 			chalID, diff, cErr := challenges.Issue(
@@ -508,7 +567,7 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 				http.Error(w, "failed to issue challenge", http.StatusInternalServerError)
 				return
 			}
-			pages.WriteChallenge(w, chalID, diff)
+			renderer.WriteChallenge(w, chalID, diff)
 			return
 		default:
 			gateway.ServeRouted(w, r, route, hostName, clientIP, false)
@@ -618,6 +677,10 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	if err := next.Validate(); err != nil {
 		return err
 	}
+	nextPages, nextSiteRenderers, nextCustomAssets, nextGlobalMascot, err := buildMascotState(next)
+	if err != nil {
+		return err
+	}
 	acmeClient, err := tlsmanager.BuildACMEClientFromConfig(next, rt.acmeHTTP)
 	if err != nil {
 		return err
@@ -657,7 +720,17 @@ func (rt *Runtime) ReplaceConfig(next config.Config) error {
 	rt.mu.Lock()
 	rt.cfg = next
 	rt.ACMEClient = acmeClient
+	rt.Pages = nextPages
 	rt.mu.Unlock()
+
+	if rt.Assets != nil {
+		rt.Assets.Replace(nextCustomAssets)
+	}
+	rt.defaultRenderer.Store(nextPages)
+	rt.siteRenderers.Store(&nextSiteRenderers)
+	if rt.VerifyPortal != nil {
+		rt.VerifyPortal.SetMascot(nextGlobalMascot, rt.Assets)
+	}
 
 	rt.Router.ReloadWithProviders(next.Sites, rt.Store, rt.Clearance, rt.Intel, next.Intel.IPSecurityAction, rt.RemoteRules)
 	if rt.SSHProxy != nil && next.SSHEnabled() {

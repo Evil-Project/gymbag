@@ -31,6 +31,10 @@ type LoadOptions struct {
 	KeyFile            string
 	DirectHTTP         *bool
 	HTTPOnly           bool
+	Mascot             string
+	MascotPensive      string
+	MascotHappy        string
+	MascotReject       string
 	MCConsole          *bool
 }
 
@@ -144,8 +148,10 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 		var baseRoutes []RouteConfig
 		var baseHeaders map[string]string
 		var baseAuth *ForwardAuthConfig
+		var baseMascot *MascotConfig
 		if len(cfg.Sites) > 0 {
 			baseAuth = cfg.Sites[0].Auth
+			baseMascot = cfg.Sites[0].Mascot
 			if upstream == "" && len(cfg.Sites[0].Routes) > 0 {
 				baseRoutes = cfg.Sites[0].Routes
 				baseHeaders = cfg.Sites[0].Headers
@@ -158,6 +164,7 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 				WAF:     cloneSiteWAF(cfg.Defaults),
 				Headers: cloneHeaderMap(baseHeaders),
 				Auth:    baseAuth.Clone(),
+				Mascot:  baseMascot.Clone(),
 			}
 			if upstream != "" {
 				sc.Upstreams = []string{upstream}
@@ -296,6 +303,7 @@ func LoadWithEnv(opts LoadOptions, getenv func(string) string) (Config, error) {
 	if opts.DirectHTTP != nil {
 		cfg.DirectHTTP = *opts.DirectHTTP
 	}
+	applyMascotOverrides(&cfg.Mascot, opts.Mascot, opts.MascotPensive, opts.MascotHappy, opts.MascotReject)
 	if opts.MCConsole != nil && cfg.Minecraft != nil {
 		cfg.Minecraft.Console = *opts.MCConsole
 	}
@@ -807,6 +815,14 @@ func applyEnv(base *Config, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	applyMascotOverrides(
+		&cfg.Mascot,
+		getenv("GYMBAG_MASCOT"),
+		firstNonEmpty(getenv("GYMBAG_MASCOT_PENSIVE"), getenv("GYMBAG_MASCOT_CHECKING")),
+		firstNonEmpty(getenv("GYMBAG_MASCOT_HAPPY"), getenv("GYMBAG_MASCOT_PASS")),
+		firstNonEmpty(getenv("GYMBAG_MASCOT_REJECT"), getenv("GYMBAG_MASCOT_FAIL")),
+	)
+
 	rawBind := strings.TrimSpace(getenv("GYMBAG_BIND"))
 	if rawBind != "" {
 		cfg.BindHost = rawBind
@@ -1125,4 +1141,29 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func applyMascotOverrides(dst **MascotConfig, def, pensive, happy, reject string) {
+	d := strings.TrimSpace(def)
+	p := strings.TrimSpace(pensive)
+	h := strings.TrimSpace(happy)
+	r := strings.TrimSpace(reject)
+	if d == "" && p == "" && h == "" && r == "" {
+		return
+	}
+	if *dst == nil {
+		*dst = &MascotConfig{}
+	}
+	if d != "" {
+		(*dst).Default = d
+	}
+	if p != "" {
+		(*dst).Pensive = p
+	}
+	if h != "" {
+		(*dst).Happy = h
+	}
+	if r != "" {
+		(*dst).Reject = r
+	}
 }

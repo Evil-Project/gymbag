@@ -301,10 +301,15 @@ const progressBar = document.getElementById("progress-bar");
 const retry = document.getElementById("retry");
 
 portrait.addEventListener("error", () => {
-  const file = portrait.src.split("/").pop();
-  if (file && !portrait.dataset.fallback) {
+  if (!portrait.dataset.fallback && spec && spec.images) {
     portrait.dataset.fallback = "1";
-    portrait.src = `../src/gymbag/assets/${file}`;
+    if (portrait.alt && portrait.alt.includes("accepted") && spec.images.default_pass) {
+      portrait.src = spec.images.default_pass;
+    } else if (portrait.alt && portrait.alt.includes("blocked") && spec.images.default_fail) {
+      portrait.src = spec.images.default_fail;
+    } else if (spec.images.default_pensive) {
+      portrait.src = spec.images.default_pensive;
+    }
   }
 });
 

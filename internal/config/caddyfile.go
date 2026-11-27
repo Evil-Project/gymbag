@@ -375,6 +375,13 @@ var knownDirectiveNames = map[string]struct{}{
 	"server_properties":    {},
 	"authelia":             {},
 	"forward_auth":         {},
+	"mascot":               {},
+	"mascot_pensive":       {},
+	"mascot_checking":      {},
+	"mascot_happy":         {},
+	"mascot_pass":          {},
+	"mascot_reject":        {},
+	"mascot_fail":          {},
 }
 
 var ruleFieldKeywords = map[string]struct{}{
@@ -415,6 +422,7 @@ type parseState struct {
 	redisURL           string
 	secret             string
 	trustedProxies     []string
+	mascot             *MascotConfig
 	defaultWAF         SiteWAFConfig
 	defaultProtect     bool
 	protectedFilter    map[string]struct{}
@@ -1215,6 +1223,7 @@ func applyGlobalDirective(
 	siteCert *string,
 	siteKey *string,
 	siteAcmeSh *string,
+	siteMascot **MascotConfig,
 	isGlobalScope bool,
 ) ([]string, error) {
 	words := item.words
@@ -1244,6 +1253,52 @@ func applyGlobalDirective(
 				return nil, err
 			}
 			waf.Rules = append(waf.Rules, rule)
+			return nil, nil
+
+		case "mascot":
+			if len(words) > 2 {
+				return nil, fmt.Errorf("mascot block accepts at most one default image path or URL")
+			}
+			dst := &st.mascot
+			if !isGlobalScope && siteMascot != nil {
+				dst = siteMascot
+			}
+			if *dst == nil {
+				*dst = &MascotConfig{}
+			}
+			if len(words) == 2 {
+				val := strings.TrimSpace(words[1])
+				if val == "" {
+					return nil, fmt.Errorf("mascot path or URL must not be empty")
+				}
+				(*dst).Default = val
+			}
+			for _, subItem := range item.sub.body {
+				if subItem.sub != nil {
+					return nil, fmt.Errorf("unexpected nested block inside mascot")
+				}
+				if len(subItem.words) == 0 {
+					continue
+				}
+				mKey := strings.ToLower(subItem.words[0])
+				mArgs := subItem.words[1:]
+				if len(mArgs) != 1 || strings.TrimSpace(mArgs[0]) == "" {
+					return nil, fmt.Errorf("mascot %s requires a file path, directory path, or http(s) URL", subItem.words[0])
+				}
+				val := strings.TrimSpace(mArgs[0])
+				switch mKey {
+				case "default", "image", "url":
+					(*dst).Default = val
+				case "pensive", "checking":
+					(*dst).Pensive = val
+				case "happy", "pass":
+					(*dst).Happy = val
+				case "reject", "fail":
+					(*dst).Reject = val
+				default:
+					return nil, fmt.Errorf("unknown mascot directive: %s", subItem.words[0])
+				}
+			}
 			return nil, nil
 
 		case "intel":
@@ -1716,6 +1771,62 @@ func applyGlobalDirective(
 		}
 		st.verify.Port = p
 		return nil, nil
+
+	case "mascot":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return nil, fmt.Errorf("mascot requires a file path, directory path, or http(s) URL")
+		}
+		dst := &st.mascot
+		if !isGlobalScope && siteMascot != nil {
+			dst = siteMascot
+		}
+		if *dst == nil {
+			*dst = &MascotConfig{}
+		}
+		(*dst).Default = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "mascot_pensive", "mascot_checking":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return nil, fmt.Errorf("%s requires a file path or http(s) URL", name)
+		}
+		dst := &st.mascot
+		if !isGlobalScope && siteMascot != nil {
+			dst = siteMascot
+		}
+		if *dst == nil {
+			*dst = &MascotConfig{}
+		}
+		(*dst).Pensive = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "mascot_happy", "mascot_pass":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return nil, fmt.Errorf("%s requires a file path or http(s) URL", name)
+		}
+		dst := &st.mascot
+		if !isGlobalScope && siteMascot != nil {
+			dst = siteMascot
+		}
+		if *dst == nil {
+			*dst = &MascotConfig{}
+		}
+		(*dst).Happy = strings.TrimSpace(args[0])
+		return nil, nil
+
+	case "mascot_reject", "mascot_fail":
+		if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+			return nil, fmt.Errorf("%s requires a file path or http(s) URL", name)
+		}
+		dst := &st.mascot
+		if !isGlobalScope && siteMascot != nil {
+			dst = siteMascot
+		}
+		if *dst == nil {
+			*dst = &MascotConfig{}
+		}
+		(*dst).Reject = strings.TrimSpace(args[0])
+		return nil, nil
 	}
 
 	return nil, fmt.Errorf("unknown directive: %s", words[0])
@@ -1787,7 +1898,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			block := item.sub
 			if len(block.header) == 0 {
 				for _, stmt := range block.body {
-					upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, nil, nil, nil, nil, true)
+					upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, nil, nil, nil, nil, nil, true)
 					if err != nil {
 						return Config{}, err
 					}
@@ -1854,6 +1965,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 			protectExplicit := false
 			var siteUpstreams []string
 			var siteCert, siteKey, siteAcmeSh string
+			var siteMascot *MascotConfig
 			var siteAuth *ForwardAuthConfig
 			matchers := make(map[string][]string)
 			siteScope := newRouteScope(matchers)
@@ -2001,7 +2113,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					}
 				}
 
-				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, &siteAcmeSh, false)
+				upstreams, err := applyGlobalDirective(stmt, st, &siteWAF, &siteProtect, &protectExplicit, &siteCert, &siteKey, &siteAcmeSh, &siteMascot, false)
 				if err != nil {
 					return Config{}, err
 				}
@@ -2041,6 +2153,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 					CertFile:   siteCert,
 					KeyFile:    siteKey,
 					AcmeShPath: siteAcmeSh,
+					Mascot:     siteMascot.Clone(),
 				})
 			}
 		}
@@ -2085,7 +2198,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 				}
 				continue
 			}
-			upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, &protectExplicit, nil, nil, nil, true)
+			upstreams, err := applyGlobalDirective(stmt, st, &st.defaultWAF, &st.defaultProtect, &protectExplicit, nil, nil, nil, nil, true)
 			if err != nil {
 				return Config{}, err
 			}
@@ -2141,6 +2254,7 @@ func ParseCaddyfileWithBaseDir(text, baseDir string) (Config, error) {
 		RedisURL:           st.redisURL,
 		Secret:             st.secret,
 		TrustedProxies:     st.trustedProxies,
+		Mascot:             st.mascot.Clone(),
 		Defaults:           st.defaultWAF,
 		BaseDir:            baseDir,
 	}
@@ -2685,6 +2799,9 @@ func FormatConfig(cfg Config) string {
 	if cfg.Authelia != nil {
 		globalLines = append(globalLines, formatAuthLines("    ", cfg.Authelia, nil)...)
 	}
+	if !cfg.Mascot.IsEmpty() {
+		globalLines = append(globalLines, formatMascotLines("    ", cfg.Mascot)...)
+	}
 
 	if len(globalLines) > 0 {
 		b.WriteString("{\n")
@@ -2762,6 +2879,12 @@ func FormatConfig(cfg Config) string {
 		}
 		if site.AcmeShPath != "" {
 			b.WriteString(fmt.Sprintf("    acme_sh_path %s\n", quoteIfNeeded(site.AcmeShPath)))
+		}
+		if !site.Mascot.IsEmpty() {
+			for _, ln := range formatMascotLines("    ", site.Mascot) {
+				b.WriteString(ln)
+				b.WriteByte('\n')
+			}
 		}
 		b.WriteString("}\n")
 	}
@@ -2946,6 +3069,30 @@ func formatHeaderLines(b *strings.Builder, indent string, headers map[string]str
 			b.WriteString(fmt.Sprintf("%sheader %s %s\n", indent, quoteIfNeeded(k), quoteIfNeeded(headers[k])))
 		}
 	}
+}
+
+func formatMascotLines(indent string, m *MascotConfig) []string {
+	if m.IsEmpty() {
+		return nil
+	}
+	if m.Default != "" && m.Pensive == "" && m.Happy == "" && m.Reject == "" {
+		return []string{fmt.Sprintf("%smascot %s", indent, quoteIfNeeded(m.Default))}
+	}
+	lines := []string{indent + "mascot {"}
+	if m.Default != "" {
+		lines = append(lines, fmt.Sprintf("%s    default %s", indent, quoteIfNeeded(m.Default)))
+	}
+	if m.Pensive != "" {
+		lines = append(lines, fmt.Sprintf("%s    pensive %s", indent, quoteIfNeeded(m.Pensive)))
+	}
+	if m.Happy != "" {
+		lines = append(lines, fmt.Sprintf("%s    happy %s", indent, quoteIfNeeded(m.Happy)))
+	}
+	if m.Reject != "" {
+		lines = append(lines, fmt.Sprintf("%s    reject %s", indent, quoteIfNeeded(m.Reject)))
+	}
+	lines = append(lines, indent+"}")
+	return lines
 }
 
 func formatAuthLines(indent string, auth, globalAuth *ForwardAuthConfig) []string {

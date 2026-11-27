@@ -361,6 +361,7 @@ func BuildSiteEngineWithProviders(
 ) *Engine {
 	shapeRule := NewRequestShapeRule(8192)
 	acmeAllow := NewPrefixAllowRule("/.well-known/acme-challenge/")
+	assetsAllow := NewPrefixAllowRule("/.waf/assets/", "/.waf/v1/assets/")
 
 	var resolvedRemote []config.CustomRule
 	if remoteRules != nil && (len(site.WAF.RuleSources) > 0 || len(site.WAF.RemoteRules) > 0) {
@@ -377,9 +378,9 @@ func BuildSiteEngineWithProviders(
 			combined := make([]config.CustomRule, 0, userRulesCount)
 			combined = append(combined, site.WAF.Rules...)
 			combined = append(combined, resolvedRemote...)
-			return NewEngine(shapeRule, acmeAllow, NewCustomRulesRule(combined, tokens, site.WAF.CookieName))
+			return NewEngine(shapeRule, acmeAllow, assetsAllow, NewCustomRulesRule(combined, tokens, site.WAF.CookieName))
 		}
-		return NewEngine(shapeRule, acmeAllow)
+		return NewEngine(shapeRule, acmeAllow, assetsAllow)
 	}
 
 	var preRateRules []config.CustomRule
@@ -424,7 +425,7 @@ func BuildSiteEngineWithProviders(
 	}
 
 	var chain []Rule
-	chain = append(chain, shapeRule, acmeAllow)
+	chain = append(chain, shapeRule, acmeAllow, assetsAllow)
 	if customRule != nil {
 		chain = append(chain, customRule)
 	}
@@ -435,7 +436,6 @@ func BuildSiteEngineWithProviders(
 	chain = append(
 		chain,
 		NewMethodAllowRule(http.MethodOptions),
-		NewPrefixAllowRule("/.waf/assets/", "/.waf/v1/assets/"),
 		NewExactAllowRule(
 			"/.waf/verify",
 			"/.waf/v1/challenges",
