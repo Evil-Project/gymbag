@@ -522,13 +522,13 @@ func BuildRuntime(ctx context.Context, cfg config.Config, opts RuntimeOptions) (
 			p = "/"
 		}
 		if token, ok := strings.CutPrefix(p, "/.well-known/acme-challenge/"); ok {
-			w.Header()["Server"] = serverHeaderValue
-			if token == "" || strings.Contains(token, "/") {
-				w.WriteHeader(http.StatusNotFound)
-				return
+			if token != "" && !strings.Contains(token, "/") && board != nil {
+				if _, found := board.Lookup(token); found {
+					w.Header()["Server"] = serverHeaderValue
+					WriteACMEChallenge(w, r, board, token)
+					return
+				}
 			}
-			WriteACMEChallenge(w, r, board, token)
-			return
 		}
 		if len(router.Sites()) == 0 {
 			w.Header()["Server"] = serverHeaderValue
