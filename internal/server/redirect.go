@@ -65,12 +65,12 @@ func NewRedirectHandler(router *proxy.SiteRouter, httpsPort int, board ACMEChall
 			path = "/"
 		}
 		if token, ok := strings.CutPrefix(path, "/.well-known/acme-challenge/"); ok {
-			if token == "" || strings.Contains(token, "/") {
-				w.WriteHeader(http.StatusNotFound)
-				return
+			if token != "" && !strings.Contains(token, "/") && board != nil {
+				if _, found := board.Lookup(token); found {
+					WriteACMEChallenge(w, r, board, token)
+					return
+				}
 			}
-			WriteACMEChallenge(w, r, board, token)
-			return
 		}
 		if router == nil || len(router.Sites()) == 0 {
 			http.NotFound(w, r)
