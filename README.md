@@ -19,7 +19,7 @@
 <p align="center">
   <strong>README:</strong>
   <a href="README.md">English</a> ·
-  <a href="readme/README.zh.md">简体中文</a> ·
+  <a href="readme/README.zh-CN.md">简体中文</a> ·
   <a href="readme/README.zh-TW.md">繁體中文</a> ·
   <a href="readme/README.ja.md">日本語</a> ·
   <a href="readme/README.ko.md">한국어</a> ·
