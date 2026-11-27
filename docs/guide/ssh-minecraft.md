@@ -2,7 +2,7 @@
 
 Beyond HTTP/HTTPS, Gymbag can gate OpenSSH and Minecraft Java Edition behind the same SHA-256 proof-of-work challenge, rate limiter, IP threat feeds, VPN/proxy/Tor detection, and custom rules.
 
-Instead of requiring clients to solve PoW inside SSH or Minecraft packets, Gymbag rejects unverified connections using the protocol's own disconnect screen and prints a short, human-typable one-time HTTPS link (`/v/<token>`, 8 unambiguous lowercase characters matched case-insensitively). Once the user opens that link in a browser and solves the puzzle, Gymbag clears their IP for `clearance_ttl` (default `24h`) and subsequent connections pass straight through over a raw TCP relay.
+Instead of requiring clients to solve PoW inside SSH or Minecraft packets, Gymbag issues a short, human-typable one-time HTTPS link (`/v/<token>`, 8 unambiguous lowercase characters matched case-insensitively): SSH returns it in the disconnect screen, while Minecraft 1.20.5+ places unverified players into a tiny in-memory empty world (nothing saved to disk), sends the clickable link in chat, and automatically redirects them to the real server via `Transfer` once completed (older clients fall back to the disconnect screen). Once the user opens that link in a browser and solves the puzzle, Gymbag clears their IP for `clearance_ttl` (default `24h`) and subsequent connections pass straight through over a raw TCP relay.
 
 ## SSH Protection
 

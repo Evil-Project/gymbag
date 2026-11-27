@@ -2,7 +2,7 @@
 
 除了 HTTP/HTTPS，Gymbag 还可以把 OpenSSH 和 Minecraft Java 版服务器放到同一套 SHA-256 工作量证明质询、限流器、IP 威胁情报、VPN/代理/Tor 检测和自定义规则后面。
 
-Gymbag 不要求客户端在 SSH 或 Minecraft 协议数据包里直接计算 PoW，而是在连接未通过校验时使用协议自身的断开提示返回简短、便于手动输入的一次性 HTTPS 链接（`/v/<token>`，8 位不易混淆的小写字符，匹配时不区分大小写）。用户在浏览器打开该链接并解出题目后，Gymbag 会为该 IP 记录有效期为 `clearance_ttl`（默认 `24h`）的放行状态，后续连接直接通过原始 TCP 转发直连后端。
+Gymbag 不要求客户端在 SSH 或 Minecraft 协议数据包里直接计算 PoW，而是在未通过校验时下发简短、便于手动输入的一次性 HTTPS 链接（`/v/<token>`，8 位不易混淆的小写字符，匹配时不区分大小写）：SSH 会将其打印在断开提示界面里，而 Minecraft 1.20.5+ 会把未验证玩家送入纯内存微型空世界（不在磁盘保存任何文件），在聊天栏发送可点击链接，并在验证完成后通过 `Transfer` 自动重定向回真实服务器（旧版客户端回退到断开提示界面）。用户在浏览器打开该链接并解出题目后，Gymbag 会为该 IP 记录有效期为 `clearance_ttl`（默认 `24h`）的放行状态，后续连接直接通过原始 TCP 转发直连后端。
 
 ## SSH 防护
 
@@ -71,7 +71,8 @@ sudo ./gymbag init -t ssh --ssh-upstream 127.0.0.1:2222
 
 - **服务器列表 Ping 透传**：新版状态握手（`nextState == 1`）和旧版 1.6 Ping（`0xFE`）默认都会转发给上游服务器（除非被规则或 `ip_security_action block` 拦截），因此服务器的 MOTD、图标和在线人数都能正常显示。
 - **登录与转移拦截（`nextState == 2` / `3`）**：Gymbag 会检查握手包与 Login Start 用户名。无效协议号（`<= 0`）、畸形登录包、非法用户名（为空、超过 32 个字符或包含控制字符）、威胁情报命中 IP 以及 VPN/代理/Tor IP 在级别 `1` 和 `3` 下均判定为可疑。
-- **质询响应**：发送包装成 JSON Chat Component 的 Minecraft Login Disconnect 数据包（`0x00`），并在玩家的 **“连接已丢失（Connection Lost）”** 弹窗里展示可点击复制到剪贴板的验证 URL（1.21.5+ 使用 `click_event`/`hover_event`，1.21.4 及更早版本使用 `clickEvent`/`hoverEvent`）。
+- **纯内存空世界质询与自动转移（1.20.5+）**：对于受支持的现代 Java 客户端（`1.20.5`–`26.1`），Gymbag 会将未验证玩家放入纯内存的微型空世界（不在磁盘保存任何世界文件），脚下有一块小型石头平台，并在游戏内聊天栏直接发送可点击的验证链接。玩家在浏览器完成验证后，Gymbag 会发送 Minecraft `Transfer` 数据包将其自动重定向到真实服务器（并透明地将 `nextState=3` 改写为 `2`，使启用 `accepts-transfers=false` 的上游也能正常放行）。
+- **断开界面回退（旧版或自定义客户端）**：低于 `1.20.5` 的客户端、未知的未来协议版本或拒绝内置 Known Packs 的客户端，会收到包含可点击复制到剪贴板验证 URL（1.21.5+ 使用 `click_event`/`hover_event`，1.21.4 及更早版本使用 `clickEvent`/`hoverEvent`）的 Minecraft Login/Configuration Disconnect 数据包，展示在 **“连接已丢失（Connection Lost）”** 弹窗中。
 
 ## 同时运行 HTTP、SSH 和 Minecraft
 

@@ -25,7 +25,7 @@ features:
     details: "Aho-Corasick 규칙 매칭, 샤드 단위 속도 제한, 버퍼 풀링으로 WAF 부하를 줄였습니다. TLS 경유 시 약 72.5k RPS, 엣지 프로브 차단 시 140k+ RPS를 처리합니다."
   - icon: 🛡️
     title: HTTP, SSH, Minecraft 통합 보호
-    details: "웹사이트, WebSocket, OpenSSH, Minecraft Java 서버를 한 프로세스에서 보호합니다. SSH와 Minecraft 챌린지는 클라이언트 연결 해제 화면에 HTTPS 링크를 바로 출력합니다."
+    details: "웹사이트, WebSocket, OpenSSH, Minecraft Java 서버를 한 프로세스에서 보호합니다. SSH는 연결 해제 화면에 HTTPS 링크를 출력하고, Minecraft 1.20.5+는 미인증 플레이어를 메모리 내 빈 월드로 보내 채팅에 클릭 가능한 링크를 제공한 뒤 완료 시 Transfer로 자동 리디렉션합니다."
   - icon: 🌐
     title: 위협 인텔, VPN 및 AI 목록
     details: "IPsum, Spamhaus DROP, Feodo, X4BNet VPN/Tor 목록, 공식 AI 크롤러 CIDR을 자동 갱신하고 Shodan InternetDB, StopForumSpam, ipquery.io, ipapi.is로 fail-open 실시간 조회를 수행합니다."

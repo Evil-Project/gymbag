@@ -2,7 +2,7 @@
 
 Gymbag은 HTTP/HTTPS뿐만 아니라 OpenSSH와 Minecraft Java Edition 앞단에서도 SHA-256 작업 증명(PoW) 챌린지, 속도 제한, IP 위협 피드, VPN/프록시/Tor 탐지, 사용자 지정 규칙을 동일하게 적용합니다.
 
-SSH나 Minecraft 패킷 내부에서 PoW를 계산하게 하는 대신, 미인증 연결을 해당 프로토콜의 연결 해제 메시지로 거부하면서 사람이 직접 입력하기 쉬운 짧은 일회용 HTTPS 링크(`/v/<token>`, 대소문자를 구분하지 않고 매칭되는 혼동 없는 소문자 8자리)를 출력합니다. 사용자가 브라우저에서 해당 링크를 열어 퍼즐을 풀면 Gymbag이 `clearance_ttl`(기본 `24h`) 동안 해당 IP를 인증 처리하며, 이후 연결은 원시 TCP 릴레이로 바로 통과합니다.
+SSH나 Minecraft 패킷 내부에서 PoW를 계산하게 하는 대신, Gymbag은 사람이 직접 입력하기 쉬운 짧은 일회용 HTTPS 링크(`/v/<token>`, 대소문자를 구분하지 않고 매칭되는 혼동 없는 소문자 8자리)를 발급합니다. SSH는 프로토콜 연결 해제 화면에 링크를 출력하고, Minecraft 1.20.5+는 미인증 플레이어를 메모리 내 작은 빈 월드(디스크에 아무것도 저장하지 않음)로 들여보내 채팅으로 클릭 가능한 링크를 보낸 뒤 완료 시 `Transfer`로 실제 서버에 자동 리디렉션합니다(구형 클라이언트는 연결 해제 화면으로 폴백). 사용자가 브라우저에서 해당 링크를 열어 퍼즐을 풀면 Gymbag이 `clearance_ttl`(기본 `24h`) 동안 해당 IP를 인증 처리하며, 이후 연결은 원시 TCP 릴레이로 바로 통과합니다.
 
 ## SSH 보호
 
@@ -71,7 +71,8 @@ Gymbag이 Minecraft 프로세스를 직접 관리하도록 하려면 `--server-j
 
 - **서버 목록 핑 통과**: 최신 상태 핸드셰이크(`nextState == 1`)와 레거시 1.6 핑(`0xFE`)은 규칙이나 `ip_security_action block`에 걸리지 않는 한 업스트림 서버로 전달됩니다. 따라서 MOTD, 아이콘, 접속자 수 표시는 평소처럼 동작합니다.
 - **로그인 및 전송 게이트 (`nextState == 2` / `3`)**: 핸드셰이크와 Login Start 사용자 이름을 검사합니다. 잘못된 프로토콜 버전(`<= 0`), 기형적인 로그인 패킷, 잘못된 사용자 이름(빈 값, 32자 초과, 제어 문자 포함), 위협 피드 IP, VPN/프록시/Tor IP는 레벨 `1`과 `3`에서 의심 대상으로 처리됩니다.
-- **챌린지 응답**: JSON Chat Component 형식의 Minecraft Login Disconnect 패킷(`0x00`)을 반환해 플레이어의 **"Connection Lost"** 대화 상자에 클릭해 복사할 수 있는 인증 URL(1.21.5+에서는 `click_event`/`hover_event`, 1.21.4 이하에서는 `clickEvent`/`hoverEvent`)을 표시합니다.
+- **메모리 내 빈 월드 챌린지 및 자동 전송 (1.20.5+)**: 지원되는 최신 Java 클라이언트(`1.20.5`–`26.1`)의 경우, 미인증 플레이어를 작은 돌 발판이 있는 순수 메모리 기반 빈 월드(월드 파일이 디스크에 전혀 저장되지 않음)로 보내고 게임 내 채팅으로 클릭 가능한 인증 링크를 전송합니다. 플레이어가 브라우저에서 인증을 완료하면 Gymbag은 Minecraft `Transfer` 패킷을 보내 실제 서버로 자동 리디렉션합니다(`accepts-transfers=false`인 업스트림도 받아들이도록 `nextState=3`을 `2`로 투명하게 재작성합니다).
+- **연결 해제 폴백 (구버전 또는 커스텀 클라이언트)**: `1.20.5` 미만 클라이언트, 알 수 없는 미래 프로토콜 버전, 또는 내장 Known Packs를 거부하는 클라이언트에는 플레이어의 **"Connection Lost"** 대화 상자에 클릭해 복사할 수 있는 인증 URL(1.21.5+에서는 `click_event`/`hover_event`, 1.21.4 이하에서는 `clickEvent`/`hoverEvent`)이 포함된 Minecraft Login/Configuration Disconnect 패킷을 반환합니다.
 
 ## HTTP, SSH, Minecraft 함께 실행하기
 

@@ -25,7 +25,7 @@ features:
     details: "Aho-Corasick rule matching, sharded rate limiters, and pooled buffers keep the WAF out of the way: ~72.5k RPS through TLS, and 140k+ RPS dropping probes at the edge."
   - icon: 🛡️
     title: HTTP, SSH, and Minecraft
-    details: "Guards websites, WebSockets, OpenSSH, and Minecraft Java servers from one process. SSH and Minecraft challenges print an HTTPS link straight into the client disconnect screen."
+    details: "Guards websites, WebSockets, OpenSSH, and Minecraft Java servers from one process. SSH prints an HTTPS link in the disconnect screen; Minecraft 1.20.5+ drops unverified players into an in-memory empty world with a clickable chat link and automatic Transfer redirect."
   - icon: 🌐
     title: Threat intel, VPN & AI lists
     details: "Auto-refreshes IPsum, Spamhaus DROP, Feodo, X4BNet VPN/Tor lists, and official AI crawler CIDRs, plus fail-open live lookups via Shodan InternetDB, StopForumSpam, ipquery.io, and ipapi.is."

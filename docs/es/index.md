@@ -25,7 +25,7 @@ features:
     details: "La coincidencia Aho-Corasick, los limitadores por shard y los buffers reutilizables dejan el WAF fuera del camino: ~72.5k RPS a través de TLS y más de 140k RPS descartando sondeos en el borde."
   - icon: 🛡️
     title: HTTP, SSH y Minecraft
-    details: "Protege sitios web, WebSockets, OpenSSH y servidores Minecraft Java desde un mismo proceso. Los desafíos de SSH y Minecraft imprimen un enlace HTTPS directamente en la pantalla de desconexión del cliente."
+    details: "Protege sitios web, WebSockets, OpenSSH y servidores Minecraft Java desde un mismo proceso. SSH muestra un enlace HTTPS en la pantalla de desconexión; Minecraft 1.20.5+ lleva a los jugadores sin verificar a un mundo vacío en memoria con enlace clicable en el chat y redirección automática por Transfer."
   - icon: 🌐
     title: Inteligencia de amenazas, VPN y listas de IA
     details: "Actualiza automáticamente IPsum, Spamhaus DROP, Feodo, listas VPN/Tor de X4BNet y CIDRs oficiales de rastreadores de IA, además de consultas fail-open en vivo con Shodan InternetDB, StopForumSpam, ipquery.io e ipapi.is."

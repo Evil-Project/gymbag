@@ -118,10 +118,10 @@ sudo ./gymbag
 
 ## SSH 与 Minecraft 防护
 
-当未验证的 SSH 或 Minecraft 连接命中 Gymbag 并触发配置的验证级别时，Gymbag 不会将连接转给后端守护进程或游戏服务端，而是直接在对应协议自己的断开提示中返回一次性 HTTPS 链接（`/v/<token>`）：
+当未验证的 SSH 或 Minecraft 连接命中 Gymbag 并触发配置的验证级别时，Gymbag 不会将连接转给后端守护进程或游戏服务端，而是下发一次性 HTTPS 验证链接（`/v/<token>`）——SSH 会将其打印在断开提示中，Minecraft 1.20.5+ 则将玩家送入纯内存空世界并在聊天栏发送可点击链接，验证通过后通过 `Transfer` 自动重定向回真实服务器：
 
 - **SSH（默认 `port` `22`）**：`sudo ./gymbag init -t ssh` 会挑选 `20000–59999` 范围内的空闲本地端口，将 `/etc/ssh/sshd_config` 备份到 `/etc/ssh/sshd_config.gymbag.bak`，把新 `Port` 写入所有 `Match` 块之前，执行 `sshd -t` 校验（失败会自动回滚），重载 `sshd`，并更新当前生效的 Linux 防火墙（`ufw`、`firewalld`、`nftables` 或 `iptables`+`ip6tables`），让后端端口仅允许回环访问，同时保持 `22` 和 `8443` 对外放行。（修改 `sshd_config` 时请保持另一个 SSH 终端不断开；如需手动接管，可传入 `--ssh-upstream 127.0.0.1:2222`、`--no-auto-setup` 或 `--no-firewall`。）IP 在浏览器通过质询后，后续连接直接走原始 TCP 透传，不干扰 SSH 握手。在级别 `1` 和 `3` 下，畸形 banner 或脚本化 SSH 客户端（`libssh`、`paramiko`、`zgrab`、`masscan`、`nmap`、`asyncssh`、`ssh2go`、`jsch`、`hydra`、`medusa`、`patator`、`python`、`curl`、`ssh-2.0-go`）会触发验证，终端内会直接打印带验证 URL 的 RFC 4253 `SSH_MSG_DISCONNECT` 消息。
-- **Minecraft Java（默认 `port` `25565`）**：`./gymbag init -t minecraft --server-properties ./server.properties` 会将 `server.properties` 备份为 `server.properties.gymbag.bak`，把 `server-port` 改为 `20000–59999` 间的空闲随机端口，并将空的或通配的 `server-ip` 设为 `127.0.0.1`。服务器列表 Ping（`nextState == 1` 与旧版 `0xFE`）默认直接放行（除非被规则拦截），MOTD 和在线人数正常显示。遇到 Login 或 Transfer 且需要验证时，Gymbag 返回 Minecraft Login Disconnect 数据包（`0x00`），在客户端 **“连接已丢失（Connection Lost）”** 弹窗里展示验证链接。
+- **Minecraft Java（默认 `port` `25565`）**：`./gymbag init -t minecraft --server-properties ./server.properties` 会将 `server.properties` 备份为 `server.properties.gymbag.bak`，把 `server-port` 改为 `20000–59999` 间的空闲随机端口，并将空的或通配的 `server-ip` 设为 `127.0.0.1`。服务器列表 Ping（`nextState == 1` 与旧版 `0xFE`）默认直接放行（除非被规则拦截），MOTD 和在线人数正常显示。遇到 Login 或 Transfer 且需要验证时，受支持的客户端（`1.20.5`–`26.1`）会进入一个纯内存的微型空世界（不在磁盘保存任何世界文件），在聊天栏收到可点击的验证链接，并在通过后通过 `Transfer` 自动重定向到真实服务器（旧版客户端回退到 **“连接已丢失（Connection Lost）”** 弹窗）。
 - **共享 HTTPS 验证门户（默认 `:8443`）**：SSH 和 Minecraft 共用 `verify_port`（可用 `--verify-url https://verify.example.com:8443` 指定域名，留空则使用检测到的服务器 IP）。使用服务器 IP 走 ACME 时，Gymbag 会申请 **RFC 8738** IP 证书（如果 CA 支持则启用 `shortlived` profile）；若 HTTP-01 不可达，则回退到本地 CA 或自签名 IP 证书。当 `verify_port` 与 `https_port` 一致且配置了 HTTP 站点时，门户会直接复用 `443` 端口。
 
 ```caddyfile

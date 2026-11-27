@@ -25,7 +25,7 @@ features:
     details: Aho-Corasick 规则匹配、分片限流和缓冲池让 WAF 不拖慢代理：走 TLS 约 72.5k RPS，边缘直接丢弃探测请求可达 140k+ RPS。
   - icon: 🛡️
     title: HTTP、SSH 与 Minecraft
-    details: 单进程同时防护网站、WebSocket、OpenSSH 和 Minecraft Java 服务器。SSH 与 Minecraft 的质询会直接把 HTTPS 验证链接打在客户端断开界面里。
+    details: 单进程同时防护网站、WebSocket、OpenSSH 和 Minecraft Java 服务器。SSH 会在断开界面直接输出 HTTPS 验证链接；Minecraft 1.20.5+ 会将未验证玩家送入纯内存空世界，在聊天栏发送可点击链接并在验证完成后通过 Transfer 自动重定向回真实服务器。
   - icon: 🌐
     title: 威胁情报、VPN 与 AI 列表
     details: 自动刷新 IPsum、Spamhaus DROP、Feodo、X4BNet VPN/Tor 列表和官方 AI 爬虫 CIDR，并接入 Shodan InternetDB、StopForumSpam、ipquery.io 与 ipapi.is 故障放行实时查询。

@@ -25,7 +25,7 @@ features:
     details: "Aho-Corasick ルール照合、シャード化したレート制限、再利用バッファで WAF の負荷を最小限に抑えます。TLS 経由で約 72.5k RPS、エッジでの探査ブロックは 140k+ RPS。"
   - icon: 🛡️
     title: HTTP・SSH・Minecraft を 1 プロセスで
-    details: "Web サイト、WebSocket、OpenSSH、Minecraft Java サーバーをまとめて保護。SSH と Minecraft ではクライアントの切断画面に HTTPS の検証リンクを直接表示します。"
+    details: "Web サイト、WebSocket、OpenSSH、Minecraft Java サーバーをまとめて保護。SSH は切断画面に HTTPS リンクを表示し、Minecraft 1.20.5+ は未認証プレイヤーをメモリ上の空ワールドへ入れてチャットにクリック可能なリンクを送り、完了後に Transfer で自動リダイレクトします。"
   - icon: 🌐
     title: 脅威インテル・VPN・AI リスト
     details: "IPsum、Spamhaus DROP、Feodo、X4BNet VPN/Tor リスト、公式 AI クローラー CIDR を自動更新。Shodan InternetDB、StopForumSpam、ipquery.io、ipapi.is のフェイルオープン照会にも対応。"
